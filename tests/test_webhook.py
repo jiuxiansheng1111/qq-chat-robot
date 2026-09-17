@@ -1,3 +1,6 @@
+import hashlib
+import hmac
+
 from fastapi.testclient import TestClient
 
 from app.main import (
@@ -81,6 +84,15 @@ def test_webhook_token_accepts_custom_header_and_bearer_token():
     assert not webhook_token_valid("secret", None, "Bearer wrong")
     assert not webhook_token_valid("secret", None, None)
     assert webhook_token_valid("", None, None)
+
+
+def test_webhook_token_accepts_napcat_hmac_signature():
+    body = b'{"post_type":"meta_event"}'
+    signature = "sha1=" + hmac.new(b"secret", body, hashlib.sha1).hexdigest()
+
+    assert webhook_token_valid("secret", None, None, signature, body)
+    assert not webhook_token_valid("secret", None, None, "sha1=wrong", body)
+    assert not webhook_token_valid("secret", None, None, signature, b"tampered")
 
 
 def test_group_lifecycle_and_blacklist(tmp_path):

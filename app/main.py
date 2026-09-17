@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import logging
 import secrets
 from contextlib import asynccontextmanager
@@ -137,10 +139,20 @@ def webhook_token_valid(
     configured_token: str,
     x_onebot_token: str | None,
     authorization: str | None,
+    x_signature: str | None = None,
+    raw_body: bytes = b"",
 ) -> bool:
-    """Accept the custom webhook header and OneBot's Bearer token style."""
+    """Accept NapCat HMAC signatures plus the legacy token header styles."""
     if not configured_token:
         return True
+
+    if x_signature and raw_body:
+        expected = "sha1=" + hmac.new(
+            configured_token.encode(), raw_body, hashlib.sha1
+        ).hexdigest()
+        if secrets.compare_digest(x_signature, expected):
+            return True
+
     bearer_token = ""
     if authorization and authorization.lower().startswith("bearer "):
         bearer_token = authorization[7:].strip()
@@ -172,8 +184,16 @@ async def onebot_webhook(
     request: Request,
     x_onebot_token: str | None = Header(default=None),
     authorization: str | None = Header(default=None),
+    x_signature: str | None = Header(default=None),
 ):
-    if not webhook_token_valid(settings.onebot_webhook_token, x_onebot_token, authorization):
+    raw_body = await request.body()
+    if not webhook_token_valid(
+        settings.onebot_webhook_token,
+        x_onebot_token,
+        authorization,
+        x_signature,
+        raw_body,
+    ):
         raise HTTPException(status_code=401, detail="invalid webhook token")
     event = await request.json()
     event_id = str(event.get("message_id") or event.get("event_id") or "")

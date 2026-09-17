@@ -26,7 +26,7 @@
 
 ### 安全与可靠性
 
-- OneBot HTTP Server 与事件 Webhook 使用独立 Token。
+- OneBot HTTP Server 与事件 Webhook 使用独立 Token；Webhook 支持 NapCat `X-Signature` HMAC-SHA1 校验。
 - 管理 API 使用 JWT Access Token 与可轮换、可撤销的 Refresh Token。
 - 管理员密码哈希存储，生产环境校验弱密码和弱 JWT 密钥。
 - 基于 OneBot `message_id` 的短期幂等去重。
@@ -289,7 +289,7 @@ NapCat HTTP Client 仍可通过宿主机映射端口向 `http://127.0.0.1:8000/o
 .\.venv\Scripts\python.exe -m compileall -q app tests
 ```
 
-当前基线：`29 passed`，外部服务测试默认跳过。
+当前基线：`30 passed`，外部服务测试默认跳过。
 
 真实接口健康检查会读取 `.env` 并调用外部服务，可能消耗少量额度：
 

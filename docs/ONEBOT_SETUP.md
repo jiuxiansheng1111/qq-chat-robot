@@ -90,7 +90,8 @@ Report self message: false
 ONEBOT_WEBHOOK_TOKEN=与HTTP Client Token完全相同
 ```
 
-项目同时接受下面两种鉴权请求头：
+当前 NapCat HTTP Client 会使用 Token 对原始请求体生成 HMAC-SHA1，并发送
+`X-Signature: sha1=<digest>`。项目会验证该签名，同时兼容下面两种请求头：
 
 ```text
 Authorization: Bearer <ONEBOT_WEBHOOK_TOKEN>
