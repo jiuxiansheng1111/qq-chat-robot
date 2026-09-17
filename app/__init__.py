@@ -1,0 +1,1 @@
+"""qqchat robot application package."""

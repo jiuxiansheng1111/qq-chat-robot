@@ -1,0 +1,108 @@
+from fastapi.testclient import TestClient
+
+from app.main import (
+    CAT_IMAGE_COMMANDS,
+    PIG_IMAGE_COMMANDS,
+    app,
+    bot_mentioned,
+    mentioned_image_command,
+    message_text,
+    settings,
+    webhook_token_valid,
+)
+
+
+def event(text: str, group_id: str = "integration-group", user_id: str = "member", role: str = "member"):
+    return {
+        "post_type": "message",
+        "message_type": "group",
+        "group_id": group_id,
+        "user_id": user_id,
+        "message": text,
+        "sender": {"user_id": user_id, "role": role},
+    }
+
+
+def mention_event(text: str):
+    payload = event(text)
+    payload["message"] = [
+        {"type": "at", "data": {"qq": ""}},
+        {"type": "text", "data": {"text": text}},
+    ]
+    return payload
+
+
+def post_event(client: TestClient, payload: dict):
+    headers = {}
+    if settings.onebot_webhook_token:
+        headers["X-OneBot-Token"] = settings.onebot_webhook_token
+    return client.post("/onebot/webhook", json=payload, headers=headers)
+
+
+def test_at_message_is_detected():
+    previous = settings.onebot_self_id
+    settings.onebot_self_id = "bot-1"
+    try:
+        payload = event("你好")
+        payload["message"] = [
+            {"type": "at", "data": {"qq": "bot-1"}},
+            {"type": "text", "data": {"text": "你好"}},
+        ]
+        assert bot_mentioned(payload)
+        assert message_text(payload) == "你好"
+    finally:
+        settings.onebot_self_id = previous
+
+
+def test_at_image_commands_are_detected_without_triggering_ai():
+    previous = settings.onebot_self_id
+    settings.onebot_self_id = "bot-1"
+    try:
+        cat = event("随机猫咪")
+        cat["message"] = [
+            {"type": "at", "data": {"qq": "bot-1"}},
+            {"type": "text", "data": {"text": "随机猫咪"}},
+        ]
+        pig = event("随机猪猪")
+        pig["message"] = [
+            {"type": "at", "data": {"qq": "bot-1"}},
+            {"type": "text", "data": {"text": "随机猪猪"}},
+        ]
+        assert mentioned_image_command(cat, CAT_IMAGE_COMMANDS)
+        assert mentioned_image_command(pig, PIG_IMAGE_COMMANDS)
+        assert not mentioned_image_command(cat, PIG_IMAGE_COMMANDS)
+    finally:
+        settings.onebot_self_id = previous
+
+
+def test_webhook_token_accepts_custom_header_and_bearer_token():
+    assert webhook_token_valid("secret", "secret", None)
+    assert webhook_token_valid("secret", None, "Bearer secret")
+    assert not webhook_token_valid("secret", None, "Bearer wrong")
+    assert not webhook_token_valid("secret", None, None)
+    assert webhook_token_valid("", None, None)
+
+
+def test_group_lifecycle_and_blacklist(tmp_path):
+    previous_database_path = settings.database_path
+    previous_onebot_api_base = settings.onebot_api_base
+    settings.database_path = str(tmp_path / "webhook.db")
+    settings.onebot_api_base = ""
+    with TestClient(app) as client:
+        try:
+            hello = event("/hello")
+            hello["message_id"] = "integration-plugin-1"
+            assert post_event(client, hello).json()["plugin"] == "hello"
+            first = event("/help")
+            first["message_id"] = "integration-message-1"
+            assert post_event(client, first).json()["ok"]
+            assert post_event(client, first).json()["reason"] == "duplicate_event"
+            assert post_event(client, event("/bot off", role="admin", user_id="admin")).json()["ok"]
+            assert post_event(client, event("/help")).json()["reason"] == "group_disabled"
+            assert post_event(client, event("/bot on", role="admin", user_id="admin")).json()["ok"]
+            assert post_event(client, event("/blacklist add blocked")).json()["ok"] is True
+            assert post_event(client, event("/blacklist add blocked", role="admin", user_id="admin")).json()["ok"]
+            assert post_event(client, event("/help", user_id="blocked")).json()["reason"] == "user_blocked"
+        finally:
+            settings.database_path = previous_database_path
+            settings.onebot_api_base = previous_onebot_api_base
