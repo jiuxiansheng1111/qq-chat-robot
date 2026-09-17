@@ -7,6 +7,9 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $desktopRoot = Split-Path -Parent $projectRoot
 $envPath = Join-Path $projectRoot ".env"
 $pythonPath = Join-Path $projectRoot ".venv\Scripts\python.exe"
+$logRoot = Join-Path $projectRoot "logs"
+$botOutputLog = Join-Path $logRoot "bot.out.log"
+$botErrorLog = Join-Path $logRoot "bot.error.log"
 $napCatRoot = Join-Path $desktopRoot "NapCat.Shell"
 $napCatLauncher = Join-Path $napCatRoot "launcher.bat"
 
@@ -143,14 +146,30 @@ try {
     }
     else {
         Write-Host "[STARTING] Bot API..." -ForegroundColor Yellow
-        Start-Process `
+        New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
+        $botProcess = Start-Process `
             -FilePath $pythonPath `
             -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000") `
             -WorkingDirectory $projectRoot `
+            -RedirectStandardOutput $botOutputLog `
+            -RedirectStandardError $botErrorLog `
+            -PassThru `
             -WindowStyle Minimized
 
+        Start-Sleep -Seconds 2
+        if ($botProcess.HasExited) {
+            $errorSummary = ""
+            if (Test-Path -LiteralPath $botErrorLog) {
+                $errorSummary = ((Get-Content -LiteralPath $botErrorLog -Tail 8) -join " | ").Trim()
+            }
+            if (-not $errorSummary) {
+                $errorSummary = "No stderr output was captured."
+            }
+            throw "Bot API exited immediately (code $($botProcess.ExitCode)): $errorSummary"
+        }
+
         if (-not (Wait-LocalPort -Port 8000 -TimeoutSeconds 30)) {
-            throw "Bot API did not start within 30 seconds. Check the project config and logs."
+            throw "Bot API did not start within 30 seconds. Check $botErrorLog"
         }
         Write-Host "[STARTED] Bot API: 8000" -ForegroundColor Green
     }
