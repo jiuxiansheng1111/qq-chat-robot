@@ -363,6 +363,15 @@ class Database:
         )
         return (str(row[0]), str(row[1]), str(row[2])) if row else None
 
+    async def rename_daily_possession(
+        self, group_id: str, possession_date: str, display_name: str
+    ) -> None:
+        await self.execute(
+            "UPDATE daily_possession SET display_name = ? "
+            "WHERE group_id = ? AND possession_date = ?",
+            (display_name[:40], group_id, possession_date),
+        )
+
     async def member_display_name(self, group_id: str, user_id: str) -> str | None:
         row = await self.fetchone(
             "SELECT display_name FROM daily_activity WHERE group_id = ? AND user_id = ? "

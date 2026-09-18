@@ -10,6 +10,7 @@ from app.main import (
     TARGETED_POSSESSION_COMMANDS,
     app,
     asks_for_sender_name,
+    asks_to_imitate_current_possession,
     automatic_web_search_query,
     bot_mentioned,
     enforce_possession_identity,
@@ -17,6 +18,7 @@ from app.main import (
     extract_group_memory_deletion,
     extract_long_memory,
     extract_music_query,
+    extract_possession_alias,
     extract_search_query,
     is_identity_question,
     is_targeted_possession_command,
@@ -228,6 +230,19 @@ def test_possession_identity_guard_replaces_default_name():
     assert enforce_possession_identity("我是阿柚，一个聊天机器人。", "山奈钠") == (
         "我是山奈钠，一个聊天机器人。"
     )
+
+
+def test_possession_alias_requires_matching_current_name_and_alias():
+    assert extract_possession_alias("羽入是hzh，你现在是hzh了", "羽入") == "hzh"
+    assert extract_possession_alias("羽入是 hzh，你现在叫 hzh", "羽入") == "hzh"
+    assert extract_possession_alias("别人是hzh，你现在是hzh了", "羽入") is None
+    assert extract_possession_alias("羽入是hzh，你现在是cat了", "羽入") is None
+
+
+def test_possession_imitation_request_resolves_pronouns():
+    assert asks_to_imitate_current_possession("你能模仿一下他说话吗")
+    assert asks_to_imitate_current_possession("模仿这个人来一句")
+    assert not asks_to_imitate_current_possession("模仿鲁迅写一段")
 
 
 def test_chat_reply_uses_lele_wording():

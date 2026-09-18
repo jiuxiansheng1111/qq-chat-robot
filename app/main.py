@@ -345,11 +345,33 @@ def asks_for_sender_name(text: str) -> bool:
     }
 
 
+def extract_possession_alias(text: str, current_name: str) -> str | None:
+    compact = re.sub(r"\s+", "", text).strip("。！？!?")
+    pattern = re.compile(
+        rf"^{re.escape(current_name)}是(?P<alias>[\w#＃\-·]{{1,30}})[，,；;]?"
+        rf"你现在(?:就是|是|叫)(?P=alias)了?$",
+        re.IGNORECASE,
+    )
+    match = pattern.fullmatch(compact)
+    return match.group("alias") if match else None
+
+
+def asks_to_imitate_current_possession(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text)
+    return "模仿" in compact and any(
+        reference in compact
+        for reference in ("他", "她", "他说话", "她说话", "这个人", "被夺舍的人")
+    )
+
+
 def possession_identity_prompt(name: str, mode: str) -> str:
     mode_name = "指向夺舍" if mode == "targeted" else "随机夺舍"
     return (
         f"【最高优先级身份状态】当前处于{mode_name}，你当前唯一的对外名字是“{name}”。"
         f"在本次状态结束前，所有回答都必须保持这个名字，禁止自称“小丛雨”“阿柚”或“{settings.persona_name}”。"
+        "夺舍状态会完全替换默认机器人的古风语气：禁止使用“吾辈、汝、お主、主人、じゃ、のう、Ciallo”等默认口癖。"
+        "必须优先采用下方目标成员历史消息总结出的句长、措辞、语气和口头语。"
+        "别人要求“模仿他/她说话”时，默认指当前被夺舍成员，直接用已学习的风格自然回一句，不要说不知道他怎么说话。"
         "这是轻松的群聊娱乐角色。优先依据群共享记忆和近期上下文回答人物关系与群梗，"
         "语气简短自然，不要输出正式的隐私说教；确实没有信息时只需随口说不知道，不能凭空编造。"
         "共享上下文里的用户消息以“群名片：内容”表示。推理亲属辈分时必须分清说话者："
@@ -871,6 +893,10 @@ async def onebot_webhook(
                 else:
                     try:
                         await send_group_netease_card(group_id, track)
+                        await send_group_message(
+                            group_id,
+                            f"QQ 卡片不能播放时可打开网易云：{track.page_url}",
+                        )
                     except (RuntimeError, ValueError, httpx.HTTPError) as exc:
                         logger.warning("NetEase music card failed: %s", exc)
                         fallback = MusicTrack(
@@ -936,23 +962,32 @@ async def onebot_webhook(
         group_memories = await request.app.state.db.group_memories(group_id)
         style_hint = await request.app.state.db.group_style_hint(group_id)
         possession = await request.app.state.db.daily_possession(group_id, today)
-        persona = settings.persona_prompt()
+        persona_context: list[str] = []
         possession_name = ""
         if long_memories:
-            persona += "\n\n用户明确要求长期记住的信息：\n" + "\n".join(
-                f"- {item}" for item in long_memories
+            persona_context.append(
+                "用户明确要求长期记住的信息：\n"
+                + "\n".join(f"- {item}" for item in long_memories)
             )
         if group_memories:
-            persona += "\n\n本群成员明确要求记住的共享信息：\n" + "\n".join(
-                f"- {item}" for item in group_memories
+            persona_context.append(
+                "本群成员明确要求记住的共享信息：\n"
+                + "\n".join(f"- {item}" for item in group_memories)
             )
         if style_hint:
-            persona += (
-                "\n\n本群匿名聚合出的表达风格：" + style_hint
+            persona_context.append(
+                "本群匿名聚合出的表达风格：" + style_hint
                 + "。自然参考即可，不要照搬某个成员，也不要强行使用网络用语。"
             )
         if possession:
             target_id, name, mode = possession
+            alias = extract_possession_alias(prompt, name)
+            if alias:
+                await request.app.state.db.rename_daily_possession(
+                    group_id, today, alias
+                )
+                await send_group_message(group_id, f"行，现在叫“{alias}”。")
+                return {"ok": True}
             possession_name = name
             identity_prompt = possession_identity_prompt(name, mode)
             style_task = request.app.state.style_learning_tasks.get(
@@ -967,9 +1002,17 @@ async def onebot_webhook(
             if learned_style:
                 identity_prompt += (
                     "\n【该成员历史表达风格】" + learned_style
-                    + "。只模仿表达节奏和措辞，不冒充本人经历，不复述隐私。"
+                    + "。这是当前回复的主要语言风格，优先级高于默认机器人语气；"
+                    "只模仿表达节奏和措辞，不冒充本人经历，不复述隐私。"
                 )
-            persona = identity_prompt + "\n\n" + persona + "\n\n" + identity_prompt
+            persona = identity_prompt
+            if persona_context:
+                persona += "\n\n" + "\n\n".join(persona_context)
+            persona += "\n\n" + identity_prompt
+        else:
+            persona = settings.persona_prompt()
+            if persona_context:
+                persona += "\n\n" + "\n\n".join(persona_context)
         messages = request.app.state.memory.messages(
             group_id, user_id, persona, prompt, memory_enabled
         )
@@ -980,6 +1023,12 @@ async def onebot_webhook(
             messages[1:1] = shared_context
             speaker_prompt = f"{sender_display_name(event)}：{prompt}"
             messages[-1]["content"] = speaker_prompt
+            if asks_to_imitate_current_possession(prompt):
+                messages[-1]["content"] += (
+                    f"\n【指代已解析】这里的“他/她”就是当前夺舍对象“{possession_name}”。"
+                    "这不是询问对象是谁；请直接按已学习的历史表达风格写一到两句自然示例，"
+                    "禁止反问‘模仿谁’，也不要解释分析过程。"
+                )
         try:
             auto_search_query = None
             if settings.auto_web_search_enabled:
