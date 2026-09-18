@@ -78,6 +78,7 @@ class Database:
                     possession_date TEXT NOT NULL,
                     user_id TEXT NOT NULL,
                     display_name TEXT NOT NULL,
+                    mode TEXT NOT NULL DEFAULT 'random',
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (group_id, possession_date)
                 );
@@ -105,6 +106,11 @@ class Database:
                 );
                 """
             )
+            columns = await db.execute_fetchall("PRAGMA table_info(daily_possession)")
+            if "mode" not in {column[1] for column in columns}:
+                await db.execute(
+                    "ALTER TABLE daily_possession ADD COLUMN mode TEXT NOT NULL DEFAULT 'random'"
+                )
             await db.commit()
 
     async def execute(self, sql: str, params: tuple = ()) -> None:
@@ -251,17 +257,29 @@ class Database:
             await db.commit()
 
     async def get_or_create_daily_possession(
-        self, group_id: str, possession_date: str, minimum_messages: int = 6
-    ) -> tuple[str, str] | None:
+        self, group_id: str, possession_date: str, minimum_messages: int = 15
+    ) -> tuple[str, str, str] | None:
         if await self.possession_exited(group_id, possession_date):
             return None
         existing = await self.fetchone(
-            "SELECT user_id, display_name FROM daily_possession "
+            "SELECT user_id, display_name, mode FROM daily_possession "
             "WHERE group_id = ? AND possession_date = ?",
             (group_id, possession_date),
         )
         if existing:
-            return str(existing[0]), str(existing[1])
+            if str(existing[2]) != "random":
+                return str(existing[0]), str(existing[1]), str(existing[2])
+            activity = await self.fetchone(
+                "SELECT message_count FROM daily_activity WHERE group_id = ? "
+                "AND user_id = ? AND activity_date = ?",
+                (group_id, str(existing[0]), possession_date),
+            )
+            if activity and int(activity[0]) >= minimum_messages:
+                return str(existing[0]), str(existing[1]), str(existing[2])
+            await self.execute(
+                "DELETE FROM daily_possession WHERE group_id = ? AND possession_date = ?",
+                (group_id, possession_date),
+            )
         candidates = await self.fetchall(
             "SELECT user_id, display_name FROM daily_activity WHERE group_id = ? "
             "AND activity_date = ? AND message_count >= ?",
@@ -271,28 +289,49 @@ class Database:
             return None
         chosen = secrets.choice(candidates)
         await self.execute(
-            "INSERT OR IGNORE INTO daily_possession(group_id, possession_date, user_id, display_name) "
-            "VALUES (?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO daily_possession"
+            "(group_id, possession_date, user_id, display_name, mode) VALUES (?, ?, ?, ?, 'random')",
             (group_id, possession_date, str(chosen[0]), str(chosen[1])),
         )
         saved = await self.fetchone(
-            "SELECT user_id, display_name FROM daily_possession "
+            "SELECT user_id, display_name, mode FROM daily_possession "
             "WHERE group_id = ? AND possession_date = ?",
             (group_id, possession_date),
         )
-        return (str(saved[0]), str(saved[1])) if saved else None
+        return (str(saved[0]), str(saved[1]), str(saved[2])) if saved else None
+
+    async def set_targeted_possession(
+        self, group_id: str, possession_date: str, user_id: str, display_name: str
+    ) -> bool:
+        if await self.possession_exited(group_id, possession_date):
+            return False
+        await self.execute(
+            "INSERT INTO daily_possession(group_id, possession_date, user_id, display_name, mode) "
+            "VALUES (?, ?, ?, ?, 'targeted') ON CONFLICT(group_id, possession_date) DO UPDATE SET "
+            "user_id = excluded.user_id, display_name = excluded.display_name, mode = 'targeted'",
+            (group_id, possession_date, user_id, display_name),
+        )
+        return True
 
     async def daily_possession(
         self, group_id: str, possession_date: str
-    ) -> tuple[str, str] | None:
+    ) -> tuple[str, str, str] | None:
         if await self.possession_exited(group_id, possession_date):
             return None
         row = await self.fetchone(
-            "SELECT user_id, display_name FROM daily_possession "
+            "SELECT user_id, display_name, mode FROM daily_possession "
             "WHERE group_id = ? AND possession_date = ?",
             (group_id, possession_date),
         )
-        return (str(row[0]), str(row[1])) if row else None
+        return (str(row[0]), str(row[1]), str(row[2])) if row else None
+
+    async def member_display_name(self, group_id: str, user_id: str) -> str | None:
+        row = await self.fetchone(
+            "SELECT display_name FROM daily_activity WHERE group_id = ? AND user_id = ? "
+            "ORDER BY activity_date DESC LIMIT 1",
+            (group_id, user_id),
+        )
+        return str(row[0]) if row else None
 
     async def possession_exited(self, group_id: str, possession_date: str) -> bool:
         row = await self.fetchone(

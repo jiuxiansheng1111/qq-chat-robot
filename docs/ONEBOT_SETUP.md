@@ -73,6 +73,8 @@ ONEBOT_ACCESS_TOKEN=与HTTP Server Token完全相同
 
 注意：`ONEBOT_API_BASE` 不是 NapCat WebUI 的地址。WebUI 常用于管理，HTTP Server 才是程序调用 `/send_group_msg` 等 OneBot API 的地址。
 
+指向夺舍也会通过这个 HTTP Server 调用 OneBot `get_group_member_info`，读取被 @ 成员的真实群名片或 QQ 昵称。它复用现有 `ONEBOT_ACCESS_TOKEN`，不需要新增 Token 或申请其他 API。
+
 ### 2. NapCat HTTP Client
 
 在 WebUI 中进入 `网络配置 → 新建 → HTTP 客户端`：

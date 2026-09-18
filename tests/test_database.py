@@ -39,11 +39,11 @@ async def test_long_term_memory_is_persistent_pruned_and_clearable(tmp_path):
 async def test_activity_possession_and_anonymous_style_hint(tmp_path):
     db = Database(Settings(_env_file=None, database_path=str(tmp_path / "activity.db")))
     await db.init()
-    for _ in range(6):
+    for _ in range(15):
         await db.record_group_activity("100", "200", "小明", "哈哈，确实！", "2026-09-18")
 
     possession = await db.get_or_create_daily_possession("100", "2026-09-18")
-    assert possession == ("200", "小明")
+    assert possession == ("200", "小明", "random")
     assert await db.get_or_create_daily_possession("100", "2026-09-18") == possession
     await db.exit_daily_possession("100", "2026-09-18", "200")
     assert await db.possession_exited("100", "2026-09-18")
@@ -58,6 +58,26 @@ async def test_activity_possession_and_anonymous_style_hint(tmp_path):
 async def test_possession_requires_more_than_five_messages(tmp_path):
     db = Database(Settings(_env_file=None, database_path=str(tmp_path / "threshold.db")))
     await db.init()
-    for _ in range(5):
+    for _ in range(14):
         await db.record_group_activity("100", "200", "小明", "测试", "2026-09-18")
     assert await db.get_or_create_daily_possession("100", "2026-09-18") is None
+
+
+async def test_old_random_result_is_rechecked_against_new_threshold(tmp_path):
+    db = Database(Settings(_env_file=None, database_path=str(tmp_path / "old-random.db")))
+    await db.init()
+    for _ in range(6):
+        await db.record_group_activity("100", "200", "小明", "测试", "2026-09-18")
+    await db.execute(
+        "INSERT INTO daily_possession(group_id, possession_date, user_id, display_name, mode) "
+        "VALUES (?, ?, ?, ?, 'random')",
+        ("100", "2026-09-18", "200", "小明"),
+    )
+    assert await db.get_or_create_daily_possession("100", "2026-09-18") is None
+
+
+async def test_targeted_possession_does_not_require_activity_threshold(tmp_path):
+    db = Database(Settings(_env_file=None, database_path=str(tmp_path / "targeted.db")))
+    await db.init()
+    assert await db.set_targeted_possession("100", "2026-09-18", "300", "小红")
+    assert await db.daily_possession("100", "2026-09-18") == ("300", "小红", "targeted")

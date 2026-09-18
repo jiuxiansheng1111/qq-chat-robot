@@ -12,6 +12,7 @@ from app.main import (
     extract_long_memory,
     extract_search_query,
     mentioned_image_command,
+    mentioned_user_ids,
     message_text,
     sender_display_name,
     settings,
@@ -138,6 +139,23 @@ def test_cq_string_mention_is_position_independent():
         assert message_text(before) == message_text(after) == "随机奶龙"
         assert mentioned_image_command(before, NAILONG_IMAGE_COMMANDS)
         assert mentioned_image_command(after, NAILONG_IMAGE_COMMANDS)
+    finally:
+        settings.onebot_self_id = previous
+
+
+def test_targeted_mention_returns_member_but_not_bot():
+    previous = settings.onebot_self_id
+    settings.onebot_self_id = "bot-1"
+    try:
+        payload = event("指向夺舍")
+        payload["message"] = [
+            {"type": "at", "data": {"qq": "member-2"}},
+            {"type": "text", "data": {"text": " 指向夺舍 "}},
+            {"type": "at", "data": {"qq": "bot-1"}},
+        ]
+        assert bot_mentioned(payload)
+        assert message_text(payload) == "指向夺舍"
+        assert mentioned_user_ids(payload) == ["member-2"]
     finally:
         settings.onebot_self_id = previous
 

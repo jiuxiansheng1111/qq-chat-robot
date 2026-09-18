@@ -38,9 +38,12 @@ logger = logging.getLogger("qqchat")
 CAT_IMAGE_COMMANDS = frozenset({"/猫", "/cat", "猫图", "随机猫", "随机猫咪", "随机猫图"})
 PIG_IMAGE_COMMANDS = frozenset({"/小猪", "/pig", "猪图", "随机猪", "随机猪猪", "随机小猪"})
 NAILONG_IMAGE_COMMANDS = frozenset({"/奶龙", "奶龙", "随机奶龙", "来只奶龙", "龙来"})
-POSSESSION_COMMANDS = frozenset({"/今日夺舍", "今日夺舍", "今天夺舍谁", "今日附身"})
+RANDOM_POSSESSION_COMMANDS = frozenset(
+    {"/随机夺舍", "随机夺舍", "/今日夺舍", "今日夺舍", "今天夺舍谁", "今日附身"}
+)
+TARGETED_POSSESSION_COMMANDS = frozenset({"/指向夺舍", "指向夺舍", "指定夺舍"})
 POSSESSION_STATUS_COMMANDS = frozenset({"/夺舍状态", "夺舍状态", "是否夺舍"})
-POSSESSION_EXIT_COMMANDS = frozenset({"/退出夺舍", "退出夺舍", "结束夺舍"})
+POSSESSION_EXIT_COMMANDS = frozenset({"/退出夺舍", "退出夺舍", "结束夺舍", "退出"})
 LONG_MEMORY_LIST_COMMANDS = frozenset({"/长期记忆列表", "我的长期记忆", "你记得什么"})
 LONG_MEMORY_CLEAR_COMMANDS = frozenset({"/长期记忆清除", "清除长期记忆", "忘记我"})
 SENSITIVE_MEMORY_PATTERN = re.compile(
@@ -168,6 +171,25 @@ def sender_display_name(event: dict) -> str:
     return re.sub(r"[\r\n\t]", " ", value).strip()[:40] or "群友"
 
 
+def mentioned_user_ids(event: dict) -> list[str]:
+    message = event.get("message")
+    if isinstance(message, str):
+        values = re.findall(r"\[CQ:at,qq=([^\]]+)\]", message)
+    elif isinstance(message, list):
+        values = [
+            str(segment.get("data", {}).get("qq", ""))
+            for segment in message
+            if segment.get("type") == "at"
+        ]
+    else:
+        values = []
+    return list(
+        dict.fromkeys(
+            value for value in values if value and value not in {settings.onebot_self_id, "all"}
+        )
+    )
+
+
 def extract_long_memory(event: dict, text: str) -> str | None:
     prefixes = ("记住：", "记住:", "请记住", "帮我记住")
     if text.startswith("/长期记忆 "):
@@ -229,6 +251,29 @@ async def send_group_message(group_id: str, message: str) -> None:
     headers = {"Authorization": f"Bearer {settings.onebot_access_token}"} if settings.onebot_access_token else {}
     async with httpx.AsyncClient(timeout=10) as client:
         await client.post(f"{settings.onebot_api_base.rstrip('/')}/send_group_msg", headers=headers, json={"group_id": group_id, "message": message})
+
+
+async def group_member_name(group_id: str, user_id: str) -> str:
+    if not settings.onebot_api_base:
+        raise RuntimeError("OneBot API is not configured")
+    headers = (
+        {"Authorization": f"Bearer {settings.onebot_access_token}"}
+        if settings.onebot_access_token
+        else {}
+    )
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.post(
+            f"{settings.onebot_api_base.rstrip('/')}/get_group_member_info",
+            headers=headers,
+            json={"group_id": group_id, "user_id": user_id, "no_cache": False},
+        )
+        response.raise_for_status()
+        payload = response.json()
+    if payload.get("status") != "ok" or not isinstance(payload.get("data"), dict):
+        raise RuntimeError("OneBot did not return group member data")
+    data = payload["data"]
+    value = str(data.get("card") or data.get("nickname") or user_id)
+    return re.sub(r"[\r\n\t]", " ", value).strip()[:40] or user_id
 
 
 async def send_group_image(group_id: str, image_file: str, source_url: str = "") -> None:
@@ -375,26 +420,53 @@ async def onebot_webhook(
         else:
             possession = await request.app.state.db.daily_possession(group_id, today)
             if possession:
+                mode_name = "指向" if possession[2] == "targeted" else "随机"
                 await send_group_message(
                     group_id,
-                    f"今日夺舍状态：进行中。我的名字是“{possession[1]}”（机器人娱乐扮演）。",
+                    f"今日夺舍状态：{mode_name}夺舍进行中。"
+                    f"我的名字是“{possession[1]}”（机器人娱乐扮演）。",
                 )
             else:
                 await send_group_message(group_id, "今日夺舍状态：尚未抽取。")
-    elif text in POSSESSION_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
+    elif text in TARGETED_POSSESSION_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
+        if await request.app.state.db.possession_exited(group_id, today):
+            await send_group_message(group_id, "今天已经退出夺舍了，明天会自动恢复。")
+        else:
+            targets = mentioned_user_ids(event)
+            if len(targets) != 1:
+                await send_group_message(group_id, "用法：@我 指向夺舍 @一名群成员")
+            else:
+                target_id = targets[0]
+                try:
+                    name = await group_member_name(group_id, target_id)
+                except (RuntimeError, ValueError, httpx.HTTPError) as exc:
+                    logger.warning("group member lookup failed: %s", exc)
+                    name = await request.app.state.db.member_display_name(group_id, target_id)
+                if not name:
+                    await send_group_message(group_id, "没有查到这名群成员，请确认对方仍在群里。")
+                else:
+                    await request.app.state.db.set_targeted_possession(
+                        group_id, today, target_id, name
+                    )
+                    await send_group_message(
+                        group_id,
+                        f"指向夺舍已生效：今天我的名字是“{name}”。\n"
+                        f"{name}本人或群管理员可发送“@我 退出”。这是机器人娱乐扮演。",
+                    )
+    elif text in RANDOM_POSSESSION_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
         if await request.app.state.db.possession_exited(group_id, today):
             await send_group_message(group_id, "今天已经退出夺舍了，明天会自动恢复抽取。")
             return {"ok": True}
         possession = await request.app.state.db.get_or_create_daily_possession(group_id, today)
         if possession:
-            _, name = possession
+            _, name, _ = possession
             await send_group_message(
                 group_id,
-                f"今日夺舍抽中了群成员“{name}”。今天我的名字是“{name}” (｀・ω・´)\n"
-                "这是机器人娱乐扮演，不代表该成员本人发言。",
+                f"本群今日乐子：{name}！随机夺舍已生效，今天我的名字是“{name}” (｀・ω・´)\n"
+                f"{name}本人或群管理员可发送“@我 退出”。这是机器人娱乐扮演。",
             )
         else:
-            await send_group_message(group_id, "今天还没有候选人：要有群友发言超过 5 条才会加入抽取。")
+            await send_group_message(group_id, "今天还没有候选人：群友当天发言达到 15 条才会加入随机抽取。")
     elif text in {"/help", "help"}:
         await send_group_message(group_id, registry.help_text())
     elif text in CAT_IMAGE_COMMANDS or mentioned_image_command(event, CAT_IMAGE_COMMANDS):
@@ -469,9 +541,10 @@ async def onebot_webhook(
                 + "。自然参考即可，不要照搬某个成员，也不要强行使用网络用语。"
             )
         if possession:
-            _, name = possession
+            _, name, mode = possession
+            mode_name = "指向夺舍" if mode == "targeted" else "随机夺舍"
             persona += (
-                f"\n\n今日夺舍抽中的真实群成员名片是“{name}”。被问名字时回答“我的名字是{name}”，"
+                f"\n\n今日{mode_name}选择的真实群成员名片是“{name}”。被问名字时回答“我的名字是{name}”，"
                 "同时明确这是机器人娱乐扮演；不能声称是真人或代表该成员本人。"
             )
         messages = request.app.state.memory.messages(
