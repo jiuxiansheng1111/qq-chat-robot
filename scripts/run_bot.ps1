@@ -16,19 +16,25 @@ New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
 Set-Location -LiteralPath $projectRoot
 
 while ($true) {
-    $listener = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue
-    if ($listener) {
-        exit 0
+    $listener = @(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue)
+    if ($listener.Count -gt 0) {
+        $process = Get-Process -Id $listener[0].OwningProcess -ErrorAction SilentlyContinue
+        if ($null -eq $process) {
+            Start-Sleep -Seconds 2
+            continue
+        }
+        Add-Content -LiteralPath $errorLog -Value "$(Get-Date -Format o) Existing process $($process.Id) found on port 8000; monitoring it."
     }
-
-    $process = Start-Process `
-        -FilePath $pythonPath `
-        -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000") `
-        -WorkingDirectory $projectRoot `
-        -RedirectStandardOutput $outputLog `
-        -RedirectStandardError $errorLog `
-        -PassThru `
-        -WindowStyle Hidden
+    else {
+        $process = Start-Process `
+            -FilePath $pythonPath `
+            -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000") `
+            -WorkingDirectory $projectRoot `
+            -RedirectStandardOutput $outputLog `
+            -RedirectStandardError $errorLog `
+            -PassThru `
+            -WindowStyle Hidden
+    }
     # A wedged process can keep port 8000 open, so supervise health as well.
     $unhealthySince = $null
     while (-not $process.HasExited) {
