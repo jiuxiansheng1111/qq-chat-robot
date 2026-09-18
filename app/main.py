@@ -231,6 +231,24 @@ def is_identity_question(text: str) -> bool:
     return any(phrase in normalized for phrase in phrases)
 
 
+def possession_identity_prompt(name: str, mode: str) -> str:
+    mode_name = "指向夺舍" if mode == "targeted" else "随机夺舍"
+    return (
+        f"【最高优先级身份状态】当前处于{mode_name}，你当前唯一的对外名字是“{name}”。"
+        f"在本次状态结束前，所有回答都必须保持这个名字，禁止自称“阿柚”或“{settings.persona_name}”。"
+        "你仍然是机器人娱乐扮演，不得声称代表该群成员本人。"
+        "如果被问到该成员与他人的关系，而现有上下文没有可靠信息，要保持当前名字并明确说不知道，不能编造。"
+    )
+
+
+def enforce_possession_identity(answer: str, name: str) -> str:
+    """Prevent providers from reverting to the default persona during possession."""
+    for default_name in {"阿柚", settings.persona_name}:
+        if default_name and default_name != name:
+            answer = answer.replace(default_name, name)
+    return answer
+
+
 def format_search_sources(results: list[SearchResult]) -> str:
     return "\n".join(f"{index}. {item.title}\n{item.url}" for index, item in enumerate(results, 1))
 
@@ -568,6 +586,7 @@ async def onebot_webhook(
         style_hint = await request.app.state.db.group_style_hint(group_id)
         possession = await request.app.state.db.daily_possession(group_id, today)
         persona = settings.persona_prompt()
+        possession_name = ""
         if long_memories:
             persona += "\n\n用户明确要求长期记住的信息：\n" + "\n".join(
                 f"- {item}" for item in long_memories
@@ -579,16 +598,16 @@ async def onebot_webhook(
             )
         if possession:
             _, name, mode = possession
-            mode_name = "指向夺舍" if mode == "targeted" else "随机夺舍"
-            persona += (
-                f"\n\n今日{mode_name}选择的真实群成员名片是“{name}”。被问名字时回答“我的名字是{name}”，"
-                "同时明确这是机器人娱乐扮演；不能声称是真人或代表该成员本人。"
-            )
+            possession_name = name
+            identity_prompt = possession_identity_prompt(name, mode)
+            persona = identity_prompt + "\n\n" + persona + "\n\n" + identity_prompt
         messages = request.app.state.memory.messages(
             group_id, user_id, persona, prompt, memory_enabled
         )
         try:
             answer = await request.app.state.llm.ask(messages)
+            if possession_name:
+                answer = enforce_possession_identity(answer, possession_name)
             request.app.state.memory.append(group_id, user_id, prompt, answer, memory_enabled)
             await send_group_message(group_id, answer[:2000])
         except (LLMError, httpx.HTTPError) as exc:

@@ -9,6 +9,7 @@ from app.main import (
     PIG_IMAGE_COMMANDS,
     app,
     bot_mentioned,
+    enforce_possession_identity,
     extract_long_memory,
     extract_search_query,
     is_identity_question,
@@ -184,6 +185,12 @@ def test_identity_questions_are_detected_without_llm_guessing():
     assert is_identity_question("你还记得你是谁吗")
     assert is_identity_question("现在叫什么名字")
     assert not is_identity_question("今天天气怎么样")
+
+
+def test_possession_identity_guard_replaces_default_name():
+    assert enforce_possession_identity("我是阿柚，一个聊天机器人。", "山奈钠") == (
+        "我是山奈钠，一个聊天机器人。"
+    )
 
 
 def test_sender_display_name_prefers_group_card_and_sanitizes_lines():
