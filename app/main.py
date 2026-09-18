@@ -130,7 +130,10 @@ async def llm_health(request: Request):
 def message_text(event: dict) -> str:
     message = event.get("message", "")
     if isinstance(message, str):
-        return message.strip()
+        # OneBot may deliver either array segments or a CQ-code string. Remove
+        # @ segments from strings so command parsing is independent of where
+        # the user placed the mention.
+        return re.sub(r"\[CQ:at,qq=[^\]]+\]", "", message).strip()
     parts = []
     for segment in message or []:
         if segment.get("type") == "text":
@@ -139,12 +142,18 @@ def message_text(event: dict) -> str:
 
 
 def bot_mentioned(event: dict) -> bool:
-    if not settings.onebot_self_id or not isinstance(event.get("message"), list):
+    if not settings.onebot_self_id:
+        return False
+    message = event.get("message")
+    if isinstance(message, str):
+        pattern = rf"\[CQ:at,qq={re.escape(settings.onebot_self_id)}\]"
+        return re.search(pattern, message) is not None
+    if not isinstance(message, list):
         return False
     return any(
         segment.get("type") == "at"
         and str(segment.get("data", {}).get("qq", "")) == settings.onebot_self_id
-        for segment in event["message"]
+        for segment in message
     )
 
 

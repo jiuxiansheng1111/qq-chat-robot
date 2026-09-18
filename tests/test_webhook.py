@@ -104,6 +104,44 @@ def test_mention_extracts_search_and_explicit_long_memory():
         settings.onebot_self_id = previous
 
 
+def test_mention_position_does_not_change_array_command_text():
+    previous = settings.onebot_self_id
+    settings.onebot_self_id = "bot-1"
+    try:
+        before = event("随机猫咪")
+        before["message"] = [
+            {"type": "at", "data": {"qq": "bot-1"}},
+            {"type": "text", "data": {"text": " 随机猫咪"}},
+        ]
+        after = event("随机猫咪")
+        after["message"] = [
+            {"type": "text", "data": {"text": "随机猫咪 "}},
+            {"type": "at", "data": {"qq": "bot-1"}},
+        ]
+        assert bot_mentioned(before) and bot_mentioned(after)
+        assert message_text(before) == message_text(after) == "随机猫咪"
+        assert mentioned_image_command(before, CAT_IMAGE_COMMANDS)
+        assert mentioned_image_command(after, CAT_IMAGE_COMMANDS)
+    finally:
+        settings.onebot_self_id = previous
+
+
+def test_cq_string_mention_is_position_independent():
+    previous = settings.onebot_self_id
+    settings.onebot_self_id = "bot-1"
+    try:
+        before = event("unused")
+        before["message"] = "[CQ:at,qq=bot-1] 随机奶龙"
+        after = event("unused")
+        after["message"] = "随机奶龙 [CQ:at,qq=bot-1]"
+        assert bot_mentioned(before) and bot_mentioned(after)
+        assert message_text(before) == message_text(after) == "随机奶龙"
+        assert mentioned_image_command(before, NAILONG_IMAGE_COMMANDS)
+        assert mentioned_image_command(after, NAILONG_IMAGE_COMMANDS)
+    finally:
+        settings.onebot_self_id = previous
+
+
 def test_sender_display_name_prefers_group_card_and_sanitizes_lines():
     payload = event("hello")
     payload["sender"].update({"card": "小明\n第二行", "nickname": "nickname"})
