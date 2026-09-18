@@ -51,8 +51,7 @@ class Settings(BaseSettings):
     media_max_bytes: int = 5 * 1024 * 1024
     media_timeout_seconds: float = 60
     media_retry_attempts: int = 2
-    cat_api_url: str = ""
-    cat_api_key: str = Field(default="", repr=False)
+    cat_api_url: str = "https://cataas.com/cat/gif"
     pig_api_url: str = "https://commons.wikimedia.org/w/api.php"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")

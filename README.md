@@ -11,6 +11,7 @@
 - `@机器人 问题` 或 `/ai 问题` 触发 AI 对话。
 - `@机器人 随机猫咪`、`/猫` 获取随机猫图。
 - `@机器人 随机猪猪`、`/小猪` 获取随机真实小猪照片。
+- `@机器人 随机奶龙`、`/奶龙` 获取随机奶龙表情包。
 - `/help` 或 `@机器人 help` 查看动态帮助菜单。
 - 用户可自行开启、关闭、清除和查询短期对话记忆。
 - 群管理员可以启停机器人、维护群成员黑名单和控制群级插件开关。
@@ -48,7 +49,7 @@ POST /onebot/webhook
    ├─ 鉴权 / 去重 / 群开关 / 黑名单 / 限流
    ├─ 内置指令与自定义插件
    ├─ 智谱 → Groq 备用
-   └─ TheCatAPI / Wikimedia Commons
+   └─ CATAAS / Wikimedia Commons / nailong-memes
    │
    ▼
 NapCat HTTP Server → QQ群回复
@@ -63,6 +64,7 @@ NapCat HTTP Server → QQ群回复
 | `@机器人 <内容>` | 所有人 | 直接与 LLM 对话 |
 | `@机器人 随机猫咪` | 所有人 | 随机猫图 |
 | `@机器人 随机猪猪` | 所有人 | 随机发送真实小猪照片 |
+| `@机器人 随机奶龙` | 所有人 | 随机发送奶龙静态图或 GIF |
 | `/help` | 所有人 | 查看精简帮助菜单 |
 | `/记忆开启` | 所有人 | 开启当前群内的个人短期记忆 |
 | `/记忆关闭` | 所有人 | 关闭并清除短期记忆 |
@@ -80,7 +82,7 @@ NapCat HTTP Server → QQ群回复
 - Windows 10/11：可使用仓库提供的一键启动脚本。
 - 最新版 NT 架构 QQ 与 [NapCatQQ](https://github.com/NapNeko/NapCatQQ)。
 - 至少一个可用的 LLM API Key。
-- 可选：Docker Desktop、Redis、TheCatAPI。真实猪图使用无需密钥的 Wikimedia Commons。
+- 可选：Docker Desktop、Redis。猫 GIF、真实猪图和奶龙图库均无需 API Key。
 
 ## 快速开始
 
@@ -194,13 +196,15 @@ http://127.0.0.1:8000/docs
 
 ### 随机猫图
 
-1. 前往 [TheCatAPI](https://thecatapi.com/signup) 申请 Key。
-2. 在 `.env` 填写 `CAT_API_URL` 和 `CAT_API_KEY`。
-3. 使用 `/猫` 或 `@机器人 随机猫咪`。
+使用 `/猫` 或 `@机器人 随机猫咪`。机器人通过 [CATAAS](https://cataas.com/) 的 `/cat/gif` 端点获取动态猫图，下载后会校验 GIF 文件头再发送，不需要 API Key。
 
 ### 随机真实小猪照片
 
 使用 `/小猪` 或 `@机器人 随机猪猪`。机器人会从经过筛选的 Wikimedia Commons 真实摄影文件池中随机抽取，抽完一轮后重新洗牌，因此不会连续发送同一张照片；消息会附带原始来源页。该功能无需 API Key。
+
+### 随机奶龙表情包
+
+使用 `/奶龙` 或 `@机器人 随机奶龙`。图片来自 MIT 许可的 [nailong-memes](https://github.com/GGGeeeooorrrgggeee/nailong-memes) 图库；项目只保存轻量文件清单，每次按需下载一张并转为 QQ 可发送的 base64，不需要 API Key。奶龙角色及第三方素材的相关权利仍归各自权利人所有。
 
 ## 机器人语气与记忆
 
@@ -287,7 +291,7 @@ NapCat HTTP Client 仍可通过宿主机映射端口向 `http://127.0.0.1:8000/o
 .\.venv\Scripts\python.exe -m compileall -q app tests
 ```
 
-当前基线：`31 passed`，外部服务测试默认跳过。
+当前基线：`32 passed`，外部服务测试默认跳过。
 
 真实接口健康检查会读取 `.env` 并调用外部服务，可能消耗少量额度：
 

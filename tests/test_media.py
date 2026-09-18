@@ -5,14 +5,19 @@ import httpx
 import pytest
 
 import app.plugins.media as media_module
-from app.plugins.media import random_image, random_real_pig_image
+from app.plugins.media import random_image, random_nailong_image, random_real_pig_image
 
 
 @pytest.mark.asyncio
-async def test_the_cat_api_json_array(monkeypatch):
+async def test_cataas_returns_gif_only(monkeypatch):
     async def handler(request):
-        assert request.headers["x-api-key"] == "cat-key"
-        return httpx.Response(200, json=[{"id": "abc", "url": "https://cdn.example/cat.jpg"}])
+        assert request.url.path == "/cat/gif"
+        assert request.headers["cache-control"] == "no-cache"
+        return httpx.Response(
+            200,
+            headers={"content-type": "image/gif"},
+            content=b"GIF89a-cat",
+        )
 
     transport = httpx.MockTransport(handler)
     original_client = httpx.AsyncClient
@@ -23,11 +28,44 @@ async def test_the_cat_api_json_array(monkeypatch):
 
     monkeypatch.setattr(httpx, "AsyncClient", mocked_client)
     result = await random_image(
-        "https://api.thecatapi.com/v1/images/search",
-        "cat-key",
+        "https://cataas.com/cat/gif",
+        "",
         SimpleNamespace(media_max_bytes=5 * 1024 * 1024),
     )
-    assert result == "https://cdn.example/cat.jpg"
+    assert base64.b64decode(result.removeprefix("base64://")) == b"GIF89a-cat"
+
+
+@pytest.mark.asyncio
+async def test_random_nailong_image_downloads_curated_asset(monkeypatch):
+    async def fixed_path():
+        return "gif/example.gif"
+
+    async def handler(request):
+        assert request.url.path.endswith("/gif/example.gif")
+        return httpx.Response(
+            200,
+            headers={"content-type": "image/gif"},
+            content=b"GIF89a-nailong",
+        )
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mocked_client(**kwargs):
+        kwargs["transport"] = transport
+        return original_client(**kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mocked_client)
+    monkeypatch.setattr(media_module, "_next_nailong_path", fixed_path)
+    result = await random_nailong_image(
+        SimpleNamespace(
+            media_timeout_seconds=10,
+            media_retry_attempts=1,
+            media_max_bytes=5 * 1024 * 1024,
+        )
+    )
+
+    assert base64.b64decode(result.removeprefix("base64://")) == b"GIF89a-nailong"
 
 
 @pytest.mark.asyncio

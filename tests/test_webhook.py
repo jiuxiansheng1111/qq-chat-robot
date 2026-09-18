@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.main import (
     CAT_IMAGE_COMMANDS,
+    NAILONG_IMAGE_COMMANDS,
     PIG_IMAGE_COMMANDS,
     app,
     bot_mentioned,
@@ -71,8 +72,14 @@ def test_at_image_commands_are_detected_without_triggering_ai():
             {"type": "at", "data": {"qq": "bot-1"}},
             {"type": "text", "data": {"text": "随机猪猪"}},
         ]
+        nailong = event("随机奶龙")
+        nailong["message"] = [
+            {"type": "at", "data": {"qq": "bot-1"}},
+            {"type": "text", "data": {"text": "随机奶龙"}},
+        ]
         assert mentioned_image_command(cat, CAT_IMAGE_COMMANDS)
         assert mentioned_image_command(pig, PIG_IMAGE_COMMANDS)
+        assert mentioned_image_command(nailong, NAILONG_IMAGE_COMMANDS)
         assert not mentioned_image_command(cat, PIG_IMAGE_COMMANDS)
     finally:
         settings.onebot_self_id = previous

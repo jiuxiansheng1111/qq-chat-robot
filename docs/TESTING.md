@@ -25,8 +25,9 @@
 - OneBot Webhook 鉴权
 - 智谱 LLM
 - Groq 备用 LLM（未配置时跳过）
-- TheCatAPI 猫图
+- CATAAS 动态猫 GIF
 - Wikimedia Commons 真实小猪照片
+- GitHub 开源图库奶龙表情包
 - OneBot `get_login_info`
 
 ## 只检查一个服务
@@ -36,6 +37,7 @@
 .\.venv\Scripts\python.exe -m pytest tests\live --live -v -k groq
 .\.venv\Scripts\python.exe -m pytest tests\live --live -v -k cat
 .\.venv\Scripts\python.exe -m pytest tests\live --live -v -k pig
+.\.venv\Scripts\python.exe -m pytest tests\live --live -v -k nailong
 .\.venv\Scripts\python.exe -m pytest tests\live --live -v -k onebot
 .\.venv\Scripts\python.exe -m pytest tests\live --live -v -k jwt
 ```

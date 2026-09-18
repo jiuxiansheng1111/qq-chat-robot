@@ -1,3 +1,4 @@
+import base64
 from collections.abc import Iterator
 
 import httpx
@@ -7,7 +8,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.llm.providers import OpenAICompatibleProvider
 from app.main import app
-from app.plugins.media import random_image, random_real_pig_image
+from app.plugins.media import random_image, random_nailong_image, random_real_pig_image
 
 pytestmark = pytest.mark.live
 
@@ -145,19 +146,25 @@ async def test_groq_fallback_api(live_settings: Settings):
 
 
 async def test_cat_image_api(live_settings: Settings):
-    require(live_settings.cat_api_key, "CAT_API_KEY")
     image = await random_image(
         require(live_settings.cat_api_url, "CAT_API_URL"),
-        live_settings.cat_api_key,
+        "",
         live_settings,
     )
-    assert image.startswith(("https://", "base64://"))
+    assert image.startswith("base64://")
+    payload = base64.b64decode(image.removeprefix("base64://"))
+    assert payload.startswith((b"GIF87a", b"GIF89a"))
 
 
 async def test_pig_image_api(live_settings: Settings):
     image = await random_real_pig_image(live_settings.pig_api_url, live_settings)
     assert image.url.startswith("base64://")
     assert image.source_url.startswith("https://commons.wikimedia.org/")
+
+
+async def test_nailong_image_source(live_settings: Settings):
+    image = await random_nailong_image(live_settings)
+    assert image.startswith("base64://")
 
 
 async def test_onebot_get_login_info(live_settings: Settings):

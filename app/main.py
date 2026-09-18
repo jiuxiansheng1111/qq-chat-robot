@@ -20,7 +20,12 @@ from app.db.database import Database
 from app.llm.manager import LLMManager
 from app.llm.memory import ConversationMemory
 from app.llm.providers import LLMError
-from app.plugins.media import random_image, random_real_pig_image
+from app.plugins.media import (
+    NAILONG_SOURCE_URL,
+    random_image,
+    random_nailong_image,
+    random_real_pig_image,
+)
 from app.plugins.registry import registry
 
 settings = get_settings()
@@ -29,6 +34,7 @@ logger = logging.getLogger("qqchat")
 
 CAT_IMAGE_COMMANDS = frozenset({"/猫", "/cat", "猫图", "随机猫", "随机猫咪", "随机猫图"})
 PIG_IMAGE_COMMANDS = frozenset({"/小猪", "/pig", "猪图", "随机猪", "随机猪猪", "随机小猪"})
+NAILONG_IMAGE_COMMANDS = frozenset({"/奶龙", "奶龙", "随机奶龙", "来只奶龙", "龙来"})
 
 
 @dataclass
@@ -271,7 +277,7 @@ async def onebot_webhook(
         await send_group_message(group_id, registry.help_text())
     elif text in CAT_IMAGE_COMMANDS or mentioned_image_command(event, CAT_IMAGE_COMMANDS):
         try:
-            image = await random_image(settings.cat_api_url, settings.cat_api_key, settings)
+            image = await random_image(settings.cat_api_url, "", settings)
             await send_group_image(group_id, image)
         except (RuntimeError, httpx.HTTPError) as exc:
             logger.warning("cat image failed: %s", exc)
@@ -283,6 +289,13 @@ async def onebot_webhook(
         except (RuntimeError, httpx.HTTPError) as exc:
             logger.warning("pig image failed: %s", exc)
             await send_group_message(group_id, "小猪图片服务暂时不可用，请稍后再试。")
+    elif text in NAILONG_IMAGE_COMMANDS or mentioned_image_command(event, NAILONG_IMAGE_COMMANDS):
+        try:
+            image = await random_nailong_image(settings)
+            await send_group_image(group_id, image, NAILONG_SOURCE_URL)
+        except (RuntimeError, httpx.HTTPError) as exc:
+            logger.warning("nailong image failed: %s", exc)
+            await send_group_message(group_id, "奶龙图库暂时不可用，请稍后再试。")
     elif text.startswith(("/ai ", "/AI ")) or (bot_mentioned(event) and text):
         prompt = text.split(" ", 1)[1].strip() if text.startswith(("/ai ", "/AI ")) else text
         memory_enabled = await request.app.state.db.memory_enabled(group_id, user_id)

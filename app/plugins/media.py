@@ -39,8 +39,56 @@ REAL_PIG_TITLES = (
     "File:Baby-Bauernhoftiere 002 2014 03 16.jpg",
     "File:Contre-jour photograph of a standing piglet at sunset with colorful sky in Don Det Laos.jpg",
 )
+NAILONG_SOURCE_URL = "https://github.com/GGGeeeooorrrgggeee/nailong-memes"
+NAILONG_RAW_BASE_URL = (
+    "https://raw.githubusercontent.com/GGGeeeooorrrgggeee/nailong-memes/main/"
+)
+NAILONG_PATHS = (
+    "images/8eca876e50b8fcaed66f3301158085ea.jpg",
+    "images/daeaf989a265314fd5f4ad59a15c4477.jpg",
+    "images/cc7e81700e377f5ae9266d07cca6af9c.jpg",
+    "images/DF6C6ABBE88D0DE497EB8F3D48190D1A.jpg",
+    "images/274d629bfa4fc646138fe36ea27f3f35.jpg",
+    "images/522b5f888cffd66abd8bd705e6598bad.jpg",
+    "images/2EC91AB5920CA4C4DA480F5EFD0DA10E.jpg",
+    "images/367aaf3f9b80de98d1da27597d9156fe.jpg",
+    "images/84a5c63b0b8119a0651dcba6f649093e.jpg",
+    "images/1a3dc8c7531025275e8625ba9b6e38cc.jpg",
+    "images/B25A9251B83C7B06077223A9D4A546D0.jpg",
+    "images/f55bba1656311e56ee5ca10263a19c67.jpg",
+    "images/706DF161165F0563317CFE4122C88A3D.jpg",
+    "images/0e8bf92c86516402967aa5200ccec00e.jpg",
+    "images/CF0E9EB8A8B36AC7C06F03F2B955794A.jpg",
+    "images/925F19D8F5DBBF3C30074373248C48E7.jpg",
+    "images/6a50b8284930bd1a281e1579acb0d6d9.jpg",
+    "images/E314D78C748F0646029B5D69AFEC59B9.jpg",
+    "images/bff75a7ca42493021f1c0bcfc3792748.jpg",
+    "images/f4a92c91d3291c98476a6cf297b5d09d.jpg",
+    "gif/6F91055B6FFD248B37F53F514E4AEA84.gif",
+    "gif/5AE5E51882D1B81F043948457759AEDE.gif",
+    "gif/FFFC2EAC8A8DA120ABC5DFC49BE9F8AB.gif",
+    "gif/CD6514E927142183B92C75CB0EAF6F63.gif",
+    "gif/9337EA0772D5F796F3D2353D02572405.gif",
+    "gif/E35FDFD1E4DEA66B0F1798EC8EC0F3AC.gif",
+    "gif/C165854113012560E7979E3A4AF597AF.gif",
+    "gif/242B39C1E5E91DB01ED6285F86D2D5FD.gif",
+    "gif/D046006C8E6A57F1C4B8FB044F387401.gif",
+    "gif/C818B7AB164236821ADFEF7D49517AE5.gif",
+    "gif/A98366210683ACF2FE59959D4E63F43A.gif",
+    "gif/8114153C1B2AE768A5433C2002E97DFF.gif",
+    "gif/D7BB82FDCEFE4304DEFC2DC1CC132655.gif",
+    "gif/79F6C69BFA5CBD8AE41EDE97346290E9.gif",
+    "gif/74B04107B41A03251A17952FB7E3B466.gif",
+    "gif/A320A619BA1884924EC8377E56DF9280.gif",
+    "gif/71808EA8C5342D504532E0BE5F57F8C7.gif",
+    "gif/FDB82F7AF37B14CC7D21EB1FFBF7F9B6.gif",
+    "gif/E21219FE5409935F94D2BFA8B43E0726.gif",
+    "gif/E3C08F67A9F633C707E6B922EAA038B5.gif",
+)
 _pig_title_pool: list[str] = []
 _pig_pool_lock = asyncio.Lock()
+_nailong_path_pool: list[str] = []
+_nailong_pool_lock = asyncio.Lock()
 
 
 @dataclass(frozen=True)
@@ -55,6 +103,41 @@ async def _next_pig_title() -> str:
             _pig_title_pool.extend(REAL_PIG_TITLES)
             random.SystemRandom().shuffle(_pig_title_pool)
         return _pig_title_pool.pop()
+
+
+async def _next_nailong_path() -> str:
+    async with _nailong_pool_lock:
+        if not _nailong_path_pool:
+            _nailong_path_pool.extend(NAILONG_PATHS)
+            random.SystemRandom().shuffle(_nailong_path_pool)
+        return _nailong_path_pool.pop()
+
+
+async def random_nailong_image(settings: Settings) -> str:
+    """Download one non-repeating image from the curated open-source meme pool."""
+    path = await _next_nailong_path()
+    url = NAILONG_RAW_BASE_URL + path
+    timeout = getattr(settings, "media_timeout_seconds", 60)
+    attempts = max(1, getattr(settings, "media_retry_attempts", 2))
+    headers = {"User-Agent": WIKIMEDIA_USER_AGENT}
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        for attempt in range(attempts):
+            try:
+                response = await client.get(url, headers=headers)
+                break
+            except (httpx.TransportError, httpx.TimeoutException):
+                if attempt + 1 >= attempts:
+                    raise
+                await asyncio.sleep(0.5)
+
+    content_type = response.headers.get("content-type", "")
+    if response.status_code >= 400:
+        raise RuntimeError(f"奶龙图库下载错误: {response.status_code}")
+    if not content_type.startswith("image/"):
+        raise RuntimeError("奶龙图库返回的内容不是图片")
+    if len(response.content) > settings.media_max_bytes:
+        raise RuntimeError("奶龙图片超过大小限制")
+    return "base64://" + base64.b64encode(response.content).decode()
 
 
 async def random_real_pig_image(api_url: str, settings: Settings) -> RealPigImage:
@@ -121,13 +204,11 @@ async def random_image(url: str, api_key: str, settings: Settings) -> str:
     if not url:
         raise RuntimeError("图片 API 未配置")
     headers = {}
+    hostname = (urlparse(url).hostname or "").lower()
     if api_key:
-        # TheCatAPI uses x-api-key; other JSON image providers commonly use Bearer.
-        hostname = (urlparse(url).hostname or "").lower()
-        if hostname.endswith("thecatapi.com"):
-            headers["x-api-key"] = api_key
-        else:
-            headers["Authorization"] = f"Bearer {api_key}"
+        headers["Authorization"] = f"Bearer {api_key}"
+    if hostname.endswith("cataas.com"):
+        headers["Cache-Control"] = "no-cache"
     timeout = getattr(settings, "media_timeout_seconds", 60)
     attempts = max(1, getattr(settings, "media_retry_attempts", 2))
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
@@ -162,4 +243,6 @@ async def random_image(url: str, api_key: str, settings: Settings) -> str:
         raise RuntimeError("图片 API 未返回可用 image_url")
     if not content_type.startswith("image/") or len(response.content) > settings.media_max_bytes:
         raise RuntimeError("图片格式或大小不符合要求")
+    if hostname.endswith("cataas.com") and not response.content.startswith((b"GIF87a", b"GIF89a")):
+        raise RuntimeError("猫图服务未返回 GIF")
     return "base64://" + base64.b64encode(response.content).decode()
