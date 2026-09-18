@@ -11,6 +11,7 @@ from app.main import (
     bot_mentioned,
     extract_long_memory,
     extract_search_query,
+    is_identity_question,
     mentioned_image_command,
     mentioned_user_ids,
     message_text,
@@ -158,6 +159,13 @@ def test_targeted_mention_returns_member_but_not_bot():
         assert mentioned_user_ids(payload) == ["member-2"]
     finally:
         settings.onebot_self_id = previous
+
+
+def test_identity_questions_are_detected_without_llm_guessing():
+    assert is_identity_question("你现在是谁？")
+    assert is_identity_question("你还记得你是谁吗")
+    assert is_identity_question("现在叫什么名字")
+    assert not is_identity_question("今天天气怎么样")
 
 
 def test_sender_display_name_prefers_group_card_and_sanitizes_lines():

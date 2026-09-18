@@ -215,6 +215,20 @@ def extract_search_query(event: dict, text: str) -> str | None:
     return None
 
 
+def is_identity_question(text: str) -> bool:
+    normalized = re.sub(r"[\s，。！？!?、~～]", "", text)
+    phrases = (
+        "你是谁",
+        "现在是谁",
+        "你现在是谁",
+        "你叫什么",
+        "你叫什么名字",
+        "现在叫什么",
+        "还记得你是谁",
+    )
+    return any(phrase in normalized for phrase in phrases)
+
+
 def format_search_sources(results: list[SearchResult]) -> str:
     return "\n".join(f"{index}. {item.title}\n{item.url}" for index, item in enumerate(results, 1))
 
@@ -428,6 +442,27 @@ async def onebot_webhook(
                 )
             else:
                 await send_group_message(group_id, "今日夺舍状态：尚未抽取。")
+    elif bot_mentioned(event) and is_identity_question(text):
+        if await request.app.state.db.possession_exited(group_id, today):
+            await send_group_message(
+                group_id,
+                f"今天的夺舍已经退出啦，现在我是机器人“{settings.persona_name}”。",
+            )
+        else:
+            possession = await request.app.state.db.daily_possession(group_id, today)
+            if possession:
+                _, name, mode = possession
+                mode_name = "指向夺舍" if mode == "targeted" else "随机夺舍"
+                await send_group_message(
+                    group_id,
+                    f"我现在是“{name}”，当前为{mode_name}状态。"
+                    "这是机器人娱乐扮演，不代表群成员本人。",
+                )
+            else:
+                await send_group_message(
+                    group_id,
+                    f"我现在是机器人“{settings.persona_name}”，今天还没有进入夺舍状态。",
+                )
     elif text in TARGETED_POSSESSION_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
         if await request.app.state.db.possession_exited(group_id, today):
             await send_group_message(group_id, "今天已经退出夺舍了，明天会自动恢复。")

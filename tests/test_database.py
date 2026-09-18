@@ -44,6 +44,9 @@ async def test_activity_possession_and_anonymous_style_hint(tmp_path):
 
     possession = await db.get_or_create_daily_possession("100", "2026-09-18")
     assert possession == ("200", "小明", "random")
+    reopened = Database(Settings(_env_file=None, database_path=str(tmp_path / "activity.db")))
+    await reopened.init()
+    assert await reopened.daily_possession("100", "2026-09-18") == possession
     assert await db.get_or_create_daily_possession("100", "2026-09-18") == possession
     await db.exit_daily_possession("100", "2026-09-18", "200")
     assert await db.possession_exited("100", "2026-09-18")
