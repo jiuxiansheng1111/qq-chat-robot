@@ -9,6 +9,7 @@ from app.main import (
     PIG_IMAGE_COMMANDS,
     app,
     asks_for_sender_name,
+    automatic_web_search_query,
     bot_mentioned,
     enforce_possession_identity,
     extract_group_memory,
@@ -222,6 +223,15 @@ def test_possession_identity_guard_replaces_default_name():
 
 def test_chat_reply_uses_lele_wording():
     assert polish_chat_reply("他真是个乐子人。") == "他真是个乐乐。"
+
+
+def test_automatic_web_search_detects_current_or_model_deferred_questions():
+    assert automatic_web_search_query("今天有什么新闻？") == "今天有什么新闻？"
+    assert automatic_web_search_query(
+        "这位歌手是谁？", "<WEB_SEARCH>歌手名 官方资料</WEB_SEARCH>"
+    ) == "歌手名 官方资料"
+    assert automatic_web_search_query("讲个笑话", "当然可以") is None
+    assert automatic_web_search_query("", "<WEB_SEARCH>x</WEB_SEARCH>") is None
 
 
 def test_sender_name_question_is_distinct_from_bot_identity():

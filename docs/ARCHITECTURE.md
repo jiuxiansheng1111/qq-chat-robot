@@ -95,7 +95,7 @@ command_audit
 
 ## 联网搜索
 
-`app/services/web_search.py` 访问 Bing RSS 搜索入口，解析标题、摘要与 URL，不需要额外 API Key。搜索只在成员明确使用 `/搜索` 或 `@机器人 搜索` 时触发。结果会作为受限证据交给 LLM 总结，并在回复末尾保留真实来源链接；LLM 不可用时直接返回搜索结果列表。
+`app/services/web_search.py` 访问 Bing RSS 搜索入口，解析标题、摘要与 URL，不需要额外 API Key。成员可明确使用 `/搜索` 或 `@机器人 搜索`；启用 `AUTO_WEB_SEARCH_ENABLED` 后，明显时效问题会直接搜索，其他问题只有在首轮模型输出严格的 `<WEB_SEARCH>查询词</WEB_SEARCH>` 标记时才自动回退。搜索查询限制为 120 字，不包含长期记忆或完整历史。结果作为不可信的受限证据交给 LLM，网页文本中的指令不会被执行，最终回复保留真实来源链接。
 
 ## 指令生命周期
 

@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     llm_max_concurrency: int = 10
     llm_queue_size: int = 30
     llm_queue_timeout_seconds: float = 8
+    auto_web_search_enabled: bool = False
+    auto_web_search_limit: int = 5
 
     persona_name: str = "阿柚"
     persona_prompt_file: str = "prompts/persona.txt"
