@@ -10,6 +10,7 @@ def test_plugin_registry_help():
     assert "@我 随机猫咪" in text
     assert "@我 随机猪猪" in text
     assert "@我 随机奶龙" in text
+    assert "@我 点歌" in text
     assert "/hello" not in text
 
 

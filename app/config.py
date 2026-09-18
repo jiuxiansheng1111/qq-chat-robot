@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     cat_timeout_seconds: float = 12
     cat_cache_size: int = 2
     pig_api_url: str = "https://commons.wikimedia.org/w/api.php"
+    music_api_url: str = "https://api.deezer.com"
+    music_timeout_seconds: float = 10
+    music_search_limit: int = 8
+    possession_style_history_count: int = 200
+    possession_style_sample_limit: int = 30
+    possession_style_refresh_hours: int = 24
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

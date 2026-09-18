@@ -9,6 +9,7 @@ from app.config import Settings
 from app.llm.providers import OpenAICompatibleProvider
 from app.main import app
 from app.plugins.media import random_cat_gif, random_nailong_image, random_real_pig_image
+from app.services.music import search_music
 
 pytestmark = pytest.mark.live
 
@@ -185,3 +186,37 @@ async def test_onebot_get_login_info(live_settings: Settings):
     actual_id = str((payload.get("data") or {}).get("user_id", ""))
     assert actual_id, "OneBot 未返回登录 QQ 号"
     assert actual_id == expected_id, "适配器登录 QQ 与 ONEBOT_SELF_ID 不一致"
+
+
+async def test_onebot_group_history(live_settings: Settings):
+    base_url = require(live_settings.onebot_api_base, "ONEBOT_API_BASE").rstrip("/")
+    headers = {}
+    if live_settings.onebot_access_token:
+        headers["Authorization"] = f"Bearer {live_settings.onebot_access_token}"
+    async with httpx.AsyncClient(timeout=12) as client:
+        groups_response = await client.post(
+            f"{base_url}/get_group_list", headers=headers, json={}
+        )
+        groups_response.raise_for_status()
+        groups = (groups_response.json().get("data") or [])
+        if not groups:
+            pytest.skip("机器人当前没有可读取的群")
+        history_response = await client.post(
+            f"{base_url}/get_group_msg_history",
+            headers=headers,
+            json={
+                "group_id": groups[0]["group_id"],
+                "count": 5,
+                "reverseOrder": False,
+            },
+        )
+        history_response.raise_for_status()
+    payload = history_response.json()
+    assert payload.get("status") == "ok", payload.get("wording", "历史消息接口失败")
+    assert isinstance((payload.get("data") or {}).get("messages"), list)
+
+
+async def test_deezer_music_search(live_settings: Settings):
+    tracks = await search_music("ZUTOMAYO TAIDADA", live_settings)
+    assert tracks, "Deezer 没有返回测试歌曲"
+    assert tracks[0].preview_url.startswith("https://")

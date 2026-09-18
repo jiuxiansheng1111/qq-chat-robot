@@ -10,7 +10,7 @@
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-普通测试覆盖长期记忆的保存、裁剪和删除，随机夺舍的 15 条活跃度阈值、指向夺舍、退出状态、@ 位置无关解析、匿名风格摘要，以及 Bing RSS XML 的离线解析。联网搜索的真实访问不放进默认 CI，避免搜索服务波动导致误报。
+普通测试覆盖长期记忆的保存、裁剪和删除，随机夺舍的 15 条活跃度阈值、指向夺舍、退出状态、@ 位置无关解析、匿名风格摘要、目标成员历史消息筛选与语气摘要持久化、Deezer 响应解析与 URL 白名单，以及 Bing RSS XML 的离线解析。联网搜索、Deezer 和 OneBot 历史消息的真实访问不放进默认 CI，避免外部服务波动导致误报。
 
 ## 真实接口健康检查
 
@@ -22,10 +22,13 @@
 
 每个接口是独立测试项，包括：
 
+- OneBot 登录状态与群历史消息接口；
+
 - 本地 `/health/live`、`/health/ready`、`/health/llm`
 - 管理员 JWT 登录、查询、刷新和注销
 - OneBot Webhook 鉴权
 - 智谱 LLM
+- Deezer 音乐搜索与试听链接
 - Groq 备用 LLM（未配置时跳过）
 - CATAAS 动态猫 GIF、文件校验与预热缓存
 - Wikimedia Commons 真实小猪照片
@@ -41,6 +44,7 @@
 .\.venv\Scripts\python.exe -m pytest tests\live --live -v -k pig
 .\.venv\Scripts\python.exe -m pytest tests\live --live -v -k nailong
 .\.venv\Scripts\python.exe -m pytest tests\live --live -v -k onebot
+.\.venv\Scripts\python.exe -m pytest tests\live --live -v -k deezer
 .\.venv\Scripts\python.exe -m pytest tests\live --live -v -k jwt
 ```
 

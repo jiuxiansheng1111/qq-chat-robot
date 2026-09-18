@@ -31,6 +31,8 @@ from app.plugins.media import (
     warm_cat_gif_cache,
 )
 from app.plugins.registry import registry
+from app.services.music import MusicTrack, search_music
+from app.services.possession_style import learn_possession_style
 from app.services.web_search import SearchResult, search_web
 
 settings = get_settings()
@@ -80,6 +82,7 @@ async def lifespan(app: FastAPI):
     app.state.auth = auth
     app.state.llm = LLMManager(settings)
     app.state.memory = ConversationMemory(settings.max_context_messages)
+    app.state.style_learning_tasks = {}
     app.state.deduplicator = EventDeduplicator(settings.event_dedupe_ttl_seconds)
     registry.load_modules(settings.plugin_modules)
     app.state.limiter = LocalRateLimiter(
@@ -112,6 +115,12 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        style_tasks = list(app.state.style_learning_tasks.values())
+        for task in style_tasks:
+            task.cancel()
+        for task in style_tasks:
+            with suppress(asyncio.CancelledError):
+                await task
         if not app.state.cat_cache_task.done():
             app.state.cat_cache_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -256,6 +265,21 @@ def extract_search_query(event: dict, text: str) -> str | None:
     return None
 
 
+def extract_music_query(event: dict, text: str) -> str | None:
+    for prefix in ("/点歌", "/music"):
+        if text.lower() == prefix.lower():
+            return ""
+        if text.lower().startswith(prefix.lower() + " "):
+            return text[len(prefix) :].strip()[:120]
+    if bot_mentioned(event):
+        for prefix in ("点歌", "来首", "播放"):
+            if text == prefix:
+                return ""
+            if text.startswith(prefix + " "):
+                return text[len(prefix) :].strip()[:120]
+    return None
+
+
 def is_identity_question(text: str) -> bool:
     normalized = re.sub(r"[\s，。！？!?、~～]", "", text)
     phrases = (
@@ -367,6 +391,29 @@ async def group_member_name(group_id: str, user_id: str) -> str:
     return re.sub(r"[\r\n\t]", " ", value).strip()[:40] or user_id
 
 
+def schedule_possession_style_learning(
+    request: Request, group_id: str, user_id: str, display_name: str
+) -> None:
+    """Start one non-blocking style-learning job per member and group."""
+    key = (group_id, user_id)
+    tasks: dict = request.app.state.style_learning_tasks
+    current = tasks.get(key)
+    if current and not current.done():
+        return
+    task = asyncio.create_task(
+        learn_possession_style(
+            settings,
+            request.app.state.db,
+            request.app.state.llm,
+            group_id,
+            user_id,
+            display_name,
+        )
+    )
+    tasks[key] = task
+    task.add_done_callback(lambda completed, task_key=key: tasks.pop(task_key, None))
+
+
 async def send_group_image(group_id: str, image_file: str, source_url: str = "") -> None:
     if not settings.onebot_api_base:
         logger.info("[dry-run] group=%s image=%s", group_id, image_file[:80])
@@ -382,6 +429,36 @@ async def send_group_image(group_id: str, image_file: str, source_url: str = "")
         )
     async with httpx.AsyncClient(timeout=15) as client:
         await client.post(f"{settings.onebot_api_base.rstrip('/')}/send_group_msg", headers=headers, json={"group_id": group_id, "message": message})
+
+
+async def send_group_music_card(group_id: str, track: MusicTrack) -> None:
+    if not settings.onebot_api_base:
+        logger.info("[dry-run] group=%s music=%s - %s", group_id, track.artist, track.title)
+        return
+    headers = (
+        {"Authorization": f"Bearer {settings.onebot_access_token}"}
+        if settings.onebot_access_token
+        else {}
+    )
+    data = {
+        "type": "custom",
+        "url": track.page_url,
+        "audio": track.preview_url,
+        "title": track.title,
+        "content": f"{track.artist} · 30 秒试听 · Deezer",
+    }
+    if track.cover_url:
+        data["image"] = track.cover_url
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.post(
+            f"{settings.onebot_api_base.rstrip('/')}/send_group_msg",
+            headers=headers,
+            json={"group_id": group_id, "message": [{"type": "music", "data": data}]},
+        )
+        response.raise_for_status()
+        payload = response.json()
+    if payload.get("status") != "ok":
+        raise RuntimeError(payload.get("wording") or "OneBot music card failed")
 
 
 @app.post("/onebot/webhook")
@@ -597,7 +674,10 @@ async def onebot_webhook(
                     await send_group_message(
                         group_id,
                         f"夺舍成功，我现在是“{name}” (｀・ω・´)\n"
-                        f"{name}本人或管理员可发送“@我 退出”。",
+                        f"正在后台学习{name}最近的说话习惯；本人或管理员可发送“@我 退出”。",
+                    )
+                    schedule_possession_style_learning(
+                        request, group_id, target_id, name
                     )
     elif text in RANDOM_POSSESSION_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
         if await request.app.state.db.possession_exited(group_id, today):
@@ -605,12 +685,13 @@ async def onebot_webhook(
             return {"ok": True}
         possession = await request.app.state.db.get_or_create_daily_possession(group_id, today)
         if possession:
-            _, name, _ = possession
+            target_id, name, _ = possession
             await send_group_message(
                 group_id,
                 f"本群今日乐子：{name}！我现在是“{name}” (｀・ω・´)\n"
-                f"{name}本人或管理员可发送“@我 退出”。",
+                f"正在后台学习{name}最近的说话习惯；本人或管理员可发送“@我 退出”。",
             )
+            schedule_possession_style_learning(request, group_id, target_id, name)
         else:
             await send_group_message(group_id, "今天还没有候选人：群友当天发言达到 15 条才会加入随机抽取。")
     elif text in {"/help", "help"}:
@@ -636,6 +717,32 @@ async def onebot_webhook(
         except (RuntimeError, httpx.HTTPError) as exc:
             logger.warning("nailong image failed: %s", exc)
             await send_group_message(group_id, "奶龙图库暂时不可用，请稍后再试。")
+    elif (music_query := extract_music_query(event, text)) is not None:
+        if not music_query:
+            await send_group_message(
+                group_id, "想听什么？例如：@我 点歌 ZUTOMAYO TAIDADA"
+            )
+        else:
+            try:
+                tracks = await search_music(music_query, settings)
+                if not tracks:
+                    await send_group_message(
+                        group_id, "没找到可试听的歌曲，试试“歌手名 + 歌名”吧。"
+                    )
+                else:
+                    track = tracks[0]
+                    try:
+                        await send_group_music_card(group_id, track)
+                    except (RuntimeError, ValueError, httpx.HTTPError) as exc:
+                        logger.warning("music card failed: %s", exc)
+                        await send_group_message(
+                            group_id,
+                            f"{track.artist} - {track.title}\n30 秒试听：{track.preview_url}\n"
+                            f"歌曲页面：{track.page_url}",
+                        )
+            except (RuntimeError, ValueError, httpx.HTTPError) as exc:
+                logger.warning("music search failed: %s", exc)
+                await send_group_message(group_id, "点歌服务暂时不可用，稍后再试一下吧。")
     elif (search_query := extract_search_query(event, text)) is not None:
         if not search_query:
             await send_group_message(group_id, "想搜什么？例如：@我 搜索 Python 3.13 新特性")
@@ -693,9 +800,17 @@ async def onebot_webhook(
                 + "。自然参考即可，不要照搬某个成员，也不要强行使用网络用语。"
             )
         if possession:
-            _, name, mode = possession
+            target_id, name, mode = possession
             possession_name = name
             identity_prompt = possession_identity_prompt(name, mode)
+            learned_style = await request.app.state.db.possession_style_profile(
+                group_id, target_id
+            )
+            if learned_style:
+                identity_prompt += (
+                    "\n【该成员历史表达风格】" + learned_style
+                    + "。只模仿表达节奏和措辞，不冒充本人经历，不复述隐私。"
+                )
             persona = identity_prompt + "\n\n" + persona + "\n\n" + identity_prompt
         messages = request.app.state.memory.messages(
             group_id, user_id, persona, prompt, memory_enabled

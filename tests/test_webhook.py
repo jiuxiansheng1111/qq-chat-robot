@@ -14,6 +14,7 @@ from app.main import (
     extract_group_memory,
     extract_group_memory_deletion,
     extract_long_memory,
+    extract_music_query,
     extract_search_query,
     is_identity_question,
     mentioned_image_command,
@@ -107,6 +108,24 @@ def test_mention_extracts_search_and_explicit_long_memory():
         assert extract_search_query(payload, message_text(payload)) == "Python 新版本"
         payload["message"][1]["data"]["text"] = "记住：我喜欢科幻"
         assert extract_long_memory(payload, message_text(payload)) == "我喜欢科幻"
+    finally:
+        settings.onebot_self_id = previous
+
+
+def test_music_query_requires_slash_or_real_bot_mention():
+    previous = settings.onebot_self_id
+    settings.onebot_self_id = "bot-1"
+    try:
+        payload = event("点歌 ZUTOMAYO TAIDADA")
+        assert extract_music_query(payload, message_text(payload)) is None
+        payload["message"] = [
+            {"type": "at", "data": {"qq": "bot-1"}},
+            {"type": "text", "data": {"text": " 点歌 ZUTOMAYO TAIDADA"}},
+        ]
+        assert extract_music_query(payload, message_text(payload)) == "ZUTOMAYO TAIDADA"
+        assert extract_music_query(event("/点歌 Yorushika Sunny"), "/点歌 Yorushika Sunny") == (
+            "Yorushika Sunny"
+        )
     finally:
         settings.onebot_self_id = previous
 

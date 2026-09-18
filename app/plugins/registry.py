@@ -61,6 +61,8 @@ class PluginRegistry:
             "例：@我 今天有什么新鲜事？\n\n"
             "🔎 联网搜索\n"
             "@我 搜索 关键词\n\n"
+            "🎵 音乐点歌\n"
+            "@我 点歌 歌手名 + 歌名（30 秒试听）\n\n"
             "🖼️ 随机图片\n"
             "@我 随机猫咪\n"
             "@我 随机猪猪\n"
@@ -89,6 +91,13 @@ class PluginRegistry:
 registry = PluginRegistry()
 registry.register(PluginSpec("help", ("/help", "help"), "/help —— 查看帮助"))
 registry.register(PluginSpec("ai", ("/ai", "/AI"), "/ai <问题> —— AI 对话"))
+registry.register(
+    PluginSpec(
+        "music",
+        ("/点歌", "/music"),
+        "/点歌 <歌手/歌名> —— Deezer 30 秒试听音乐卡片",
+    )
+)
 registry.register(
     PluginSpec(
         "memory",

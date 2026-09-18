@@ -99,6 +99,15 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_possession_context_group_date
                     ON possession_context(group_id, possession_date, id);
+                CREATE TABLE IF NOT EXISTS possession_style_profiles (
+                    group_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    style_summary TEXT NOT NULL,
+                    sample_count INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (group_id, user_id)
+                );
                 CREATE TABLE IF NOT EXISTS group_memories (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     group_id TEXT NOT NULL,
@@ -413,6 +422,37 @@ class Database:
         await self.execute(
             "DELETE FROM possession_context WHERE group_id = ? AND possession_date = ?",
             (group_id, possession_date),
+        )
+
+    async def possession_style_profile(
+        self, group_id: str, user_id: str, max_age_hours: int | None = None
+    ) -> str:
+        sql = (
+            "SELECT style_summary FROM possession_style_profiles "
+            "WHERE group_id = ? AND user_id = ?"
+        )
+        params: tuple = (group_id, user_id)
+        if max_age_hours is not None:
+            sql += " AND updated_at >= datetime('now', ?)"
+            params = (group_id, user_id, f"-{max(1, max_age_hours)} hours")
+        row = await self.fetchone(sql, params)
+        return str(row[0]) if row else ""
+
+    async def save_possession_style_profile(
+        self,
+        group_id: str,
+        user_id: str,
+        display_name: str,
+        style_summary: str,
+        sample_count: int,
+    ) -> None:
+        await self.execute(
+            "INSERT INTO possession_style_profiles"
+            "(group_id, user_id, display_name, style_summary, sample_count) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(group_id, user_id) DO UPDATE SET "
+            "display_name = excluded.display_name, style_summary = excluded.style_summary, "
+            "sample_count = excluded.sample_count, updated_at = CURRENT_TIMESTAMP",
+            (group_id, user_id, display_name, style_summary[:800], sample_count),
         )
 
     async def add_group_memory(

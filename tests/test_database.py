@@ -86,6 +86,21 @@ async def test_targeted_possession_does_not_require_activity_threshold(tmp_path)
     assert await db.daily_possession("100", "2026-09-18") == ("300", "小红", "targeted")
 
 
+async def test_possession_style_profile_is_persistent(tmp_path):
+    path = tmp_path / "possession-style.db"
+    db = Database(Settings(_env_file=None, database_path=str(path)))
+    await db.init()
+    assert await db.possession_style_profile("100", "300") == ""
+    await db.save_possession_style_profile(
+        "100", "300", "小红", "短句为主，偶尔使用颜文字。", 12
+    )
+    reopened = Database(Settings(_env_file=None, database_path=str(path)))
+    await reopened.init()
+    assert await reopened.possession_style_profile("100", "300") == (
+        "短句为主，偶尔使用颜文字。"
+    )
+
+
 async def test_possession_context_is_shared_persistent_and_bounded(tmp_path):
     path = tmp_path / "possession-context.db"
     db = Database(Settings(_env_file=None, database_path=str(path)))
