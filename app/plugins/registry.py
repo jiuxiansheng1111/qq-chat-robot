@@ -31,7 +31,7 @@ class PluginRegistry:
             return exact, ""
         for command, name in self._aliases.items():
             if text.startswith(command + " "):
-                return self._plugins[name], text[len(command):].strip()
+                return self._plugins[name], text[len(command) :].strip()
         return None, ""
 
     async def dispatch(self, text: str, context: Any) -> tuple[str, str | None] | None:
@@ -54,14 +54,53 @@ class PluginRegistry:
         return self._plugins.get(name) if name else None
 
     def help_text(self) -> str:
-        lines = [spec.description for spec in self._plugins.values()]
-        return "可用指令：\n" + "\n".join(lines)
+        return (
+            "🤖 机器人使用帮助\n\n"
+            "💬 直接聊天\n"
+            "@我 + 你想说的话\n"
+            "例：@我 今天有什么新鲜事？\n\n"
+            "🖼️ 随机图片\n"
+            "@我 随机猫咪\n"
+            "@我 随机猪猪\n\n"
+            "🧠 短期记忆\n"
+            "/记忆开启  /记忆关闭\n"
+            "/记忆状态  /记忆删除\n\n"
+            "🛠️ 群管理（管理员）\n"
+            "/bot on|off\n"
+            "/blacklist add|remove QQ号\n\n"
+            "发送 /help 可再次查看本菜单。"
+        )
 
 
 registry = PluginRegistry()
 registry.register(PluginSpec("help", ("/help", "help"), "/help —— 查看帮助"))
 registry.register(PluginSpec("ai", ("/ai", "/AI"), "/ai <问题> —— AI 对话"))
-registry.register(PluginSpec("memory", ("/记忆开启", "/记忆关闭", "/记忆删除", "/记忆状态"), "/记忆开启|关闭|删除|状态 —— 管理你的短期记忆"))
-registry.register(PluginSpec("cat", ("/猫", "/cat", "猫图", "随机猫", "随机猫咪", "随机猫图"), "/猫 或 @机器人 随机猫咪 —— 随机猫图"))
-registry.register(PluginSpec("pig", ("/小猪", "/pig", "猪图", "随机猪", "随机猪猪", "随机小猪"), "/小猪 或 @机器人 随机猪猪 —— 随机小猪图片"))
-registry.register(PluginSpec("group_admin", ("/bot", "/blacklist"), "/bot on|off、/blacklist add|remove QQ号 —— 群管理", admin_only=True))
+registry.register(
+    PluginSpec(
+        "memory",
+        ("/记忆开启", "/记忆关闭", "/记忆删除", "/记忆状态"),
+        "/记忆开启|关闭|删除|状态 —— 管理你的短期记忆",
+    )
+)
+registry.register(
+    PluginSpec(
+        "cat",
+        ("/猫", "/cat", "猫图", "随机猫", "随机猫咪", "随机猫图"),
+        "/猫 或 @机器人 随机猫咪 —— 随机猫图",
+    )
+)
+registry.register(
+    PluginSpec(
+        "pig",
+        ("/小猪", "/pig", "猪图", "随机猪", "随机猪猪", "随机小猪"),
+        "/小猪 或 @机器人 随机猪猪 —— 随机小猪图片",
+    )
+)
+registry.register(
+    PluginSpec(
+        "group_admin",
+        ("/bot", "/blacklist"),
+        "/bot on|off、/blacklist add|remove QQ号 —— 群管理",
+        admin_only=True,
+    )
+)

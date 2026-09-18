@@ -1,10 +1,29 @@
 import asyncio
 import base64
-from urllib.parse import urlparse
+import secrets
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 import httpx
 
 from app.config import Settings
+
+
+def randomized_provider_url(url: str) -> str:
+    """Give Pollinations requests a unique seed so responses are not cached clones."""
+    hostname = (urlparse(url).hostname or "").lower()
+    if not hostname.endswith("pollinations.ai"):
+        return url
+
+    parts = urlsplit(url)
+    query = [
+        (key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        if key.lower() != "seed"
+    ]
+    query.append(("seed", str(secrets.randbelow(2_147_483_648))))
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, urlencode(query, safe="/"), parts.fragment)
+    )
 
 
 async def random_image(url: str, api_key: str, settings: Settings) -> str:
@@ -21,10 +40,11 @@ async def random_image(url: str, api_key: str, settings: Settings) -> str:
             headers["Authorization"] = f"Bearer {api_key}"
     timeout = getattr(settings, "media_timeout_seconds", 60)
     attempts = max(1, getattr(settings, "media_retry_attempts", 2))
+    request_url = randomized_provider_url(url)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
         for attempt in range(attempts):
             try:
-                response = await client.get(url, headers=headers)
+                response = await client.get(request_url, headers=headers)
                 break
             except (httpx.TransportError, httpx.TimeoutException):
                 if attempt + 1 >= attempts:

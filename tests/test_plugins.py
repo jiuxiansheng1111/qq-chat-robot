@@ -6,8 +6,10 @@ from app.plugins.registry import registry
 def test_plugin_registry_help():
     assert registry.find("/ai").name == "ai"
     text = registry.help_text()
-    assert "/猫" in text
-    assert "/小猪" in text
+    assert "@我 + 你想说的话" in text
+    assert "@我 随机猫咪" in text
+    assert "@我 随机猪猪" in text
+    assert "/hello" not in text
 
 
 async def test_loaded_plugin_can_handle_message():
