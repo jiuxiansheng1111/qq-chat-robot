@@ -41,7 +41,9 @@ NAILONG_IMAGE_COMMANDS = frozenset({"/奶龙", "奶龙", "随机奶龙", "来只
 RANDOM_POSSESSION_COMMANDS = frozenset(
     {"/随机夺舍", "随机夺舍", "/今日夺舍", "今日夺舍", "今天夺舍谁", "今日附身"}
 )
-TARGETED_POSSESSION_COMMANDS = frozenset({"/指向夺舍", "指向夺舍", "指定夺舍"})
+TARGETED_POSSESSION_COMMANDS = frozenset(
+    {"/夺舍", "夺舍", "/指向夺舍", "指向夺舍", "指定夺舍"}
+)
 POSSESSION_STATUS_COMMANDS = frozenset({"/夺舍状态", "夺舍状态", "是否夺舍"})
 POSSESSION_EXIT_COMMANDS = frozenset({"/退出夺舍", "退出夺舍", "结束夺舍", "退出"})
 LONG_MEMORY_LIST_COMMANDS = frozenset({"/长期记忆列表", "我的长期记忆", "你记得什么"})

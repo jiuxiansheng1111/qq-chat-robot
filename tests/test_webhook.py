@@ -161,6 +161,24 @@ def test_targeted_mention_returns_member_but_not_bot():
         settings.onebot_self_id = previous
 
 
+def test_plain_possession_alias_with_target_is_a_targeted_command():
+    from app.main import TARGETED_POSSESSION_COMMANDS
+
+    previous = settings.onebot_self_id
+    settings.onebot_self_id = "bot-1"
+    try:
+        payload = event("夺舍")
+        payload["message"] = [
+            {"type": "at", "data": {"qq": "bot-1"}},
+            {"type": "text", "data": {"text": " 夺舍 "}},
+            {"type": "at", "data": {"qq": "member-2"}},
+        ]
+        assert message_text(payload) in TARGETED_POSSESSION_COMMANDS
+        assert mentioned_user_ids(payload) == ["member-2"]
+    finally:
+        settings.onebot_self_id = previous
+
+
 def test_identity_questions_are_detected_without_llm_guessing():
     assert is_identity_question("你现在是谁？")
     assert is_identity_question("你还记得你是谁吗")
