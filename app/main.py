@@ -269,14 +269,14 @@ def extract_music_query(event: dict, text: str) -> str | None:
     for prefix in ("/点歌", "/music"):
         if text.lower() == prefix.lower():
             return ""
-        if text.lower().startswith(prefix.lower() + " "):
-            return text[len(prefix) :].strip()[:120]
+        if text.lower().startswith(prefix.lower()):
+            return text[len(prefix) :].strip(" ：:")[:120]
     if bot_mentioned(event):
         for prefix in ("点歌", "来首", "播放"):
             if text == prefix:
                 return ""
-            if text.startswith(prefix + " "):
-                return text[len(prefix) :].strip()[:120]
+            if text.startswith(prefix):
+                return text[len(prefix) :].strip(" ：:")[:120]
     return None
 
 
@@ -485,6 +485,7 @@ async def onebot_webhook(
         return {"ok": True, "ignored": True}
 
     text = message_text(event)
+    music_query = extract_music_query(event, text)
     group_id = str(event.get("group_id", ""))
     user_id = str(event.get("user_id", event.get("sender", {}).get("user_id", "")))
     sender_role = event.get("sender", {}).get("role", "member")
@@ -717,7 +718,7 @@ async def onebot_webhook(
         except (RuntimeError, httpx.HTTPError) as exc:
             logger.warning("nailong image failed: %s", exc)
             await send_group_message(group_id, "奶龙图库暂时不可用，请稍后再试。")
-    elif (music_query := extract_music_query(event, text)) is not None:
+    elif music_query is not None:
         if not music_query:
             await send_group_message(
                 group_id, "想听什么？例如：@我 点歌 ZUTOMAYO TAIDADA"
@@ -725,12 +726,13 @@ async def onebot_webhook(
         else:
             try:
                 tracks = await search_music(music_query, settings)
-                if not tracks:
+                track = tracks[0] if tracks else None
+                if not track:
                     await send_group_message(
-                        group_id, "没找到可试听的歌曲，试试“歌手名 + 歌名”吧。"
+                        group_id,
+                        "没找到可试听的歌曲，换个歌名或加上歌手名试试吧。",
                     )
                 else:
-                    track = tracks[0]
                     try:
                         await send_group_music_card(group_id, track)
                     except (RuntimeError, ValueError, httpx.HTTPError) as exc:

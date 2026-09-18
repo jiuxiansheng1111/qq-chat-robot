@@ -217,6 +217,6 @@ async def test_onebot_group_history(live_settings: Settings):
 
 
 async def test_deezer_music_search(live_settings: Settings):
-    tracks = await search_music("ZUTOMAYO TAIDADA", live_settings)
+    tracks = await search_music("taidada", live_settings)
     assert tracks, "Deezer 没有返回测试歌曲"
     assert tracks[0].preview_url.startswith("https://")

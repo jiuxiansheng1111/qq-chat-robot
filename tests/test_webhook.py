@@ -123,6 +123,10 @@ def test_music_query_requires_slash_or_real_bot_mention():
             {"type": "text", "data": {"text": " 点歌 ZUTOMAYO TAIDADA"}},
         ]
         assert extract_music_query(payload, message_text(payload)) == "ZUTOMAYO TAIDADA"
+        payload["message"][1]["data"]["text"] = "点歌TAIDADA"
+        assert extract_music_query(payload, message_text(payload)) == "TAIDADA"
+        payload["message"][1]["data"]["text"] = "点歌 taidada"
+        assert extract_music_query(payload, message_text(payload)) == "taidada"
         assert extract_music_query(event("/点歌 Yorushika Sunny"), "/点歌 Yorushika Sunny") == (
             "Yorushika Sunny"
         )
