@@ -81,6 +81,13 @@ class Database:
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (group_id, possession_date)
                 );
+                CREATE TABLE IF NOT EXISTS daily_possession_exits (
+                    group_id TEXT NOT NULL,
+                    possession_date TEXT NOT NULL,
+                    exited_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (group_id, possession_date)
+                );
                 CREATE TABLE IF NOT EXISTS group_style_stats (
                     group_id TEXT PRIMARY KEY,
                     sample_count INTEGER NOT NULL DEFAULT 0,
@@ -246,6 +253,8 @@ class Database:
     async def get_or_create_daily_possession(
         self, group_id: str, possession_date: str, minimum_messages: int = 6
     ) -> tuple[str, str] | None:
+        if await self.possession_exited(group_id, possession_date):
+            return None
         existing = await self.fetchone(
             "SELECT user_id, display_name FROM daily_possession "
             "WHERE group_id = ? AND possession_date = ?",
@@ -276,12 +285,30 @@ class Database:
     async def daily_possession(
         self, group_id: str, possession_date: str
     ) -> tuple[str, str] | None:
+        if await self.possession_exited(group_id, possession_date):
+            return None
         row = await self.fetchone(
             "SELECT user_id, display_name FROM daily_possession "
             "WHERE group_id = ? AND possession_date = ?",
             (group_id, possession_date),
         )
         return (str(row[0]), str(row[1])) if row else None
+
+    async def possession_exited(self, group_id: str, possession_date: str) -> bool:
+        row = await self.fetchone(
+            "SELECT 1 FROM daily_possession_exits WHERE group_id = ? AND possession_date = ?",
+            (group_id, possession_date),
+        )
+        return row is not None
+
+    async def exit_daily_possession(
+        self, group_id: str, possession_date: str, exited_by: str
+    ) -> None:
+        await self.execute(
+            "INSERT OR IGNORE INTO daily_possession_exits(group_id, possession_date, exited_by) "
+            "VALUES (?, ?, ?)",
+            (group_id, possession_date, exited_by),
+        )
 
     async def group_style_hint(self, group_id: str) -> str:
         row = await self.fetchone(

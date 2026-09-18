@@ -39,6 +39,8 @@ CAT_IMAGE_COMMANDS = frozenset({"/猫", "/cat", "猫图", "随机猫", "随机�
 PIG_IMAGE_COMMANDS = frozenset({"/小猪", "/pig", "猪图", "随机猪", "随机猪猪", "随机小猪"})
 NAILONG_IMAGE_COMMANDS = frozenset({"/奶龙", "奶龙", "随机奶龙", "来只奶龙", "龙来"})
 POSSESSION_COMMANDS = frozenset({"/今日夺舍", "今日夺舍", "今天夺舍谁", "今日附身"})
+POSSESSION_STATUS_COMMANDS = frozenset({"/夺舍状态", "夺舍状态", "是否夺舍"})
+POSSESSION_EXIT_COMMANDS = frozenset({"/退出夺舍", "退出夺舍", "结束夺舍"})
 LONG_MEMORY_LIST_COMMANDS = frozenset({"/长期记忆列表", "我的长期记忆", "你记得什么"})
 LONG_MEMORY_CLEAR_COMMANDS = frozenset({"/长期记忆清除", "清除长期记忆", "忘记我"})
 SENSITIVE_MEMORY_PATTERN = re.compile(
@@ -346,14 +348,41 @@ async def onebot_webhook(
         else:
             await request.app.state.db.add_long_term_memory(group_id, user_id, memory_content)
             await send_group_message(group_id, "好，我长期记住了。需要删除时对我说“忘记我”。")
+    elif text in POSSESSION_EXIT_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
+        possession = await request.app.state.db.daily_possession(group_id, today)
+        if not possession:
+            if await request.app.state.db.possession_exited(group_id, today):
+                await send_group_message(group_id, "今天已经退出夺舍了，明天会自动恢复抽取。")
+            else:
+                await send_group_message(group_id, "今天还没有开始夺舍。")
+        elif user_id == possession[0] or is_admin:
+            await request.app.state.db.exit_daily_possession(group_id, today, user_id)
+            await send_group_message(group_id, "已退出今天的夺舍状态，明天会自动恢复 ( ´▽｀)")
+        else:
+            await send_group_message(group_id, "只有今天被抽中的群友或群管理员可以退出夺舍。")
+    elif text in POSSESSION_STATUS_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
+        if await request.app.state.db.possession_exited(group_id, today):
+            await send_group_message(group_id, "今日夺舍状态：已退出，明天自动恢复。")
+        else:
+            possession = await request.app.state.db.daily_possession(group_id, today)
+            if possession:
+                await send_group_message(
+                    group_id,
+                    f"今日夺舍状态：进行中。我的名字是“{possession[1]}”（机器人娱乐扮演）。",
+                )
+            else:
+                await send_group_message(group_id, "今日夺舍状态：尚未抽取。")
     elif text in POSSESSION_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
+        if await request.app.state.db.possession_exited(group_id, today):
+            await send_group_message(group_id, "今天已经退出夺舍了，明天会自动恢复抽取。")
+            return {"ok": True}
         possession = await request.app.state.db.get_or_create_daily_possession(group_id, today)
         if possession:
             _, name = possession
             await send_group_message(
                 group_id,
-                f"今日夺舍（娱乐模式）：{name}。今天可以叫我“{name}版阿柚” (｀・ω・´)\n"
-                "只模仿群聊氛围，不代表本人发言。",
+                f"今日夺舍抽中了群成员“{name}”。今天我的名字是“{name}” (｀・ω・´)\n"
+                "这是机器人娱乐扮演，不代表该成员本人发言。",
             )
         else:
             await send_group_message(group_id, "今天还没有候选人：要有群友发言超过 5 条才会加入抽取。")
@@ -433,8 +462,8 @@ async def onebot_webhook(
         if possession:
             _, name = possession
             persona += (
-                f"\n\n今日娱乐角色是“{name}版阿柚”。被问名字时这样介绍，并明确自己是机器人娱乐模式；"
-                "不能声称是真人或代表本人。"
+                f"\n\n今日夺舍抽中的真实群成员名片是“{name}”。被问名字时回答“我的名字是{name}”，"
+                "同时明确这是机器人娱乐扮演；不能声称是真人或代表该成员本人。"
             )
         messages = request.app.state.memory.messages(
             group_id, user_id, persona, prompt, memory_enabled

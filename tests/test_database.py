@@ -45,6 +45,10 @@ async def test_activity_possession_and_anonymous_style_hint(tmp_path):
     possession = await db.get_or_create_daily_possession("100", "2026-09-18")
     assert possession == ("200", "小明")
     assert await db.get_or_create_daily_possession("100", "2026-09-18") == possession
+    await db.exit_daily_possession("100", "2026-09-18", "200")
+    assert await db.possession_exited("100", "2026-09-18")
+    assert await db.daily_possession("100", "2026-09-18") is None
+    assert await db.get_or_create_daily_possession("100", "2026-09-18") is None
     hint = await db.group_style_hint("100")
     assert "短句为主" in hint
     assert "哈哈" in hint
