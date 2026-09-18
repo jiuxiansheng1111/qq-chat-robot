@@ -84,3 +84,21 @@ async def test_targeted_possession_does_not_require_activity_threshold(tmp_path)
     await db.init()
     assert await db.set_targeted_possession("100", "2026-09-18", "300", "小红")
     assert await db.daily_possession("100", "2026-09-18") == ("300", "小红", "targeted")
+
+
+async def test_possession_context_is_shared_persistent_and_bounded(tmp_path):
+    path = tmp_path / "possession-context.db"
+    db = Database(Settings(_env_file=None, database_path=str(path)))
+    await db.init()
+    for number in range(3):
+        await db.append_possession_exchange(
+            "100", "2026-09-18", f"question-{number}", f"answer-{number}", max_messages=4
+        )
+    reopened = Database(Settings(_env_file=None, database_path=str(path)))
+    await reopened.init()
+    assert await reopened.possession_context_messages("100", "2026-09-18") == [
+        {"role": "user", "content": "question-1"},
+        {"role": "assistant", "content": "answer-1"},
+        {"role": "user", "content": "question-2"},
+        {"role": "assistant", "content": "answer-2"},
+    ]

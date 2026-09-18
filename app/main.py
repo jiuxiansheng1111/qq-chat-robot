@@ -231,6 +231,17 @@ def is_identity_question(text: str) -> bool:
     return any(phrase in normalized for phrase in phrases)
 
 
+def asks_for_sender_name(text: str) -> bool:
+    normalized = re.sub(r"[\s，。！？!?、'\"~～]", "", text).lower()
+    return normalized in {
+        "saymyname",
+        "我是谁",
+        "我叫什么",
+        "我叫什么名字",
+        "我的名字是什么",
+    }
+
+
 def possession_identity_prompt(name: str, mode: str) -> str:
     mode_name = "指向夺舍" if mode == "targeted" else "随机夺舍"
     return (
@@ -462,6 +473,8 @@ async def onebot_webhook(
                 )
             else:
                 await send_group_message(group_id, "今日夺舍状态：尚未抽取。")
+    elif bot_mentioned(event) and asks_for_sender_name(text):
+        await send_group_message(group_id, f"你的名字是“{sender_display_name(event)}”。")
     elif bot_mentioned(event) and is_identity_question(text):
         if await request.app.state.db.possession_exited(group_id, today):
             await send_group_message(
@@ -604,10 +617,18 @@ async def onebot_webhook(
         messages = request.app.state.memory.messages(
             group_id, user_id, persona, prompt, memory_enabled
         )
+        if possession:
+            shared_context = await request.app.state.db.possession_context_messages(
+                group_id, today
+            )
+            messages[1:1] = shared_context
         try:
             answer = await request.app.state.llm.ask(messages)
             if possession_name:
                 answer = enforce_possession_identity(answer, possession_name)
+                await request.app.state.db.append_possession_exchange(
+                    group_id, today, prompt, answer
+                )
             request.app.state.memory.append(group_id, user_id, prompt, answer, memory_enabled)
             await send_group_message(group_id, answer[:2000])
         except (LLMError, httpx.HTTPError) as exc:

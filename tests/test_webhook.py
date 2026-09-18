@@ -8,6 +8,7 @@ from app.main import (
     NAILONG_IMAGE_COMMANDS,
     PIG_IMAGE_COMMANDS,
     app,
+    asks_for_sender_name,
     bot_mentioned,
     enforce_possession_identity,
     extract_long_memory,
@@ -191,6 +192,12 @@ def test_possession_identity_guard_replaces_default_name():
     assert enforce_possession_identity("我是阿柚，一个聊天机器人。", "山奈钠") == (
         "我是山奈钠，一个聊天机器人。"
     )
+
+
+def test_sender_name_question_is_distinct_from_bot_identity():
+    assert asks_for_sender_name("say my name")
+    assert asks_for_sender_name("我叫什么名字？")
+    assert not asks_for_sender_name("你叫什么名字？")
 
 
 def test_sender_display_name_prefers_group_card_and_sanitizes_lines():

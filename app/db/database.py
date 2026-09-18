@@ -89,6 +89,16 @@ class Database:
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (group_id, possession_date)
                 );
+                CREATE TABLE IF NOT EXISTS possession_context (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    group_id TEXT NOT NULL,
+                    possession_date TEXT NOT NULL,
+                    role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_possession_context_group_date
+                    ON possession_context(group_id, possession_date, id);
                 CREATE TABLE IF NOT EXISTS group_style_stats (
                     group_id TEXT PRIMARY KEY,
                     sample_count INTEGER NOT NULL DEFAULT 0,
@@ -305,12 +315,18 @@ class Database:
     ) -> bool:
         if await self.possession_exited(group_id, possession_date):
             return False
+        current = await self.fetchone(
+            "SELECT user_id, mode FROM daily_possession WHERE group_id = ? AND possession_date = ?",
+            (group_id, possession_date),
+        )
         await self.execute(
             "INSERT INTO daily_possession(group_id, possession_date, user_id, display_name, mode) "
             "VALUES (?, ?, ?, ?, 'targeted') ON CONFLICT(group_id, possession_date) DO UPDATE SET "
             "user_id = excluded.user_id, display_name = excluded.display_name, mode = 'targeted'",
             (group_id, possession_date, user_id, display_name),
         )
+        if not current or str(current[0]) != user_id or str(current[1]) != "targeted":
+            await self.clear_possession_context(group_id, possession_date)
         return True
 
     async def daily_possession(
@@ -347,6 +363,48 @@ class Database:
             "INSERT OR IGNORE INTO daily_possession_exits(group_id, possession_date, exited_by) "
             "VALUES (?, ?, ?)",
             (group_id, possession_date, exited_by),
+        )
+        await self.clear_possession_context(group_id, possession_date)
+
+    async def possession_context_messages(
+        self, group_id: str, possession_date: str, limit: int = 40
+    ) -> list[dict[str, str]]:
+        rows = await self.fetchall(
+            "SELECT role, content FROM (SELECT id, role, content FROM possession_context "
+            "WHERE group_id = ? AND possession_date = ? ORDER BY id DESC LIMIT ?) ORDER BY id",
+            (group_id, possession_date, limit),
+        )
+        return [{"role": str(row[0]), "content": str(row[1])} for row in rows]
+
+    async def append_possession_exchange(
+        self,
+        group_id: str,
+        possession_date: str,
+        user_text: str,
+        assistant_text: str,
+        max_messages: int = 40,
+    ) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.executemany(
+                "INSERT INTO possession_context(group_id, possession_date, role, content) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    (group_id, possession_date, "user", user_text[:1000]),
+                    (group_id, possession_date, "assistant", assistant_text[:2000]),
+                ),
+            )
+            await db.execute(
+                "DELETE FROM possession_context WHERE group_id = ? AND possession_date = ? "
+                "AND id NOT IN (SELECT id FROM possession_context WHERE group_id = ? "
+                "AND possession_date = ? ORDER BY id DESC LIMIT ?)",
+                (group_id, possession_date, group_id, possession_date, max_messages),
+            )
+            await db.commit()
+
+    async def clear_possession_context(self, group_id: str, possession_date: str) -> None:
+        await self.execute(
+            "DELETE FROM possession_context WHERE group_id = ? AND possession_date = ?",
+            (group_id, possession_date),
         )
 
     async def group_style_hint(self, group_id: str) -> str:
