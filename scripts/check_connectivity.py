@@ -5,7 +5,7 @@ import httpx
 
 from app.config import Settings
 from app.llm.manager import LLMManager
-from app.plugins.media import random_image
+from app.plugins.media import random_image, random_real_pig_image
 
 
 async def check_llm(settings: Settings) -> tuple[str, str]:
@@ -71,6 +71,14 @@ async def check_onebot(settings: Settings) -> tuple[str, str]:
         return "FAIL", f"{type(exc).__name__}: {exc}"
 
 
+async def check_pig(settings: Settings) -> tuple[str, str, str]:
+    try:
+        image = await random_real_pig_image(settings.pig_api_url, settings)
+        return "pig", "OK", f"result=real-photo, source={image.source_url}"
+    except Exception as exc:  # noqa: BLE001 - CLI must report provider failures safely
+        return "pig", "FAIL", f"{type(exc).__name__}: {exc}"
+
+
 async def main() -> int:
     settings = Settings()
     requested = set(sys.argv[1:]) or {"llm", "cat", "pig", "onebot"}
@@ -85,9 +93,7 @@ async def main() -> int:
         "cat": lambda: check_image(
             "cat", settings.cat_api_url, settings.cat_api_key, settings
         ),
-        "pig": lambda: check_image(
-            "pig", settings.pig_api_url, settings.pig_api_key, settings
-        ),
+        "pig": lambda: check_pig(settings),
         "onebot": lambda: check_onebot(settings),
     }
     names = [name for name in ("llm", "cat", "pig", "onebot") if name in requested]

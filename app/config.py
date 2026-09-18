@@ -53,8 +53,7 @@ class Settings(BaseSettings):
     media_retry_attempts: int = 2
     cat_api_url: str = ""
     cat_api_key: str = Field(default="", repr=False)
-    pig_api_url: str = ""
-    pig_api_key: str = Field(default="", repr=False)
+    pig_api_url: str = "https://commons.wikimedia.org/w/api.php"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

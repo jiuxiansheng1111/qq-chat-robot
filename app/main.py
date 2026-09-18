@@ -20,7 +20,7 @@ from app.db.database import Database
 from app.llm.manager import LLMManager
 from app.llm.memory import ConversationMemory
 from app.llm.providers import LLMError
-from app.plugins.media import random_image
+from app.plugins.media import random_image, random_real_pig_image
 from app.plugins.registry import registry
 
 settings = get_settings()
@@ -169,12 +169,19 @@ async def send_group_message(group_id: str, message: str) -> None:
         await client.post(f"{settings.onebot_api_base.rstrip('/')}/send_group_msg", headers=headers, json={"group_id": group_id, "message": message})
 
 
-async def send_group_image(group_id: str, image_file: str) -> None:
+async def send_group_image(group_id: str, image_file: str, source_url: str = "") -> None:
     if not settings.onebot_api_base:
         logger.info("[dry-run] group=%s image=%s", group_id, image_file[:80])
         return
     headers = {"Authorization": f"Bearer {settings.onebot_access_token}"} if settings.onebot_access_token else {}
     message = [{"type": "image", "data": {"file": image_file}}]
+    if source_url:
+        message.append(
+            {
+                "type": "text",
+                "data": {"text": f"\n真实照片来源：Wikimedia Commons\n{source_url}"},
+            }
+        )
     async with httpx.AsyncClient(timeout=15) as client:
         await client.post(f"{settings.onebot_api_base.rstrip('/')}/send_group_msg", headers=headers, json={"group_id": group_id, "message": message})
 
@@ -271,8 +278,8 @@ async def onebot_webhook(
             await send_group_message(group_id, "猫图服务暂时不可用，请稍后再试。")
     elif text in PIG_IMAGE_COMMANDS or mentioned_image_command(event, PIG_IMAGE_COMMANDS):
         try:
-            image = await random_image(settings.pig_api_url, settings.pig_api_key, settings)
-            await send_group_image(group_id, image)
+            image = await random_real_pig_image(settings.pig_api_url, settings)
+            await send_group_image(group_id, image.url, image.source_url)
         except (RuntimeError, httpx.HTTPError) as exc:
             logger.warning("pig image failed: %s", exc)
             await send_group_message(group_id, "小猪图片服务暂时不可用，请稍后再试。")

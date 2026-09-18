@@ -72,7 +72,7 @@ PLUGIN_META = {
     },
     "pig_image": {
         "commands": ["小猪", "pig", "猪图"],
-        "description": "随机发送一张小猪图片",
+        "description": "随机发送一张真实小猪照片",
         "admin_only": False,
         "cooldown_seconds": 10,
     },

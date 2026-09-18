@@ -1,10 +1,11 @@
+import base64
 from types import SimpleNamespace
 
 import httpx
 import pytest
 
 import app.plugins.media as media_module
-from app.plugins.media import random_image
+from app.plugins.media import random_image, random_real_pig_image
 
 
 @pytest.mark.asyncio
@@ -30,12 +31,36 @@ async def test_the_cat_api_json_array(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pollinations_uses_a_new_seed_for_each_image(monkeypatch):
-    seen_seeds = []
+async def test_real_pig_image_uses_curated_wikimedia_photo(monkeypatch):
+    async def fixed_title():
+        return "File:Cute Piglet.jpg"
 
     async def handler(request):
-        seen_seeds.append(request.url.params["seed"])
-        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=b"image")
+        assert request.headers["user-agent"].startswith("qq-chatrobot/")
+        if request.url.host == "upload.wikimedia.org":
+            return httpx.Response(
+                200,
+                headers={"content-type": "image/jpeg"},
+                content=b"real-pig-photo",
+            )
+        assert request.url.params["titles"] == "File:Cute Piglet.jpg"
+        return httpx.Response(
+            200,
+            json={
+                "query": {
+                    "pages": [
+                        {
+                            "imageinfo": [
+                                {
+                                    "thumburl": "https://upload.wikimedia.org/cute-piglet.jpg",
+                                    "descriptionurl": "https://commons.wikimedia.org/wiki/File:Cute_Piglet.jpg",
+                                }
+                            ]
+                        }
+                    ]
+                }
+            },
+        )
 
     transport = httpx.MockTransport(handler)
     original_client = httpx.AsyncClient
@@ -44,13 +69,17 @@ async def test_pollinations_uses_a_new_seed_for_each_image(monkeypatch):
         kwargs["transport"] = transport
         return original_client(**kwargs)
 
-    seeds = iter((123, 456))
     monkeypatch.setattr(httpx, "AsyncClient", mocked_client)
-    monkeypatch.setattr(media_module.secrets, "randbelow", lambda _: next(seeds))
-    settings = SimpleNamespace(media_max_bytes=5 * 1024 * 1024)
-    url = "https://gen.pollinations.ai/image/a%20cute%20pig?model=black-forest-labs/flux.1-schnell&seed=0"
+    monkeypatch.setattr(media_module, "_next_pig_title", fixed_title)
+    result = await random_real_pig_image(
+        "https://commons.wikimedia.org/w/api.php",
+        SimpleNamespace(
+            media_timeout_seconds=10,
+            media_retry_attempts=1,
+            media_max_bytes=5 * 1024 * 1024,
+        ),
+    )
 
-    await random_image(url, "pig-key", settings)
-    await random_image(url, "pig-key", settings)
-
-    assert seen_seeds == ["123", "456"]
+    assert result.url.startswith("base64://")
+    assert base64.b64decode(result.url.removeprefix("base64://")) == b"real-pig-photo"
+    assert result.source_url.endswith("File:Cute_Piglet.jpg")

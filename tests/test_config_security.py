@@ -29,6 +29,5 @@ def test_secrets_are_hidden_from_settings_repr():
         llm_api_key=secret,
         groq_api_key=secret,
         cat_api_key=secret,
-        pig_api_key=secret,
     )
     assert secret not in repr(settings)

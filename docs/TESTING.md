@@ -26,7 +26,7 @@
 - 智谱 LLM
 - Groq 备用 LLM（未配置时跳过）
 - TheCatAPI 猫图
-- Pollinations 小猪图
+- Wikimedia Commons 真实小猪照片
 - OneBot `get_login_info`
 
 ## 只检查一个服务

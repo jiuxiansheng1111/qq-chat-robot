@@ -1,6 +1,6 @@
 # QQ ChatRobot
 
-一个面向 QQ 群聊的可扩展机器人框架。项目使用 **NapCat / OneBot 11** 接入 QQ，以 **FastAPI** 处理事件，支持智谱、Groq 等 OpenAI 兼容 LLM，并内置 JWT 管理 API、插件系统、限流、短期记忆、随机猫图和 AI 小猪图片。
+一个面向 QQ 群聊的可扩展机器人框架。项目使用 **NapCat / OneBot 11** 接入 QQ，以 **FastAPI** 处理事件，支持智谱、Groq 等 OpenAI 兼容 LLM，并内置 JWT 管理 API、插件系统、限流、短期记忆、随机猫图和真实小猪照片。
 
 > 当前版本：`0.1.0`。适合个人机器人、群聊助手和二次开发。建议使用专门的机器人 QQ，并在正式使用前阅读本文的安全说明。
 
@@ -10,7 +10,7 @@
 
 - `@机器人 问题` 或 `/ai 问题` 触发 AI 对话。
 - `@机器人 随机猫咪`、`/猫` 获取随机猫图。
-- `@机器人 随机猪猪`、`/小猪` 生成随机小猪图片。
+- `@机器人 随机猪猪`、`/小猪` 获取随机真实小猪照片。
 - `/help` 或 `@机器人 help` 查看动态帮助菜单。
 - 用户可自行开启、关闭、清除和查询短期对话记忆。
 - 群管理员可以启停机器人、维护群成员黑名单和控制群级插件开关。
@@ -48,7 +48,7 @@ POST /onebot/webhook
    ├─ 鉴权 / 去重 / 群开关 / 黑名单 / 限流
    ├─ 内置指令与自定义插件
    ├─ 智谱 → Groq 备用
-   └─ TheCatAPI / Pollinations
+   └─ TheCatAPI / Wikimedia Commons
    │
    ▼
 NapCat HTTP Server → QQ群回复
@@ -62,7 +62,7 @@ NapCat HTTP Server → QQ群回复
 | --- | --- | --- |
 | `@机器人 <内容>` | 所有人 | 直接与 LLM 对话 |
 | `@机器人 随机猫咪` | 所有人 | 随机猫图 |
-| `@机器人 随机猪猪` | 所有人 | 随机生成不同的小猪图片 |
+| `@机器人 随机猪猪` | 所有人 | 随机发送真实小猪照片 |
 | `/help` | 所有人 | 查看精简帮助菜单 |
 | `/记忆开启` | 所有人 | 开启当前群内的个人短期记忆 |
 | `/记忆关闭` | 所有人 | 关闭并清除短期记忆 |
@@ -80,7 +80,7 @@ NapCat HTTP Server → QQ群回复
 - Windows 10/11：可使用仓库提供的一键启动脚本。
 - 最新版 NT 架构 QQ 与 [NapCatQQ](https://github.com/NapNeko/NapCatQQ)。
 - 至少一个可用的 LLM API Key。
-- 可选：Docker Desktop、Redis、TheCatAPI、Pollinations。
+- 可选：Docker Desktop、Redis、TheCatAPI。真实猪图使用无需密钥的 Wikimedia Commons。
 
 ## 快速开始
 
@@ -198,13 +198,9 @@ http://127.0.0.1:8000/docs
 2. 在 `.env` 填写 `CAT_API_URL` 和 `CAT_API_KEY`。
 3. 使用 `/猫` 或 `@机器人 随机猫咪`。
 
-### 随机小猪图片
+### 随机真实小猪照片
 
-1. 前往 [Pollinations](https://enter.pollinations.ai) 创建 API Key。
-2. 在 `.env` 填写 `PIG_API_URL` 和 `PIG_API_KEY`。
-3. 使用 `/小猪` 或 `@机器人 随机猪猪`。
-
-`PIG_API_URL` 中的 prompt 决定图片风格，可以替换为自己的英文描述。机器人会为每次 Pollinations 请求自动生成不同的 `seed`，避免固定 URL 被缓存成同一张图片。图片服务具有超时、有限重试、格式和大小限制。
+使用 `/小猪` 或 `@机器人 随机猪猪`。机器人会从经过筛选的 Wikimedia Commons 真实摄影文件池中随机抽取，抽完一轮后重新洗牌，因此不会连续发送同一张照片；消息会附带原始来源页。该功能无需 API Key。
 
 ## 机器人语气与记忆
 
