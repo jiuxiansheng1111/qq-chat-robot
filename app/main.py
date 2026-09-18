@@ -48,6 +48,8 @@ POSSESSION_STATUS_COMMANDS = frozenset({"/夺舍状态", "夺舍状态", "是否
 POSSESSION_EXIT_COMMANDS = frozenset({"/退出夺舍", "退出夺舍", "结束夺舍", "退出"})
 LONG_MEMORY_LIST_COMMANDS = frozenset({"/长期记忆列表", "我的长期记忆", "你记得什么"})
 LONG_MEMORY_CLEAR_COMMANDS = frozenset({"/长期记忆清除", "清除长期记忆", "忘记我"})
+GROUP_MEMORY_LIST_COMMANDS = frozenset({"/群记忆", "群记忆", "你在群里记住了什么"})
+GROUP_MEMORY_CLEAR_COMMANDS = frozenset({"/清除群记忆", "清除群记忆"})
 SENSITIVE_MEMORY_PATTERN = re.compile(
     r"密码|口令|token|密钥|secret|身份证|银行卡|信用卡|验证码|cookie",
     re.IGNORECASE,
@@ -204,6 +206,15 @@ def extract_long_memory(event: dict, text: str) -> str | None:
     return None
 
 
+def extract_group_memory(event: dict, text: str) -> str | None:
+    if not bot_mentioned(event):
+        return None
+    for prefix in ("记住，", "记住,", "记住 ", "群里记住：", "群里记住:"):
+        if text.startswith(prefix):
+            return text[len(prefix) :].strip(" ，,：:")[:300]
+    return None
+
+
 def extract_search_query(event: dict, text: str) -> str | None:
     prefixes = ("/搜索 ", "/search ")
     mentioned_prefixes = ("搜索 ", "联网搜索 ", "查一下 ")
@@ -247,8 +258,8 @@ def possession_identity_prompt(name: str, mode: str) -> str:
     return (
         f"【最高优先级身份状态】当前处于{mode_name}，你当前唯一的对外名字是“{name}”。"
         f"在本次状态结束前，所有回答都必须保持这个名字，禁止自称“阿柚”或“{settings.persona_name}”。"
-        "你仍然是机器人娱乐扮演，不得声称代表该群成员本人。"
-        "如果被问到该成员与他人的关系，而现有上下文没有可靠信息，要保持当前名字并明确说不知道，不能编造。"
+        "这是轻松的群聊娱乐角色。优先依据群共享记忆和近期上下文回答人物关系与群梗，"
+        "语气简短自然，不要输出正式的隐私说教；确实没有信息时只需随口说不知道，不能凭空编造。"
     )
 
 
@@ -447,6 +458,26 @@ async def onebot_webhook(
         else:
             await request.app.state.db.add_long_term_memory(group_id, user_id, memory_content)
             await send_group_message(group_id, "好，我长期记住了。需要删除时对我说“忘记我”。")
+    elif (group_memory := extract_group_memory(event, text)) is not None:
+        if not group_memory:
+            await send_group_message(group_id, "要记住什么？例如：@我 记住，hzh 是 Cat#")
+        elif SENSITIVE_MEMORY_PATTERN.search(group_memory):
+            await send_group_message(group_id, "这段像是敏感信息，我就不存啦。")
+        else:
+            await request.app.state.db.add_group_memory(group_id, group_memory)
+            await send_group_message(group_id, "记住了 (｀・ω・´)")
+    elif text in GROUP_MEMORY_LIST_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
+        memories = await request.app.state.db.group_memories(group_id)
+        if memories:
+            await send_group_message(group_id, "群记忆：\n" + "\n".join(f"- {item}" for item in memories))
+        else:
+            await send_group_message(group_id, "本群还没有共享记忆。")
+    elif text in GROUP_MEMORY_CLEAR_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
+        if is_admin:
+            await request.app.state.db.clear_group_memories(group_id)
+            await send_group_message(group_id, "本群共享记忆已清空。")
+        else:
+            await send_group_message(group_id, "只有群管理员可以清除群记忆。")
     elif text in POSSESSION_EXIT_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
         possession = await request.app.state.db.daily_possession(group_id, today)
         if not possession:
@@ -468,8 +499,7 @@ async def onebot_webhook(
                 mode_name = "指向" if possession[2] == "targeted" else "随机"
                 await send_group_message(
                     group_id,
-                    f"今日夺舍状态：{mode_name}夺舍进行中。"
-                    f"我的名字是“{possession[1]}”（机器人娱乐扮演）。",
+                    f"现在是“{possession[1]}”，{mode_name}中 (｀・ω・´)",
                 )
             else:
                 await send_group_message(group_id, "今日夺舍状态：尚未抽取。")
@@ -488,8 +518,7 @@ async def onebot_webhook(
                 mode_name = "指向夺舍" if mode == "targeted" else "随机夺舍"
                 await send_group_message(
                     group_id,
-                    f"我现在是“{name}”，当前为{mode_name}状态。"
-                    "这是机器人娱乐扮演，不代表群成员本人。",
+                    f"我现在是“{name}”，{mode_name}中 (｀・ω・´)",
                 )
             else:
                 await send_group_message(
@@ -518,8 +547,8 @@ async def onebot_webhook(
                     )
                     await send_group_message(
                         group_id,
-                        f"指向夺舍已生效：今天我的名字是“{name}”。\n"
-                        f"{name}本人或群管理员可发送“@我 退出”。这是机器人娱乐扮演。",
+                        f"夺舍成功，我现在是“{name}” (｀・ω・´)\n"
+                        f"{name}本人或管理员可发送“@我 退出”。",
                     )
     elif text in RANDOM_POSSESSION_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
         if await request.app.state.db.possession_exited(group_id, today):
@@ -530,8 +559,8 @@ async def onebot_webhook(
             _, name, _ = possession
             await send_group_message(
                 group_id,
-                f"本群今日乐子：{name}！随机夺舍已生效，今天我的名字是“{name}” (｀・ω・´)\n"
-                f"{name}本人或群管理员可发送“@我 退出”。这是机器人娱乐扮演。",
+                f"本群今日乐子：{name}！我现在是“{name}” (｀・ω・´)\n"
+                f"{name}本人或管理员可发送“@我 退出”。",
             )
         else:
             await send_group_message(group_id, "今天还没有候选人：群友当天发言达到 15 条才会加入随机抽取。")
@@ -596,6 +625,7 @@ async def onebot_webhook(
         prompt = text.split(" ", 1)[1].strip() if text.startswith(("/ai ", "/AI ")) else text
         memory_enabled = await request.app.state.db.memory_enabled(group_id, user_id)
         long_memories = await request.app.state.db.long_term_memories(group_id, user_id)
+        group_memories = await request.app.state.db.group_memories(group_id)
         style_hint = await request.app.state.db.group_style_hint(group_id)
         possession = await request.app.state.db.daily_possession(group_id, today)
         persona = settings.persona_prompt()
@@ -603,6 +633,10 @@ async def onebot_webhook(
         if long_memories:
             persona += "\n\n用户明确要求长期记住的信息：\n" + "\n".join(
                 f"- {item}" for item in long_memories
+            )
+        if group_memories:
+            persona += "\n\n本群成员明确要求记住的共享信息：\n" + "\n".join(
+                f"- {item}" for item in group_memories
             )
         if style_hint:
             persona += (

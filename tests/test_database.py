@@ -102,3 +102,15 @@ async def test_possession_context_is_shared_persistent_and_bounded(tmp_path):
         {"role": "user", "content": "question-2"},
         {"role": "assistant", "content": "answer-2"},
     ]
+
+
+async def test_group_memory_persists_across_possession_targets(tmp_path):
+    path = tmp_path / "group-memory.db"
+    db = Database(Settings(_env_file=None, database_path=str(path)))
+    await db.init()
+    await db.add_group_memory("100", "hzh 是 Cat#")
+    await db.set_targeted_possession("100", "2026-09-18", "200", "Cat#")
+    await db.set_targeted_possession("100", "2026-09-18", "300", "首阳")
+    reopened = Database(Settings(_env_file=None, database_path=str(path)))
+    await reopened.init()
+    assert await reopened.group_memories("100") == ["hzh 是 Cat#"]

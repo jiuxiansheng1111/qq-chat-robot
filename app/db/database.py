@@ -99,6 +99,14 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_possession_context_group_date
                     ON possession_context(group_id, possession_date, id);
+                CREATE TABLE IF NOT EXISTS group_memories (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    group_id TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_group_memories_group
+                    ON group_memories(group_id, id);
                 CREATE TABLE IF NOT EXISTS group_style_stats (
                     group_id TEXT PRIMARY KEY,
                     sample_count INTEGER NOT NULL DEFAULT 0,
@@ -406,6 +414,32 @@ class Database:
             "DELETE FROM possession_context WHERE group_id = ? AND possession_date = ?",
             (group_id, possession_date),
         )
+
+    async def add_group_memory(
+        self, group_id: str, content: str, max_items: int = 50
+    ) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT INTO group_memories(group_id, content) VALUES (?, ?)",
+                (group_id, content),
+            )
+            await db.execute(
+                "DELETE FROM group_memories WHERE group_id = ? AND id NOT IN "
+                "(SELECT id FROM group_memories WHERE group_id = ? ORDER BY id DESC LIMIT ?)",
+                (group_id, group_id, max_items),
+            )
+            await db.commit()
+
+    async def group_memories(self, group_id: str, limit: int = 20) -> list[str]:
+        rows = await self.fetchall(
+            "SELECT content FROM (SELECT id, content FROM group_memories WHERE group_id = ? "
+            "ORDER BY id DESC LIMIT ?) ORDER BY id",
+            (group_id, limit),
+        )
+        return [str(row[0]) for row in rows]
+
+    async def clear_group_memories(self, group_id: str) -> None:
+        await self.execute("DELETE FROM group_memories WHERE group_id = ?", (group_id,))
 
     async def group_style_hint(self, group_id: str) -> str:
         row = await self.fetchone(

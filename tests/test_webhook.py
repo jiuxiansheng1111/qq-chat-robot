@@ -11,6 +11,7 @@ from app.main import (
     asks_for_sender_name,
     bot_mentioned,
     enforce_possession_identity,
+    extract_group_memory,
     extract_long_memory,
     extract_search_query,
     is_identity_question,
@@ -198,6 +199,20 @@ def test_sender_name_question_is_distinct_from_bot_identity():
     assert asks_for_sender_name("say my name")
     assert asks_for_sender_name("我叫什么名字？")
     assert not asks_for_sender_name("你叫什么名字？")
+
+
+def test_comma_remember_command_creates_group_memory():
+    previous = settings.onebot_self_id
+    settings.onebot_self_id = "bot-1"
+    try:
+        payload = event("记住，hzh 是 Cat#")
+        payload["message"] = [
+            {"type": "at", "data": {"qq": "bot-1"}},
+            {"type": "text", "data": {"text": " 记住，hzh 是 Cat#"}},
+        ]
+        assert extract_group_memory(payload, message_text(payload)) == "hzh 是 Cat#"
+    finally:
+        settings.onebot_self_id = previous
 
 
 def test_sender_display_name_prefers_group_card_and_sanitizes_lines():
