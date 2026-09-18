@@ -9,8 +9,11 @@ from app.main import (
     PIG_IMAGE_COMMANDS,
     app,
     bot_mentioned,
+    extract_long_memory,
+    extract_search_query,
     mentioned_image_command,
     message_text,
+    sender_display_name,
     settings,
     webhook_token_valid,
 )
@@ -83,6 +86,28 @@ def test_at_image_commands_are_detected_without_triggering_ai():
         assert not mentioned_image_command(cat, PIG_IMAGE_COMMANDS)
     finally:
         settings.onebot_self_id = previous
+
+
+def test_mention_extracts_search_and_explicit_long_memory():
+    previous = settings.onebot_self_id
+    settings.onebot_self_id = "bot-1"
+    try:
+        payload = event("搜索 Python 新版本")
+        payload["message"] = [
+            {"type": "at", "data": {"qq": "bot-1"}},
+            {"type": "text", "data": {"text": "搜索 Python 新版本"}},
+        ]
+        assert extract_search_query(payload, message_text(payload)) == "Python 新版本"
+        payload["message"][1]["data"]["text"] = "记住：我喜欢科幻"
+        assert extract_long_memory(payload, message_text(payload)) == "我喜欢科幻"
+    finally:
+        settings.onebot_self_id = previous
+
+
+def test_sender_display_name_prefers_group_card_and_sanitizes_lines():
+    payload = event("hello")
+    payload["sender"].update({"card": "小明\n第二行", "nickname": "nickname"})
+    assert sender_display_name(payload) == "小明 第二行"
 
 
 def test_webhook_token_accepts_custom_header_and_bearer_token():

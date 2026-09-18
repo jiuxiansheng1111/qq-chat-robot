@@ -1,9 +1,11 @@
 import hashlib
 import hmac
 import logging
+import re
 import secrets
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -27,6 +29,7 @@ from app.plugins.media import (
     random_real_pig_image,
 )
 from app.plugins.registry import registry
+from app.services.web_search import SearchResult, search_web
 
 settings = get_settings()
 logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(message)s")
@@ -35,6 +38,13 @@ logger = logging.getLogger("qqchat")
 CAT_IMAGE_COMMANDS = frozenset({"/猫", "/cat", "猫图", "随机猫", "随机猫咪", "随机猫图"})
 PIG_IMAGE_COMMANDS = frozenset({"/小猪", "/pig", "猪图", "随机猪", "随机猪猪", "随机小猪"})
 NAILONG_IMAGE_COMMANDS = frozenset({"/奶龙", "奶龙", "随机奶龙", "来只奶龙", "龙来"})
+POSSESSION_COMMANDS = frozenset({"/今日夺舍", "今日夺舍", "今天夺舍谁", "今日附身"})
+LONG_MEMORY_LIST_COMMANDS = frozenset({"/长期记忆列表", "我的长期记忆", "你记得什么"})
+LONG_MEMORY_CLEAR_COMMANDS = frozenset({"/长期记忆清除", "清除长期记忆", "忘记我"})
+SENSITIVE_MEMORY_PATTERN = re.compile(
+    r"密码|口令|token|密钥|secret|身份证|银行卡|信用卡|验证码|cookie",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -141,6 +151,41 @@ def mentioned_image_command(event: dict, commands: frozenset[str]) -> bool:
     return bot_mentioned(event) and message_text(event) in commands
 
 
+def sender_display_name(event: dict) -> str:
+    sender = event.get("sender") or {}
+    value = str(sender.get("card") or sender.get("nickname") or event.get("user_id") or "群友")
+    return re.sub(r"[\r\n\t]", " ", value).strip()[:40] or "群友"
+
+
+def extract_long_memory(event: dict, text: str) -> str | None:
+    prefixes = ("记住：", "记住:", "请记住", "帮我记住")
+    if text.startswith("/长期记忆 "):
+        return text.split(" ", 1)[1].strip()[:300]
+    if not bot_mentioned(event):
+        return None
+    for prefix in prefixes:
+        if text.startswith(prefix):
+            return text[len(prefix) :].strip(" ：:")[:300]
+    return None
+
+
+def extract_search_query(event: dict, text: str) -> str | None:
+    prefixes = ("/搜索 ", "/search ")
+    mentioned_prefixes = ("搜索 ", "联网搜索 ", "查一下 ")
+    for prefix in prefixes:
+        if text.lower().startswith(prefix.lower()):
+            return text[len(prefix) :].strip()[:120]
+    if bot_mentioned(event):
+        for prefix in mentioned_prefixes:
+            if text.startswith(prefix):
+                return text[len(prefix) :].strip()[:120]
+    return None
+
+
+def format_search_sources(results: list[SearchResult]) -> str:
+    return "\n".join(f"{index}. {item.title}\n{item.url}" for index, item in enumerate(results, 1))
+
+
 def webhook_token_valid(
     configured_token: str,
     x_onebot_token: str | None,
@@ -228,6 +273,10 @@ async def onebot_webhook(
         return {"ok": True, "ignored": True, "reason": "group_disabled"}
     if await request.app.state.db.is_blocked(group_id, user_id):
         return {"ok": True, "ignored": True, "reason": "user_blocked"}
+    today = datetime.now().astimezone().date().isoformat()
+    await request.app.state.db.record_group_activity(
+        group_id, user_id, sender_display_name(event), text, today
+    )
     if not await request.app.state.limiter.allow(f"user:{user_id}"):
         return {"ok": True, "ignored": True, "reason": "user_rate_limited"}
     if not await request.app.state.group_limiter.allow(f"group:{group_id}"):
@@ -273,6 +322,41 @@ async def onebot_webhook(
     elif text in {"/记忆状态", "/memory status"}:
         enabled = await request.app.state.db.memory_enabled(group_id, user_id)
         await send_group_message(group_id, "你的短期对话记忆：已开启" if enabled else "你的短期对话记忆：未开启")
+    elif (
+        text in LONG_MEMORY_LIST_COMMANDS
+        and (text.startswith("/") or bot_mentioned(event))
+    ):
+        memories = await request.app.state.db.long_term_memories(group_id, user_id)
+        if memories:
+            listing = "\n".join(f"{index}. {item}" for index, item in enumerate(memories, 1))
+            await send_group_message(group_id, f"我长期记住了这些：\n{listing}")
+        else:
+            await send_group_message(group_id, "我还没有长期记住你的信息。")
+    elif (
+        text in LONG_MEMORY_CLEAR_COMMANDS
+        and (text.startswith("/") or bot_mentioned(event))
+    ):
+        await request.app.state.db.clear_long_term_memories(group_id, user_id)
+        await send_group_message(group_id, "已经忘掉你在本群的全部长期记忆了。")
+    elif (memory_content := extract_long_memory(event, text)) is not None:
+        if not memory_content:
+            await send_group_message(group_id, "要记住什么呀？例如：@我 记住：我喜欢科幻电影")
+        elif SENSITIVE_MEMORY_PATTERN.search(memory_content):
+            await send_group_message(group_id, "这类内容可能包含敏感信息，我不帮你长期保存喔。")
+        else:
+            await request.app.state.db.add_long_term_memory(group_id, user_id, memory_content)
+            await send_group_message(group_id, "好，我长期记住了。需要删除时对我说“忘记我”。")
+    elif text in POSSESSION_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
+        possession = await request.app.state.db.get_or_create_daily_possession(group_id, today)
+        if possession:
+            _, name = possession
+            await send_group_message(
+                group_id,
+                f"今日夺舍（娱乐模式）：{name}。今天可以叫我“{name}版阿柚” (｀・ω・´)\n"
+                "只模仿群聊氛围，不代表本人发言。",
+            )
+        else:
+            await send_group_message(group_id, "今天还没有候选人：要有群友发言超过 5 条才会加入抽取。")
     elif text in {"/help", "help"}:
         await send_group_message(group_id, registry.help_text())
     elif text in CAT_IMAGE_COMMANDS or mentioned_image_command(event, CAT_IMAGE_COMMANDS):
@@ -296,11 +380,64 @@ async def onebot_webhook(
         except (RuntimeError, httpx.HTTPError) as exc:
             logger.warning("nailong image failed: %s", exc)
             await send_group_message(group_id, "奶龙图库暂时不可用，请稍后再试。")
+    elif (search_query := extract_search_query(event, text)) is not None:
+        if not search_query:
+            await send_group_message(group_id, "想搜什么？例如：@我 搜索 Python 3.13 新特性")
+        else:
+            try:
+                results = await search_web(search_query)
+                if not results:
+                    await send_group_message(group_id, "这次没有搜到可靠结果，换个关键词试试吧。")
+                else:
+                    evidence = "\n\n".join(
+                        f"标题：{item.title}\n摘要：{item.snippet}\n网址：{item.url}"
+                        for item in results
+                    )
+                    messages = [
+                        {
+                            "role": "system",
+                            "content": settings.persona_prompt()
+                            + "\n你正在根据联网搜索结果回答。只使用给定结果，无法确认的内容要说明；"
+                            "回答简洁，不要编造网址。",
+                        },
+                        {
+                            "role": "user",
+                            "content": f"问题：{search_query}\n\n搜索结果：\n{evidence}",
+                        },
+                    ]
+                    try:
+                        summary = await request.app.state.llm.ask(messages)
+                        reply = f"{summary[:1300]}\n\n来源：\n{format_search_sources(results)}"
+                    except (LLMError, httpx.HTTPError):
+                        reply = "搜到这些结果：\n" + format_search_sources(results)
+                    await send_group_message(group_id, reply[:2000])
+            except (ValueError, RuntimeError, httpx.HTTPError) as exc:
+                logger.warning("web search failed: %s", exc)
+                await send_group_message(group_id, "联网搜索暂时不可用，稍后再试一下吧。")
     elif text.startswith(("/ai ", "/AI ")) or (bot_mentioned(event) and text):
         prompt = text.split(" ", 1)[1].strip() if text.startswith(("/ai ", "/AI ")) else text
         memory_enabled = await request.app.state.db.memory_enabled(group_id, user_id)
+        long_memories = await request.app.state.db.long_term_memories(group_id, user_id)
+        style_hint = await request.app.state.db.group_style_hint(group_id)
+        possession = await request.app.state.db.daily_possession(group_id, today)
+        persona = settings.persona_prompt()
+        if long_memories:
+            persona += "\n\n用户明确要求长期记住的信息：\n" + "\n".join(
+                f"- {item}" for item in long_memories
+            )
+        if style_hint:
+            persona += (
+                "\n\n本群匿名聚合出的表达风格：" + style_hint
+                + "。自然参考即可，不要照搬某个成员，也不要强行使用网络用语。"
+            )
+        if possession:
+            _, name = possession
+            persona += (
+                f"\n\n今日娱乐角色是“{name}版阿柚”。被问名字时这样介绍，并明确自己是机器人娱乐模式；"
+                "不能声称是真人或代表本人。"
+            )
         messages = request.app.state.memory.messages(
-            group_id, user_id, settings.persona_prompt(), prompt, memory_enabled
+            group_id, user_id, persona, prompt, memory_enabled
         )
         try:
             answer = await request.app.state.llm.ask(messages)
