@@ -1,6 +1,8 @@
 import asyncio
 import base64
 import random
+import time
+from collections import deque
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -89,6 +91,9 @@ _pig_title_pool: list[str] = []
 _pig_pool_lock = asyncio.Lock()
 _nailong_path_pool: list[str] = []
 _nailong_pool_lock = asyncio.Lock()
+_cat_gif_cache: deque[str] = deque()
+_cat_cache_lock = asyncio.Lock()
+_cat_fill_lock = asyncio.Lock()
 
 
 @dataclass(frozen=True)
@@ -111,6 +116,58 @@ async def _next_nailong_path() -> str:
             _nailong_path_pool.extend(NAILONG_PATHS)
             random.SystemRandom().shuffle(_nailong_path_pool)
         return _nailong_path_pool.pop()
+
+
+async def _download_cat_gif(settings: Settings) -> str:
+    url = httpx.URL(settings.cat_api_url).copy_merge_params(
+        {"width": "480", "height": "480", "_": str(time.time_ns())}
+    )
+    timeout = min(float(getattr(settings, "cat_timeout_seconds", 12)), 20)
+    max_bytes = settings.media_max_bytes
+    headers = {"Cache-Control": "no-cache", "User-Agent": WIKIMEDIA_USER_AGENT}
+    content = bytearray()
+    async with (
+        httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client,
+        client.stream("GET", url, headers=headers) as response,
+    ):
+        if response.status_code >= 400:
+            raise RuntimeError(f"猫图服务错误: {response.status_code}")
+        if not response.headers.get("content-type", "").startswith("image/"):
+            raise RuntimeError("猫图服务返回的内容不是图片")
+        declared_size = int(response.headers.get("content-length") or 0)
+        if declared_size > max_bytes:
+            raise RuntimeError("猫 GIF 超过大小限制")
+        async for chunk in response.aiter_bytes():
+            content.extend(chunk)
+            if len(content) > max_bytes:
+                raise RuntimeError("猫 GIF 超过大小限制")
+    if not bytes(content).startswith((b"GIF87a", b"GIF89a")):
+        raise RuntimeError("猫图服务未返回 GIF")
+    return "base64://" + base64.b64encode(content).decode()
+
+
+async def warm_cat_gif_cache(settings: Settings) -> None:
+    target = max(1, min(int(getattr(settings, "cat_cache_size", 2)), 5))
+    async with _cat_fill_lock:
+        while True:
+            async with _cat_cache_lock:
+                if len(_cat_gif_cache) >= target:
+                    return
+            try:
+                image = await _download_cat_gif(settings)
+            except (RuntimeError, httpx.HTTPError):
+                return
+            async with _cat_cache_lock:
+                _cat_gif_cache.append(image)
+
+
+async def random_cat_gif(settings: Settings) -> str:
+    async with _cat_cache_lock:
+        image = _cat_gif_cache.popleft() if _cat_gif_cache else None
+    if image is None:
+        image = await _download_cat_gif(settings)
+    asyncio.create_task(warm_cat_gif_cache(settings))
+    return image
 
 
 async def random_nailong_image(settings: Settings) -> str:

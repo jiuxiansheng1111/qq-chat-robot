@@ -19,6 +19,7 @@ from app.main import (
     mentioned_image_command,
     mentioned_user_ids,
     message_text,
+    polish_chat_reply,
     sender_display_name,
     settings,
     webhook_token_valid,
@@ -194,6 +195,10 @@ def test_possession_identity_guard_replaces_default_name():
     assert enforce_possession_identity("我是阿柚，一个聊天机器人。", "山奈钠") == (
         "我是山奈钠，一个聊天机器人。"
     )
+
+
+def test_chat_reply_uses_lele_wording():
+    assert polish_chat_reply("他真是个乐子人。") == "他真是个乐乐。"
 
 
 def test_sender_name_question_is_distinct_from_bot_identity():

@@ -27,7 +27,7 @@
 - OneBot Webhook 鉴权
 - 智谱 LLM
 - Groq 备用 LLM（未配置时跳过）
-- CATAAS 动态猫 GIF
+- CATAAS 动态猫 GIF、文件校验与预热缓存
 - Wikimedia Commons 真实小猪照片
 - GitHub 开源图库奶龙表情包
 - OneBot `get_login_info`

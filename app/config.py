@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     media_timeout_seconds: float = 60
     media_retry_attempts: int = 2
     cat_api_url: str = "https://cataas.com/cat/gif"
+    cat_timeout_seconds: float = 12
+    cat_cache_size: int = 2
     pig_api_url: str = "https://commons.wikimedia.org/w/api.php"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")

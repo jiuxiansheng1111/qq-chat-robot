@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.llm.providers import OpenAICompatibleProvider
 from app.main import app
-from app.plugins.media import random_image, random_nailong_image, random_real_pig_image
+from app.plugins.media import random_cat_gif, random_nailong_image, random_real_pig_image
 
 pytestmark = pytest.mark.live
 
@@ -146,11 +146,8 @@ async def test_groq_fallback_api(live_settings: Settings):
 
 
 async def test_cat_image_api(live_settings: Settings):
-    image = await random_image(
-        require(live_settings.cat_api_url, "CAT_API_URL"),
-        "",
-        live_settings,
-    )
+    require(live_settings.cat_api_url, "CAT_API_URL")
+    image = await random_cat_gif(live_settings)
     assert image.startswith("base64://")
     payload = base64.b64decode(image.removeprefix("base64://"))
     assert payload.startswith((b"GIF87a", b"GIF89a"))

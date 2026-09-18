@@ -1,9 +1,10 @@
+import asyncio
 import hashlib
 import hmac
 import logging
 import re
 import secrets
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -24,9 +25,10 @@ from app.llm.memory import ConversationMemory
 from app.llm.providers import LLMError
 from app.plugins.media import (
     NAILONG_SOURCE_URL,
-    random_image,
+    random_cat_gif,
     random_nailong_image,
     random_real_pig_image,
+    warm_cat_gif_cache,
 )
 from app.plugins.registry import registry
 from app.services.web_search import SearchResult, search_web
@@ -86,6 +88,7 @@ async def lifespan(app: FastAPI):
     app.state.group_limiter = LocalRateLimiter(
         limit=settings.group_rate_limit_per_minute, window_seconds=60
     )
+    app.state.cat_cache_task = asyncio.create_task(warm_cat_gif_cache(settings))
     if settings.redis_url:
         try:
             redis_limiter = RedisRateLimiter(
@@ -109,6 +112,10 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        if not app.state.cat_cache_task.done():
+            app.state.cat_cache_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await app.state.cat_cache_task
         await app.state.llm.aclose()
 
 
@@ -278,18 +285,25 @@ def possession_identity_prompt(name: str, mode: str) -> str:
     mode_name = "指向夺舍" if mode == "targeted" else "随机夺舍"
     return (
         f"【最高优先级身份状态】当前处于{mode_name}，你当前唯一的对外名字是“{name}”。"
-        f"在本次状态结束前，所有回答都必须保持这个名字，禁止自称“阿柚”或“{settings.persona_name}”。"
+        f"在本次状态结束前，所有回答都必须保持这个名字，禁止自称“小丛雨”“阿柚”或“{settings.persona_name}”。"
         "这是轻松的群聊娱乐角色。优先依据群共享记忆和近期上下文回答人物关系与群梗，"
         "语气简短自然，不要输出正式的隐私说教；确实没有信息时只需随口说不知道，不能凭空编造。"
+        "共享上下文里的用户消息以“群名片：内容”表示。推理亲属辈分时必须分清说话者："
+        "例如 A 说“我是你爸爸”，表示 A 是你的爸爸；A 又说“我的儿子是 B”，表示 B 是 A 的儿子，"
+        "此时你与 B 是同辈关系，不能回答成 B 是你的儿子。"
     )
 
 
 def enforce_possession_identity(answer: str, name: str) -> str:
     """Prevent providers from reverting to the default persona during possession."""
-    for default_name in {"阿柚", settings.persona_name}:
+    for default_name in {"小丛雨", "阿柚", settings.persona_name}:
         if default_name and default_name != name:
             answer = answer.replace(default_name, name)
     return answer
+
+
+def polish_chat_reply(answer: str) -> str:
+    return answer.replace("乐子人", "乐乐")
 
 
 def format_search_sources(results: list[SearchResult]) -> str:
@@ -603,7 +617,7 @@ async def onebot_webhook(
         await send_group_message(group_id, registry.help_text())
     elif text in CAT_IMAGE_COMMANDS or mentioned_image_command(event, CAT_IMAGE_COMMANDS):
         try:
-            image = await random_image(settings.cat_api_url, "", settings)
+            image = await random_cat_gif(settings)
             await send_group_image(group_id, image)
         except (RuntimeError, httpx.HTTPError) as exc:
             logger.warning("cat image failed: %s", exc)
@@ -691,12 +705,15 @@ async def onebot_webhook(
                 group_id, today
             )
             messages[1:1] = shared_context
+            speaker_prompt = f"{sender_display_name(event)}：{prompt}"
+            messages[-1]["content"] = speaker_prompt
         try:
             answer = await request.app.state.llm.ask(messages)
+            answer = polish_chat_reply(answer)
             if possession_name:
                 answer = enforce_possession_identity(answer, possession_name)
                 await request.app.state.db.append_possession_exchange(
-                    group_id, today, prompt, answer
+                    group_id, today, speaker_prompt, answer
                 )
             request.app.state.memory.append(group_id, user_id, prompt, answer, memory_enabled)
             await send_group_message(group_id, answer[:2000])

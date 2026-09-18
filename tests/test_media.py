@@ -1,3 +1,4 @@
+import asyncio
 import base64
 from types import SimpleNamespace
 
@@ -5,7 +6,12 @@ import httpx
 import pytest
 
 import app.plugins.media as media_module
-from app.plugins.media import random_image, random_nailong_image, random_real_pig_image
+from app.plugins.media import (
+    random_cat_gif,
+    random_image,
+    random_nailong_image,
+    random_real_pig_image,
+)
 
 
 @pytest.mark.asyncio
@@ -33,6 +39,20 @@ async def test_cataas_returns_gif_only(monkeypatch):
         SimpleNamespace(media_max_bytes=5 * 1024 * 1024),
     )
     assert base64.b64decode(result.removeprefix("base64://")) == b"GIF89a-cat"
+
+
+@pytest.mark.asyncio
+async def test_cat_gif_uses_warmed_cache(monkeypatch):
+    media_module._cat_gif_cache.clear()
+    media_module._cat_gif_cache.append("base64://cached-cat")
+
+    async def no_refill(settings):
+        return None
+
+    monkeypatch.setattr(media_module, "warm_cat_gif_cache", no_refill)
+    result = await random_cat_gif(SimpleNamespace(cat_cache_size=2))
+    await asyncio.sleep(0)
+    assert result == "base64://cached-cat"
 
 
 @pytest.mark.asyncio
