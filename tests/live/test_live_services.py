@@ -9,7 +9,12 @@ from app.config import Settings
 from app.llm.providers import OpenAICompatibleProvider
 from app.main import app
 from app.plugins.media import random_cat_gif, random_nailong_image, random_real_pig_image
-from app.services.music import search_music
+from app.services.music import (
+    choose_netease_track,
+    music_query_suffixes,
+    search_music,
+    search_netease_music,
+)
 
 pytestmark = pytest.mark.live
 
@@ -220,3 +225,28 @@ async def test_deezer_music_search(live_settings: Settings):
     tracks = await search_music("taidada", live_settings)
     assert tracks, "Deezer 没有返回测试歌曲"
     assert tracks[0].preview_url.startswith("https://")
+
+
+async def test_netease_music_search_prefers_original(live_settings: Settings):
+    tracks = await search_netease_music("春泥棒", live_settings)
+    selected = choose_netease_track(
+        "ヨルシカ 春泥棒",
+        tracks,
+        expected_artist="ヨルシカ",
+        expected_title="春泥棒",
+    )
+    assert selected is not None, "网易云没有返回ヨルシカ原唱版本"
+    assert selected.artist == "ヨルシカ"
+
+
+async def test_netease_music_alias_fallback_finds_exact_title(
+    live_settings: Settings,
+):
+    candidates = music_query_suffixes("夜鹿 春泥棒")
+    tracks = await search_netease_music(candidates[0], live_settings)
+    selected = choose_netease_track(
+        candidates[0], tracks, expected_title=candidates[0]
+    )
+    assert selected is not None, "网易云歌名回退没有找到精确标题"
+    assert selected.title == "春泥棒"
+    assert selected.artist == "ヨルシカ"

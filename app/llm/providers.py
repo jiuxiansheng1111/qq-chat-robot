@@ -5,6 +5,34 @@ class LLMError(RuntimeError):
     pass
 
 
+def describe_llm_error(exc: Exception) -> str:
+    """Classify an LLM failure so logs reveal the actual cause."""
+    text = str(exc)
+    if "circuit open" in text:
+        return "circuit_open"
+    if text == "llm_queue_full":
+        return "queue_full"
+    if text == "llm_queue_timeout":
+        return "queue_timeout"
+    if "API key 未配置" in text:
+        return "missing_api_key"
+    if "temporary error: 429" in text:
+        return "rate_limited"
+    if "invalid response" in text:
+        return "invalid_response"
+    if "empty response" in text:
+        return "empty_response"
+    if isinstance(exc, httpx.TimeoutException):
+        return "timeout"
+    if isinstance(exc, httpx.ConnectError):
+        return "connect_error"
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"http_{exc.response.status_code}"
+    if isinstance(exc, httpx.HTTPError):
+        return "network_error"
+    return "llm_error"
+
+
 class OpenAICompatibleProvider:
     def __init__(self, name: str, base_url: str, api_key: str, model: str, timeout: float, max_tokens: int, temperature: float):
         self.name = name

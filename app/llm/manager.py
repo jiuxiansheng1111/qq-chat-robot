@@ -1,6 +1,8 @@
 import asyncio
 import time
 
+import httpx
+
 from app.config import Settings
 from app.llm.providers import LLMError, OpenAICompatibleProvider
 from app.llm.resilience import CircuitBreaker, CircuitOpenError, ProviderStats
@@ -45,7 +47,7 @@ class LLMManager:
                 raise LLMError("llm_queue_timeout") from exc
             try:
                 return await self._call(self.provider_name, self.provider, messages)
-            except LLMError:
+            except (LLMError, httpx.HTTPError):
                 if self.fallback is self.provider:
                     raise
                 return await self._call(self.fallback_name, self.fallback, messages)
@@ -61,7 +63,7 @@ class LLMManager:
         started = time.perf_counter()
         try:
             result = await provider.chat(messages)
-        except LLMError as exc:
+        except (LLMError, httpx.HTTPError) as exc:
             await breaker.failure()
             self.stats[name].record(
                 success=False,

@@ -1,4 +1,11 @@
-from app.services.music import parse_deezer_tracks
+from app.services.music import (
+    choose_netease_track,
+    music_query_suffixes,
+    netease_track_matches_query,
+    parse_deezer_tracks,
+    parse_music_identity,
+    parse_netease_tracks,
+)
 
 
 def test_parse_deezer_tracks_accepts_safe_preview_and_deduplicates():
@@ -41,3 +48,78 @@ def test_parse_deezer_tracks_rejects_explicit_or_untrusted_urls():
             ]
         }
     ) == []
+
+
+def test_netease_prefers_original_artist_and_rejects_cover_versions():
+    tracks = parse_netease_tracks(
+        {
+            "result": {
+                "songs": [
+                    {
+                        "id": 30,
+                        "name": "春泥棒 Cover",
+                        "artists": [{"name": "Someone"}],
+                        "album": {"name": "Cover", "picUrl": ""},
+                        "duration": 100000,
+                    },
+                    {
+                        "id": 20,
+                        "name": "春泥棒",
+                        "artists": [{"name": "其他歌手"}],
+                        "album": {"name": "同名曲", "picUrl": ""},
+                        "duration": 200000,
+                    },
+                    {
+                        "id": 10,
+                        "name": "春泥棒",
+                        "artists": [{"name": "ヨルシカ"}],
+                        "album": {"name": "創作", "picUrl": ""},
+                        "duration": 290000,
+                    },
+                ]
+            }
+        }
+    )
+    selected = choose_netease_track(
+        "ヨルシカ 春泥棒", tracks, expected_artist="ヨルシカ", expected_title="春泥棒"
+    )
+    assert selected is not None
+    assert selected.song_id == "10"
+    assert netease_track_matches_query("ヨルシカ 春泥棒", selected)
+
+
+def test_music_query_suffixes_support_artist_alias_plus_title():
+    assert music_query_suffixes("夜鹿 春泥棒") == ["春泥棒"]
+    assert music_query_suffixes("yorushika Spring Thief") == [
+        "Spring Thief",
+        "Thief",
+    ]
+    assert music_query_suffixes("春泥棒") == []
+
+
+def test_expected_title_requires_an_exact_match():
+    tracks = parse_netease_tracks(
+        {
+            "result": {
+                "songs": [
+                    {
+                        "id": 1,
+                        "name": "春泥棒 (Live)",
+                        "artists": [{"name": "ヨルシカ"}],
+                        "album": {"name": "Live"},
+                    }
+                ]
+            }
+        }
+    )
+    assert choose_netease_track("春泥棒", tracks, expected_title="春泥棒") is None
+
+
+def test_music_identity_parser_accepts_json_only():
+    identity = parse_music_identity(
+        '```json\n{"title":"春泥棒","artist":"ヨルシカ",'
+        '"search_query":"ヨルシカ 春泥棒"}\n```'
+    )
+    assert identity is not None
+    assert identity.artist == "ヨルシカ"
+    assert parse_music_identity("我觉得可能是春泥棒") is None

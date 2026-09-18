@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     music_api_url: str = "https://api.deezer.com"
     music_timeout_seconds: float = 10
     music_search_limit: int = 8
+    netease_music_api_url: str = "https://music.163.com/api/search/get"
     possession_style_history_count: int = 200
     possession_style_sample_limit: int = 30
     possession_style_refresh_hours: int = 24

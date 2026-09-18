@@ -18,8 +18,9 @@ qq-chatrobot\start-qq-chatrobot.bat
 ## 防止 8000 服务意外消失
 
 管理员身份双击项目根目录的 `安装机器人开机自启.bat`。它会注册 Windows 任务
-`QQChatRobot API`：登录 Windows 后自动启动 FastAPI，并在进程意外退出后等待 5 秒重启。
-机器人日志写入 `logs/bot.out.log` 和 `logs/bot.error.log`。
+`QQChatRobot API`：登录 Windows 后自动启动 FastAPI，并在进程意外退出后等待 5 秒重启。守护脚本每 10 秒检查
+`/health/live`；如果进程卡死、端口还在但连续 45 秒无健康响应，会结束旧进程并自动拉起新进程。
+机器人日志写入 `logs/bot.out.log` 和 `logs/bot.error.log`，重启原因也会写入错误日志。
 
 该任务只负责机器人 API `8000`。NapCat/QQ 仍由 `start-qq-chatrobot.bat` 启动，因为首次登录、
 设备锁或风控时可能需要手机确认。看到 `ECONNREFUSED 127.0.0.1:8000` 时，先访问

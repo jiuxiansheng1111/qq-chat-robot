@@ -62,7 +62,7 @@ class PluginRegistry:
             "🔎 联网搜索\n"
             "@我 搜索 关键词\n\n"
             "🎵 音乐点歌\n"
-            "@我 点歌 歌名（歌手名可选，30 秒试听）\n\n"
+            "@我 点歌 歌名（网易云原唱卡片）\n\n"
             "🖼️ 随机图片\n"
             "@我 随机猫咪\n"
             "@我 随机猪猪\n"
@@ -95,7 +95,7 @@ registry.register(
     PluginSpec(
         "music",
         ("/点歌", "/music"),
-        "/点歌 <歌手/歌名> —— Deezer 30 秒试听音乐卡片",
+        "/点歌 <歌手/歌名> —— 网易云原唱音乐卡片",
     )
 )
 registry.register(

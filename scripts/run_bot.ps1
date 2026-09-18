@@ -29,7 +29,32 @@ while ($true) {
         -RedirectStandardError $errorLog `
         -PassThru `
         -WindowStyle Hidden
-    $process.WaitForExit()
-    Add-Content -LiteralPath $errorLog -Value "$(Get-Date -Format o) Bot process exited; restarting in 5 seconds."
+    # A wedged process can keep port 8000 open, so supervise health as well.
+    $unhealthySince = $null
+    while (-not $process.HasExited) {
+        Start-Sleep -Seconds 10
+        if ($process.HasExited) {
+            break
+        }
+        try {
+            $health = Invoke-WebRequest -Uri "http://127.0.0.1:8000/health/live" -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+            if ($health.StatusCode -eq 200) {
+                $unhealthySince = $null
+                continue
+            }
+        }
+        catch {
+            if ($null -eq $unhealthySince) {
+                $unhealthySince = Get-Date
+            }
+        }
+        if ($unhealthySince -and ((Get-Date) - $unhealthySince).TotalSeconds -ge 45) {
+            Add-Content -LiteralPath $errorLog -Value "$(Get-Date -Format o) Health check failed for 45 seconds; stopping bot process."
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            break
+        }
+    }
+    $exitCode = if ($process.HasExited) { $process.ExitCode } else { "health-timeout" }
+    Add-Content -LiteralPath $errorLog -Value "$(Get-Date -Format o) Bot process exited ($exitCode); restarting in 5 seconds."
     Start-Sleep -Seconds 5
 }
