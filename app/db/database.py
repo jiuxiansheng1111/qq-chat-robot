@@ -441,6 +441,22 @@ class Database:
     async def clear_group_memories(self, group_id: str) -> None:
         await self.execute("DELETE FROM group_memories WHERE group_id = ?", (group_id,))
 
+    async def delete_group_memories_matching(self, group_id: str, text: str) -> int:
+        """Delete shared facts containing the exact text and drop transient context."""
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                "DELETE FROM group_memories WHERE group_id = ? AND instr(content, ?) > 0",
+                (group_id, text),
+            )
+            deleted = max(cursor.rowcount, 0)
+            if deleted:
+                await db.execute(
+                    "DELETE FROM possession_context WHERE group_id = ?",
+                    (group_id,),
+                )
+            await db.commit()
+        return deleted
+
     async def group_style_hint(self, group_id: str) -> str:
         row = await self.fetchone(
             "SELECT sample_count, total_chars, question_count, exclamation_count, kaomoji_count "

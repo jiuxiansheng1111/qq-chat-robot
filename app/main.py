@@ -215,6 +215,27 @@ def extract_group_memory(event: dict, text: str) -> str | None:
     return None
 
 
+def extract_group_memory_deletion(event: dict, text: str) -> str | None:
+    if not bot_mentioned(event) or text in GROUP_MEMORY_CLEAR_COMMANDS:
+        return None
+    prefixes = (
+        "删除群记忆：",
+        "删除群记忆:",
+        "删除群记忆 ",
+        "删除记忆：",
+        "删除记忆:",
+        "删除记忆 ",
+        "删除：",
+        "删除:",
+        "删除 ",
+        "删除",
+    )
+    for prefix in prefixes:
+        if text.startswith(prefix):
+            return text[len(prefix) :].strip(" ，,：:")[:100]
+    return None
+
+
 def extract_search_query(event: dict, text: str) -> str | None:
     prefixes = ("/搜索 ", "/search ")
     mentioned_prefixes = ("搜索 ", "联网搜索 ", "查一下 ")
@@ -478,6 +499,20 @@ async def onebot_webhook(
             await send_group_message(group_id, "本群共享记忆已清空。")
         else:
             await send_group_message(group_id, "只有群管理员可以清除群记忆。")
+    elif (delete_text := extract_group_memory_deletion(event, text)) is not None:
+        if not delete_text:
+            await send_group_message(group_id, "要删哪个关键词？例如：@我 删除记忆 hzh")
+        else:
+            deleted = await request.app.state.db.delete_group_memories_matching(
+                group_id, delete_text
+            )
+            if deleted:
+                await send_group_message(
+                    group_id,
+                    f"删掉了 {deleted} 条包含“{delete_text}”的群记忆。",
+                )
+            else:
+                await send_group_message(group_id, f"没找到包含“{delete_text}”的群记忆。")
     elif text in POSSESSION_EXIT_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
         possession = await request.app.state.db.daily_possession(group_id, today)
         if not possession:

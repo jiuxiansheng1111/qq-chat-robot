@@ -114,3 +114,16 @@ async def test_group_memory_persists_across_possession_targets(tmp_path):
     reopened = Database(Settings(_env_file=None, database_path=str(path)))
     await reopened.init()
     assert await reopened.group_memories("100") == ["hzh 是 Cat#"]
+
+
+async def test_group_memory_can_be_deleted_by_exact_substring(tmp_path):
+    db = Database(Settings(_env_file=None, database_path=str(tmp_path / "delete-memory.db")))
+    await db.init()
+    await db.add_group_memory("100", "hzh 是 Cat#")
+    await db.add_group_memory("100", "hzh 性格很活泼")
+    await db.add_group_memory("100", "首阳喜欢唱歌")
+    await db.append_possession_exchange("100", "2026-09-18", "hzh 是谁", "Cat#")
+    assert await db.delete_group_memories_matching("100", "hzh") == 2
+    assert await db.group_memories("100") == ["首阳喜欢唱歌"]
+    assert await db.possession_context_messages("100", "2026-09-18") == []
+    assert await db.delete_group_memories_matching("100", "HZH") == 0

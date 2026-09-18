@@ -12,6 +12,7 @@ from app.main import (
     bot_mentioned,
     enforce_possession_identity,
     extract_group_memory,
+    extract_group_memory_deletion,
     extract_long_memory,
     extract_search_query,
     is_identity_question,
@@ -211,6 +212,20 @@ def test_comma_remember_command_creates_group_memory():
             {"type": "text", "data": {"text": " 记住，hzh 是 Cat#"}},
         ]
         assert extract_group_memory(payload, message_text(payload)) == "hzh 是 Cat#"
+    finally:
+        settings.onebot_self_id = previous
+
+
+def test_group_memory_delete_command_extracts_literal_text():
+    previous = settings.onebot_self_id
+    settings.onebot_self_id = "bot-1"
+    try:
+        payload = event("删除hzh")
+        payload["message"] = [
+            {"type": "text", "data": {"text": "删除hzh "}},
+            {"type": "at", "data": {"qq": "bot-1"}},
+        ]
+        assert extract_group_memory_deletion(payload, message_text(payload)) == "hzh"
     finally:
         settings.onebot_self_id = previous
 
