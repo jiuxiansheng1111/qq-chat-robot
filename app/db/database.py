@@ -284,16 +284,18 @@ class Database:
             await db.commit()
 
     async def get_or_create_daily_possession(
-        self, group_id: str, possession_date: str, minimum_messages: int = 15
+        self,
+        group_id: str,
+        possession_date: str,
+        minimum_messages: int = 15,
+        reroll: bool = False,
     ) -> tuple[str, str, str] | None:
-        if await self.possession_exited(group_id, possession_date):
-            return None
         existing = await self.fetchone(
             "SELECT user_id, display_name, mode FROM daily_possession "
             "WHERE group_id = ? AND possession_date = ?",
             (group_id, possession_date),
         )
-        if existing:
+        if existing and not reroll:
             if str(existing[2]) != "random":
                 return str(existing[0]), str(existing[1]), str(existing[2])
             activity = await self.fetchone(
@@ -314,12 +316,19 @@ class Database:
         )
         if not candidates:
             return None
-        chosen = secrets.choice(candidates)
+        selectable = candidates
+        if existing and len(candidates) > 1:
+            selectable = [row for row in candidates if str(row[0]) != str(existing[0])]
+        chosen = secrets.choice(selectable)
         await self.execute(
-            "INSERT OR IGNORE INTO daily_possession"
-            "(group_id, possession_date, user_id, display_name, mode) VALUES (?, ?, ?, ?, 'random')",
+            "INSERT INTO daily_possession"
+            "(group_id, possession_date, user_id, display_name, mode) VALUES (?, ?, ?, ?, 'random') "
+            "ON CONFLICT(group_id, possession_date) DO UPDATE SET user_id = excluded.user_id, "
+            "display_name = excluded.display_name, mode = 'random'",
             (group_id, possession_date, str(chosen[0]), str(chosen[1])),
         )
+        if not existing or str(existing[0]) != str(chosen[0]) or str(existing[2]) != "random":
+            await self.clear_possession_context(group_id, possession_date)
         saved = await self.fetchone(
             "SELECT user_id, display_name, mode FROM daily_possession "
             "WHERE group_id = ? AND possession_date = ?",
@@ -330,8 +339,6 @@ class Database:
     async def set_targeted_possession(
         self, group_id: str, possession_date: str, user_id: str, display_name: str
     ) -> bool:
-        if await self.possession_exited(group_id, possession_date):
-            return False
         current = await self.fetchone(
             "SELECT user_id, mode FROM daily_possession WHERE group_id = ? AND possession_date = ?",
             (group_id, possession_date),
@@ -349,8 +356,6 @@ class Database:
     async def daily_possession(
         self, group_id: str, possession_date: str
     ) -> tuple[str, str, str] | None:
-        if await self.possession_exited(group_id, possession_date):
-            return None
         row = await self.fetchone(
             "SELECT user_id, display_name, mode FROM daily_possession "
             "WHERE group_id = ? AND possession_date = ?",
@@ -377,9 +382,12 @@ class Database:
         self, group_id: str, possession_date: str, exited_by: str
     ) -> None:
         await self.execute(
-            "INSERT OR IGNORE INTO daily_possession_exits(group_id, possession_date, exited_by) "
-            "VALUES (?, ?, ?)",
-            (group_id, possession_date, exited_by),
+            "DELETE FROM daily_possession WHERE group_id = ? AND possession_date = ?",
+            (group_id, possession_date),
+        )
+        await self.execute(
+            "DELETE FROM daily_possession_exits WHERE group_id = ? AND possession_date = ?",
+            (group_id, possession_date),
         )
         await self.clear_possession_context(group_id, possession_date)
 

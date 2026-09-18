@@ -80,13 +80,14 @@ async def learn_possession_style(
     group_id: str,
     user_id: str,
     display_name: str,
+    force_refresh: bool = False,
 ) -> None:
     """Learn asynchronously and persist only a compact style summary, never raw history."""
     try:
         cached = await db.possession_style_profile(
             group_id, user_id, settings.possession_style_refresh_hours
         )
-        if cached:
+        if cached and not force_refresh:
             return
         samples = await fetch_member_style_samples(settings, group_id, user_id)
         if len(samples) < 3:

@@ -49,9 +49,9 @@ async def test_activity_possession_and_anonymous_style_hint(tmp_path):
     assert await reopened.daily_possession("100", "2026-09-18") == possession
     assert await db.get_or_create_daily_possession("100", "2026-09-18") == possession
     await db.exit_daily_possession("100", "2026-09-18", "200")
-    assert await db.possession_exited("100", "2026-09-18")
+    assert not await db.possession_exited("100", "2026-09-18")
     assert await db.daily_possession("100", "2026-09-18") is None
-    assert await db.get_or_create_daily_possession("100", "2026-09-18") is None
+    assert await db.get_or_create_daily_possession("100", "2026-09-18") == possession
     hint = await db.group_style_hint("100")
     assert "短句为主" in hint
     assert "哈哈" in hint
@@ -84,6 +84,25 @@ async def test_targeted_possession_does_not_require_activity_threshold(tmp_path)
     await db.init()
     assert await db.set_targeted_possession("100", "2026-09-18", "300", "小红")
     assert await db.daily_possession("100", "2026-09-18") == ("300", "小红", "targeted")
+    await db.exit_daily_possession("100", "2026-09-18", "300")
+    assert await db.set_targeted_possession("100", "2026-09-18", "400", "小蓝")
+    assert await db.daily_possession("100", "2026-09-18") == ("400", "小蓝", "targeted")
+
+
+async def test_random_possession_can_reroll_without_daily_limit(tmp_path):
+    db = Database(Settings(_env_file=None, database_path=str(tmp_path / "reroll.db")))
+    await db.init()
+    for user_id, name in (("200", "小明"), ("300", "小红")):
+        for _ in range(15):
+            await db.record_group_activity(
+                "100", user_id, name, "测试", "2026-09-18"
+            )
+    first = await db.get_or_create_daily_possession("100", "2026-09-18")
+    second = await db.get_or_create_daily_possession(
+        "100", "2026-09-18", reroll=True
+    )
+    assert first is not None and second is not None
+    assert second[0] != first[0]
 
 
 async def test_possession_style_profile_is_persistent(tmp_path):

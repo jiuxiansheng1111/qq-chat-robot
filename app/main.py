@@ -239,6 +239,17 @@ def mentioned_user_ids(event: dict) -> list[str]:
     )
 
 
+def is_targeted_possession_command(event: dict, text: str) -> bool:
+    if not bot_mentioned(event):
+        return False
+    normalized = re.sub(r"\s+", "", text)
+    return any(
+        normalized == command.lstrip("/")
+        or normalized.startswith(command.lstrip("/") + "@")
+        for command in TARGETED_POSSESSION_COMMANDS
+    )
+
+
 def extract_long_memory(event: dict, text: str) -> str | None:
     prefixes = ("记住：", "记住:", "请记住", "帮我记住")
     if text.startswith("/长期记忆 "):
@@ -479,6 +490,7 @@ def schedule_possession_style_learning(
             group_id,
             user_id,
             display_name,
+            force_refresh=True,
         )
     )
     tasks[key] = task
@@ -705,83 +717,65 @@ async def onebot_webhook(
     elif text in POSSESSION_EXIT_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
         possession = await request.app.state.db.daily_possession(group_id, today)
         if not possession:
-            if await request.app.state.db.possession_exited(group_id, today):
-                await send_group_message(group_id, "今天已经退出夺舍了，明天会自动恢复抽取。")
-            else:
-                await send_group_message(group_id, "今天还没有开始夺舍。")
+            await send_group_message(group_id, "现在没有在夺舍。")
         elif user_id == possession[0] or is_admin:
             await request.app.state.db.exit_daily_possession(group_id, today, user_id)
-            await send_group_message(group_id, "已退出今天的夺舍状态，明天会自动恢复 ( ´▽｀)")
+            await send_group_message(group_id, "已退出夺舍；想再玩时可以随时重新夺舍。")
         else:
             await send_group_message(group_id, "只有今天被抽中的群友或群管理员可以退出夺舍。")
     elif text in POSSESSION_STATUS_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
-        if await request.app.state.db.possession_exited(group_id, today):
-            await send_group_message(group_id, "今日夺舍状态：已退出，明天自动恢复。")
+        possession = await request.app.state.db.daily_possession(group_id, today)
+        if possession:
+            mode_name = "指向" if possession[2] == "targeted" else "随机"
+            await send_group_message(
+                group_id,
+                f"现在是“{possession[1]}”，{mode_name}中 (｀・ω・´)",
+            )
         else:
-            possession = await request.app.state.db.daily_possession(group_id, today)
-            if possession:
-                mode_name = "指向" if possession[2] == "targeted" else "随机"
-                await send_group_message(
-                    group_id,
-                    f"现在是“{possession[1]}”，{mode_name}中 (｀・ω・´)",
-                )
-            else:
-                await send_group_message(group_id, "今日夺舍状态：尚未抽取。")
+            await send_group_message(group_id, "现在没有在夺舍。")
     elif bot_mentioned(event) and asks_for_sender_name(text):
         await send_group_message(group_id, f"你的名字是“{sender_display_name(event)}”。")
     elif bot_mentioned(event) and is_identity_question(text):
-        if await request.app.state.db.possession_exited(group_id, today):
+        possession = await request.app.state.db.daily_possession(group_id, today)
+        if possession:
+            _, name, mode = possession
+            mode_name = "指向夺舍" if mode == "targeted" else "随机夺舍"
             await send_group_message(
                 group_id,
-                f"今天的夺舍已经退出啦，现在我是机器人“{settings.persona_name}”。",
+                f"我现在是“{name}”，{mode_name}中 (｀・ω・´)",
             )
         else:
-            possession = await request.app.state.db.daily_possession(group_id, today)
-            if possession:
-                _, name, mode = possession
-                mode_name = "指向夺舍" if mode == "targeted" else "随机夺舍"
-                await send_group_message(
-                    group_id,
-                    f"我现在是“{name}”，{mode_name}中 (｀・ω・´)",
-                )
-            else:
-                await send_group_message(
-                    group_id,
-                    f"我现在是机器人“{settings.persona_name}”，今天还没有进入夺舍状态。",
-                )
-    elif text in TARGETED_POSSESSION_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
-        if await request.app.state.db.possession_exited(group_id, today):
-            await send_group_message(group_id, "今天已经退出夺舍了，明天会自动恢复。")
+            await send_group_message(
+                group_id,
+                f"我现在是机器人“{settings.persona_name}”，没有在夺舍。",
+            )
+    elif is_targeted_possession_command(event, text):
+        targets = mentioned_user_ids(event)
+        if len(targets) != 1:
+            await send_group_message(group_id, "用法：@我 夺舍 @一名群成员")
         else:
-            targets = mentioned_user_ids(event)
-            if len(targets) != 1:
-                await send_group_message(group_id, "用法：@我 指向夺舍 @一名群成员")
+            target_id = targets[0]
+            try:
+                name = await group_member_name(group_id, target_id)
+            except (RuntimeError, ValueError, httpx.HTTPError) as exc:
+                logger.warning("group member lookup failed: %s", exc)
+                name = await request.app.state.db.member_display_name(group_id, target_id)
+            if not name:
+                await send_group_message(group_id, "没有查到这名群成员，请确认对方仍在群里。")
             else:
-                target_id = targets[0]
-                try:
-                    name = await group_member_name(group_id, target_id)
-                except (RuntimeError, ValueError, httpx.HTTPError) as exc:
-                    logger.warning("group member lookup failed: %s", exc)
-                    name = await request.app.state.db.member_display_name(group_id, target_id)
-                if not name:
-                    await send_group_message(group_id, "没有查到这名群成员，请确认对方仍在群里。")
-                else:
-                    await request.app.state.db.set_targeted_possession(
-                        group_id, today, target_id, name
-                    )
-                    await send_group_message(
-                        group_id,
-                        f"夺舍成功，我现在是“{name}” (｀・ω・´)\n"
-                        f"正在后台学习{name}最近的说话习惯；本人或管理员可发送“@我 退出”。",
-                    )
-                    schedule_possession_style_learning(
-                        request, group_id, target_id, name
-                    )
+                await request.app.state.db.set_targeted_possession(
+                    group_id, today, target_id, name
+                )
+                await send_group_message(
+                    group_id,
+                    f"夺舍成功，我现在是“{name}”。正在读取最近的群消息学习语气；"
+                    "可以继续夺舍别人，退出时发送“@我 退出”。",
+                )
+                schedule_possession_style_learning(request, group_id, target_id, name)
     elif text in RANDOM_POSSESSION_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
-        if await request.app.state.db.possession_exited(group_id, today):
-            await send_group_message(group_id, "今天已经退出夺舍了，明天会自动恢复抽取。")
-            return {"ok": True}
-        possession = await request.app.state.db.get_or_create_daily_possession(group_id, today)
+        possession = await request.app.state.db.get_or_create_daily_possession(
+            group_id, today, reroll=True
+        )
         if possession:
             target_id, name, _ = possession
             await send_group_message(
@@ -961,6 +955,12 @@ async def onebot_webhook(
             target_id, name, mode = possession
             possession_name = name
             identity_prompt = possession_identity_prompt(name, mode)
+            style_task = request.app.state.style_learning_tasks.get(
+                (group_id, target_id)
+            )
+            if style_task and not style_task.done():
+                with suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(asyncio.shield(style_task), timeout=3)
             learned_style = await request.app.state.db.possession_style_profile(
                 group_id, target_id
             )

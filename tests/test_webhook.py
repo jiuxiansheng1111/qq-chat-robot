@@ -7,6 +7,7 @@ from app.main import (
     CAT_IMAGE_COMMANDS,
     NAILONG_IMAGE_COMMANDS,
     PIG_IMAGE_COMMANDS,
+    TARGETED_POSSESSION_COMMANDS,
     app,
     asks_for_sender_name,
     automatic_web_search_query,
@@ -18,6 +19,7 @@ from app.main import (
     extract_music_query,
     extract_search_query,
     is_identity_question,
+    is_targeted_possession_command,
     mentioned_image_command,
     mentioned_user_ids,
     message_text,
@@ -191,8 +193,6 @@ def test_targeted_mention_returns_member_but_not_bot():
 
 
 def test_plain_possession_alias_with_target_is_a_targeted_command():
-    from app.main import TARGETED_POSSESSION_COMMANDS
-
     previous = settings.onebot_self_id
     settings.onebot_self_id = "bot-1"
     try:
@@ -204,6 +204,15 @@ def test_plain_possession_alias_with_target_is_a_targeted_command():
         ]
         assert message_text(payload) in TARGETED_POSSESSION_COMMANDS
         assert mentioned_user_ids(payload) == ["member-2"]
+        assert is_targeted_possession_command(payload, message_text(payload))
+
+        tight = event("夺舍@羽入")
+        tight["message"] = [
+            {"type": "at", "data": {"qq": "bot-1"}},
+            {"type": "text", "data": {"text": "夺舍@羽入"}},
+            {"type": "at", "data": {"qq": "member-2"}},
+        ]
+        assert is_targeted_possession_command(tight, message_text(tight))
     finally:
         settings.onebot_self_id = previous
 
