@@ -791,9 +791,9 @@ def test_ultraman_followup_reuses_last_resolved_form(monkeypatch, tmp_path):
             assert first.status_code == 200
             assert second.status_code == 200
             assert len(sent) == 2
-            assert all("欧布奥特曼·雷霆肩章" in caption for _, caption in sent)
-            assert sent[-1][0] == "card://欧布奥特曼·雷霆肩章"
-            assert "吾辈把【欧布奥特曼·雷霆肩章】的图找来了" in sent[-1][1]
+            assert all("欧布奥特曼·暗耀形态" in caption for _, caption in sent)
+            assert sent[-1][0] == "card://欧布奥特曼·暗耀形态"
+            assert "吾辈把【欧布奥特曼·暗耀形态】的图找来了" in sent[-1][1]
     finally:
         settings.database_path = previous_database_path
         settings.onebot_api_base = previous_onebot_api_base
