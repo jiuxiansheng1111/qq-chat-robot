@@ -425,6 +425,22 @@ qq-chatrobot/
 
 ## 常见问题
 
+### 没有报错，但机器人突然不回复
+
+新版将限流拆成两层：所有入站消息只受高额度的防刷保护；真正进入通用 LLM 聊天时才使用较严格的 AI 限流。像 `/help`、群记忆关系直答等本地操作不会消耗 AI 聊天额度。触发任何限流时，机器人会在冷却周期内至少提示一次，而不是静默丢弃。
+
+默认值可在 `.env` 调整：
+
+```dotenv
+INGRESS_USER_RATE_LIMIT_PER_MINUTE=60
+INGRESS_GROUP_RATE_LIMIT_PER_MINUTE=300
+USER_RATE_LIMIT_PER_MINUTE=20
+GROUP_RATE_LIMIT_PER_MINUTE=120
+RATE_LIMIT_NOTICE_COOLDOWN_SECONDS=10
+```
+
+另外，普通文本发送现在会检查 NapCat/OneBot 的返回状态；如果 OneBot 返回 `status=failed`，服务端会记录真实错误，不再把“HTTP 请求发出去了”误当成“QQ群消息发送成功”。
+
 ### 本地 `https://127.0.0.1:3000` 无法访问
 
 NapCat 默认提供普通 HTTP，请使用 `http://127.0.0.1:3000`。`6099` 是 WebUI，`3000` 是 OneBot API。
