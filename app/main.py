@@ -157,33 +157,70 @@ async def lifespan(app: FastAPI):
     app.state.translation_cache = {}
     app.state.deduplicator = EventDeduplicator(settings.event_dedupe_ttl_seconds)
     registry.load_modules(settings.plugin_modules)
-    app.state.limiter = LocalRateLimiter(
-        limit=settings.user_rate_limit_per_minute, window_seconds=60
+    app.state.ingress_limiter = LocalRateLimiter(
+        limit=settings.ingress_user_rate_limit_per_minute,
+        window_seconds=60,
     )
-    app.state.group_limiter = LocalRateLimiter(
-        limit=settings.group_rate_limit_per_minute, window_seconds=60
+    app.state.ingress_group_limiter = LocalRateLimiter(
+        limit=settings.ingress_group_rate_limit_per_minute,
+        window_seconds=60,
+    )
+    app.state.llm_limiter = LocalRateLimiter(
+        limit=settings.user_rate_limit_per_minute,
+        window_seconds=60,
+    )
+    app.state.llm_group_limiter = LocalRateLimiter(
+        limit=settings.group_rate_limit_per_minute,
+        window_seconds=60,
+    )
+    app.state.rate_limit_notice_limiter = LocalRateLimiter(
+        limit=1,
+        window_seconds=max(1, settings.rate_limit_notice_cooldown_seconds),
     )
     app.state.cat_cache_task = asyncio.create_task(maintain_cat_gif_cache(settings))
     if settings.redis_url:
         try:
-            redis_limiter = RedisRateLimiter(
-                settings.redis_url, limit=settings.user_rate_limit_per_minute, window_seconds=60
+            redis_ingress_limiter = RedisRateLimiter(
+                settings.redis_url,
+                limit=settings.ingress_user_rate_limit_per_minute,
+                window_seconds=60,
             )
-            await redis_limiter.connect()
-            app.state.limiter = redis_limiter
-            redis_group_limiter = RedisRateLimiter(
-                settings.redis_url, limit=settings.group_rate_limit_per_minute, window_seconds=60
+            await redis_ingress_limiter.connect()
+            app.state.ingress_limiter = redis_ingress_limiter
+
+            redis_ingress_group_limiter = RedisRateLimiter(
+                settings.redis_url,
+                limit=settings.ingress_group_rate_limit_per_minute,
+                window_seconds=60,
             )
-            await redis_group_limiter.connect()
-            app.state.group_limiter = redis_group_limiter
+            await redis_ingress_group_limiter.connect()
+            app.state.ingress_group_limiter = redis_ingress_group_limiter
+
+            redis_llm_limiter = RedisRateLimiter(
+                settings.redis_url,
+                limit=settings.user_rate_limit_per_minute,
+                window_seconds=60,
+            )
+            await redis_llm_limiter.connect()
+            app.state.llm_limiter = redis_llm_limiter
+
+            redis_llm_group_limiter = RedisRateLimiter(
+                settings.redis_url,
+                limit=settings.group_rate_limit_per_minute,
+                window_seconds=60,
+            )
+            await redis_llm_group_limiter.connect()
+            app.state.llm_group_limiter = redis_llm_group_limiter
+
             redis_deduplicator = RedisEventDeduplicator(
-                settings.redis_url, settings.event_dedupe_ttl_seconds
+                settings.redis_url,
+                settings.event_dedupe_ttl_seconds,
             )
             await redis_deduplicator.connect()
             app.state.deduplicator = redis_deduplicator
-            logger.info("Redis rate limiter enabled")
+            logger.info("Redis rate limiters enabled")
         except (ImportError, OSError, RuntimeError, RedisError) as exc:
-            logger.warning("Redis unavailable, using local limiter: %s", exc)
+            logger.warning("Redis unavailable, using local limiters: %s", exc)
     try:
         yield
     finally:
