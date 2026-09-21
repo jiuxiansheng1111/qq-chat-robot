@@ -2,6 +2,7 @@ import base64
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from io import BytesIO
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from PIL import Image, ImageDraw, ImageFont
@@ -260,6 +261,28 @@ class _OpenGraphImageParser(HTMLParser):
             self.image_url = values.get("content", "")
 
 
+def _official_image_candidates(image_url: str) -> tuple[str, ...]:
+    """Keep the encoded path intact when the legacy official image host redirects."""
+    if image_url.startswith("http://"):
+        image_url = "https://" + image_url.removeprefix("http://")
+    if not image_url.startswith("https://"):
+        return ()
+
+    parts = urlsplit(image_url)
+    candidates: list[str] = []
+    if parts.hostname == "en.tsuburaya-prod.co.jp":
+        # That host currently redirects Japanese filenames after decoding them as
+        # latin-1, producing a mojibake path and a 404. Switching only the host
+        # preserves the original percent-encoded UTF-8 path on the same official CDN.
+        candidates.append(
+            urlunsplit(
+                ("https", "tsuburaya-prod.com", parts.path, parts.query, "")
+            )
+        )
+    candidates.append(image_url)
+    return tuple(dict.fromkeys(candidates))
+
+
 async def official_ultraman_image(hero: Ultraman, settings: Settings) -> str:
     page_url = f"{OFFICIAL_HERO_BASE_URL}/{hero.slug}"
     timeout = min(float(settings.media_timeout_seconds), 30.0)
@@ -271,17 +294,22 @@ async def official_ultraman_image(hero: Ultraman, settings: Settings) -> str:
         page.raise_for_status()
         parser = _OpenGraphImageParser()
         parser.feed(page.text)
-        if parser.image_url.startswith("http://"):
-            parser.image_url = "https://" + parser.image_url.removeprefix("http://")
-        if not parser.image_url.startswith("https://"):
+        candidates = _official_image_candidates(parser.image_url)
+        if not candidates:
             raise RuntimeError("圆谷官方角色页没有返回可用图片")
-        image = await client.get(parser.image_url)
-        image.raise_for_status()
-    if not image.headers.get("content-type", "").startswith("image/"):
-        raise RuntimeError("圆谷官方角色图片格式无效")
-    if len(image.content) > settings.media_max_bytes:
-        raise RuntimeError("圆谷官方角色图片超过大小限制")
-    return "base64://" + base64.b64encode(image.content).decode()
+        errors: list[str] = []
+        for image_url in candidates:
+            try:
+                image = await client.get(image_url)
+                image.raise_for_status()
+                if not image.headers.get("content-type", "").startswith("image/"):
+                    raise RuntimeError("图片响应格式无效")
+                if len(image.content) > settings.media_max_bytes:
+                    raise RuntimeError("图片超过大小限制")
+                return "base64://" + base64.b64encode(image.content).decode()
+            except (httpx.HTTPError, RuntimeError) as exc:
+                errors.append(str(exc))
+    raise RuntimeError("圆谷官方角色图片下载失败：" + "; ".join(errors))
 
 
 def render_ultraman_card(hero: Ultraman, image_file: str) -> str:
