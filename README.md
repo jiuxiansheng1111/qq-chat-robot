@@ -376,7 +376,7 @@ NapCat HTTP Client 仍可通过宿主机映射端口向 `http://127.0.0.1:8000/o
 .\.venv\Scripts\python.exe -m compileall -q app tests
 ```
 
-奥特曼角色池与帮助菜单的定向测试当前为 `7 passed`；完整测试套件仍建议在安装项目开发依赖后运行，外部服务测试默认跳过。
+当前本地非 live 测试基线：`85 passed, 15 skipped`。其中外部真实服务测试默认跳过；需要显式添加 `--live` 才会调用已配置的 LLM、OneBot 等外部服务。
 
 真实接口健康检查会读取 `.env` 并调用外部服务，可能消耗少量额度：
 
