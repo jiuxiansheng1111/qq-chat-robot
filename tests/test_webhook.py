@@ -630,10 +630,13 @@ def test_default_murasame_voice_uses_chinese_markers():
     assert ensure_default_murasame_voice("苟修金，这个没问题") == "苟修金，这个没问题"
 
 
-def test_persona_uses_苟修金_and_forbids_japanese_catchphrases():
+def test_persona_uses_苟修金_with_light_japanese_flavor():
     persona = settings.persona_prompt()
     assert "称提问者为「苟修金」" in persona
     assert "吾辈" in persona
-    assert "不要加入日语语气词或日语称呼" in persona
-    for token in ("お主", "じゃ", "のう", "ご主人", "Ciallo"):
-        assert token not in persona
+    for token in ("Ciallo～", "じゃ", "のう", "そうか", "なるほど", "大丈夫"):
+        assert token in persona
+    assert "主体始终用现代中文" in persona
+    assert "不要整句或整段切成日语" in persona
+    assert "お主" not in persona
+    assert "ご主人" not in persona
