@@ -21,7 +21,7 @@ from app.services.ultraman import (
 
 
 def test_every_ultraman_has_complete_collection_card_content():
-    assert len(ULTRAMAN_ROSTER) >= 100
+    assert len(ULTRAMAN_ROSTER) >= 120
     assert len({hero.name for hero in ULTRAMAN_ROSTER}) == len(ULTRAMAN_ROSTER)
     expected_expansion = {
         "奥特之王",
@@ -130,3 +130,70 @@ def test_full_catalog_image_and_text_fallback_include_every_entry(monkeypatch):
     combined = "\n".join(pages)
     assert all(hero.name in combined for hero in ULTRAMAN_ROSTER)
     assert all(len(page) <= 600 for page in pages)
+
+
+def test_tv_forms_and_true_fusion_forms_only():
+    names = {hero.name for hero in ULTRAMAN_ROSTER}
+
+    required = {
+        # 欧布：TV/电视特别篇实际登场形态
+        "欧布奥特曼·斯佩修姆哉佩利敖",
+        "欧布奥特曼·燃烧炸弹",
+        "欧布奥特曼·疾风形态",
+        "欧布奥特曼·雷霆肩章",
+        "欧布奥特曼·原生形态",
+        "欧布奥特曼·闪电攻击者",
+        "欧布奥特曼·艾梅利姆头镖",
+        # 捷德：TV正剧及《泽塔奥特曼》TV客串形态
+        "捷德奥特曼·原始形态",
+        "捷德奥特曼·刚燃形态",
+        "捷德奥特曼·机敏形态",
+        "捷德奥特曼·豪勇形态",
+        "捷德奥特曼·尊皇形态",
+        "捷德奥特曼·银河初升",
+        # 梦比优斯：TV形态 + 真正的奥特战士合体形态
+        "梦比优斯奥特曼·勇者形态",
+        "梦比优斯奥特曼·燃烧勇者",
+        "梦比优斯奥特曼·凤凰勇者",
+        "梦比优斯无限形态",
+        # 真正的奥特战士合体/融合战士
+        "超级奥特曼泰罗",
+        "雷杰多奥特曼",
+        "赛迦奥特曼",
+        "银河维克特利",
+        "罗布奥特曼",
+        "格罗布奥特曼",
+        "泰迦奥特曼·三重斯特利姆",
+        "令迦奥特曼",
+        "特利迦真理形态",
+        # 2025-2026 TV形态
+        "欧米伽奥特曼·雷基尼斯装甲",
+        "欧米伽奥特曼·特里加隆装甲",
+        "欧米伽奥特曼·瓦尔格尼斯装甲",
+        "欧米伽奥特曼·盖梅顿装甲",
+    }
+    forbidden = {
+        # 舞台 / 电影专属非合体 / 街机游戏专属
+        "盖亚奥特曼·超级至高型",
+        "欧布奥特曼·初始形态",
+        "欧布奥特曼·三位一体",
+        "欧布奥特曼·光子维克特利姆",
+        "欧布奥特曼·满月扎纳帝姆",
+        "捷德奥特曼·初始形态",
+        "捷德奥特曼·终极形态",
+        "捷德奥特曼·闪耀神秘",
+        "捷德奥特曼·三重头镖",
+        "捷德奥特曼·无限交叉",
+        "贝塔火花艾克斯",
+    }
+
+    assert required <= names
+    assert forbidden.isdisjoint(names)
+
+
+def test_tv_form_aliases_resolve_to_canonical_entries():
+    assert resolve_ultraman_query("欧布原生").name == "欧布奥特曼·原生形态"
+    assert resolve_ultraman_query("闪电攻击者").name == "欧布奥特曼·闪电攻击者"
+    assert resolve_ultraman_query("格罗布").name == "格罗布奥特曼"
+    assert resolve_ultraman_query("雷基尼斯装甲").name == "欧米伽奥特曼·雷基尼斯装甲"
+    assert resolve_ultraman_query("盖梅顿装甲").name == "欧米伽奥特曼·盖梅顿装甲"
