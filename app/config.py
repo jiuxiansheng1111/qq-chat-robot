@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     possession_style_history_count: int = 200
     possession_style_sample_limit: int = 30
     possession_style_refresh_hours: int = 24
+    possession_recall_history_count: int = 500
+    possession_recall_result_limit: int = 12
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
