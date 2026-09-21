@@ -183,12 +183,13 @@ def _build_ultraman_alias_index() -> dict[str, Ultraman]:
             index.setdefault(without_title, hero)
     for alias, canonical_name in _ULTRAMAN_ALIASES.items():
         index[_normalize_ultraman_name(alias)] = ULTRAMAN_BY_NAME[canonical_name]
-    for canonical_name, aliases in globals().get("_FORM_ALT_NAMES", {}).items():
-        hero = ULTRAMAN_BY_NAME.get(canonical_name)
-        if hero is None:
-            continue
-        for alias in aliases:
-            index[_normalize_ultraman_name(alias)] = hero
+    for mapping_name in ("_FORM_ALT_NAMES", "_RELATED_ALT_NAMES"):
+        for canonical_name, aliases in globals().get(mapping_name, {}).items():
+            hero = ULTRAMAN_BY_NAME.get(canonical_name)
+            if hero is None:
+                continue
+            for alias in aliases:
+                index[_normalize_ultraman_name(alias)] = hero
     return index
 
 
@@ -673,6 +674,20 @@ _FORM_IMAGE_SEARCH_QUERIES = {
     "欧米伽奥特曼·加梅顿装甲": "欧米伽奥特曼 加梅顿装甲 Gamedon Armor",
 }
 _FORM_VARIANT_NAMES = {item[0] for item in _FORM_VARIANTS}
+_RELATED_VARIANT_NAMES = {
+    "帝纳斯奥特曼",
+    "诺亚奥特曼",
+    "雷杰多奥特曼",
+    "贝利亚早期形态",
+    "托雷基亚早期形态",
+}
+_RELATED_ALT_NAMES = {
+    "帝纳斯奥特曼": ("ウルトラマンディナス", "Ultraman Dinas"),
+    "诺亚奥特曼": ("ウルトラマンノア", "Ultraman Noa"),
+    "雷杰多奥特曼": ("ウルトラマンレジェンド", "Ultraman Legend"),
+    "贝利亚早期形态": ("ウルトラマンベリアル アーリースタイル", "Ultraman Belial Early Style"),
+    "托雷基亚早期形态": ("ウルトラマントレギア アーリースタイル", "Ultraman Tregear Early Style"),
+}
 
 
 def ultraman_image_search_query(hero: Ultraman) -> str:
@@ -680,7 +695,7 @@ def ultraman_image_search_query(hero: Ultraman) -> str:
 
 
 def is_ultraman_form_variant(hero: Ultraman) -> bool:
-    return hero.name in _FORM_VARIANT_NAMES
+    return hero.name in _FORM_VARIANT_NAMES or hero.name in _RELATED_VARIANT_NAMES
 
 
 
