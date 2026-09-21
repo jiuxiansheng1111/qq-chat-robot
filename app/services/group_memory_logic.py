@@ -2,7 +2,6 @@ import re
 from collections import deque
 from dataclasses import dataclass
 
-
 IDENTITY_QUERY_SUFFIXES = (
     "指的是谁",
     "是什么",
