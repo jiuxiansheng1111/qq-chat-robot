@@ -141,20 +141,11 @@ POSSESSION_RECALL_QUERY_FILLERS = (
     "买过",
     "关于",
     "对于",
-    "对",
     "这个",
     "那个",
     "东西",
     "事情",
-    "事",
     "物品",
-    "人",
-    "吗",
-    "嘛",
-    "呢",
-    "呀",
-    "啊",
-    "么",
     "怎么样",
     "如何",
     "什么",
@@ -162,8 +153,9 @@ POSSESSION_RECALL_QUERY_FILLERS = (
     "哪一个",
     "哪款",
     "哪部",
+    "哪个角色",
+    "角色",
     "是谁",
-    "是",
 )
 
 
@@ -186,6 +178,8 @@ def possession_recall_terms(prompt: str) -> tuple[list[str], list[str]]:
             subject_terms.append(term)
 
     compact = re.sub(r"[\s，。！？!?、；;：:（）()【】\[\]<>《》~～…]+", "", value)
+    compact = re.sub(r"^(?:你们|你|本人)+", "", compact)
+    compact = re.sub(r"(?:吗|嘛|呢|呀|啊|么)+$", "", compact)
     for filler in sorted(POSSESSION_RECALL_QUERY_FILLERS, key=len, reverse=True):
         compact = compact.replace(filler, "")
     compact = compact.strip()
