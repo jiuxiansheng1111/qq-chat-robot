@@ -46,7 +46,7 @@ from app.services.possession_style import (
     fetch_member_style_image_refs,
     image_references_from_message,
     learn_possession_style,
-    possession_recall_prompt,
+    summarize_possession_recall,
     style_catchphrases,
     style_reference_examples,
 )
@@ -1374,16 +1374,6 @@ async def onebot_webhook(
             possession_name = name
             if group_memories:
                 persona_context.insert(0, group_memory_prompt(group_memories, name))
-            persisted_recent = await request.app.state.db.possession_style_messages(
-                group_id, target_id, limit=8
-            )
-            recent_messages = list(
-                request.app.state.recent_member_messages.get((group_id, target_id), ())
-            )
-            recent_messages.extend(persisted_recent)
-            recent_prompt = possession_recent_messages_prompt(name, recent_messages)
-            if recent_prompt:
-                persona_context.append(recent_prompt)
             identity_prompt = possession_identity_prompt(name, mode)
             if needs_translation(name):
                 try:
@@ -1426,10 +1416,11 @@ async def onebot_webhook(
             recall_samples.extend(
                 request.app.state.recent_member_messages.get(style_key, ())
             )
-            recall_context = possession_recall_prompt(
+            recall_context = await summarize_possession_recall(
                 name,
                 prompt,
                 recall_samples,
+                request.app.state.llm,
                 limit=settings.possession_recall_result_limit,
             )
             if recall_context:
