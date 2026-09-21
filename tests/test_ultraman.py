@@ -33,7 +33,7 @@ def test_every_ultraman_has_complete_collection_card_content():
         "贝利亚奥特曼",
         "极恶贝利亚",
         "闪耀迪迦",
-        "闪耀赛罗",
+        "赛罗奥特曼·闪耀型",
         "泽塔奥特曼·德尔塔天爪",
     }
     assert expected_expansion <= {hero.name for hero in ULTRAMAN_ROSTER}
@@ -109,7 +109,7 @@ def test_catalog_aliases_resolve_without_fuzzy_chat_matches():
     assert resolve_ultraman_query("奥特之父").name == "奥特之父"
     assert resolve_ultraman_query("贝利亚").name == "贝利亚奥特曼"
     assert resolve_ultraman_query("老贝").name == "贝利亚奥特曼"
-    assert resolve_ultraman_query("闪耀赛罗").name == "闪耀赛罗"
+    assert resolve_ultraman_query("赛罗奥特曼·闪耀型").name == "赛罗奥特曼·闪耀型"
     assert resolve_ultraman_query("泽塔 德尔塔天爪").name == "泽塔奥特曼·德尔塔天爪"
     assert resolve_ultraman_query("泽塔德尔塔天爪？").name == "泽塔奥特曼·德尔塔天爪"
     assert resolve_ultraman_query("介绍一下贝利亚").name == "贝利亚奥特曼"
@@ -139,13 +139,13 @@ def test_tv_forms_and_true_fusion_forms_only():
 
     required = {
         # 欧布：TV/电视特别篇实际登场形态
-        "欧布奥特曼·斯佩修姆哉佩利敖",
-        "欧布奥特曼·燃烧炸弹",
+        "欧布奥特曼·重光形态",
+        "欧布奥特曼·暴炎形态",
         "欧布奥特曼·疾风形态",
         "欧布奥特曼·暗耀形态",
         "欧布奥特曼·原生形态",
-        "欧布奥特曼·闪电攻击者",
-        "欧布奥特曼·艾梅利姆头镖",
+        "欧布奥特曼·煌闪形态",
+        "欧布奥特曼·智勇形态",
         # 捷德：TV正剧及《泽塔奥特曼》TV客串形态
         "捷德奥特曼·原始形态",
         "捷德奥特曼·刚燃形态",
@@ -157,22 +157,22 @@ def test_tv_forms_and_true_fusion_forms_only():
         "梦比优斯奥特曼·勇者形态",
         "梦比优斯奥特曼·燃烧勇者",
         "梦比优斯奥特曼·凤凰勇者",
-        "梦比优斯无限形态",
+        "梦比优斯奥特曼·无限形态",
         # 真正的奥特战士合体/融合战士
         "超级奥特曼泰罗",
         "雷杰多奥特曼",
         "赛迦奥特曼",
-        "银河维克特利",
+        "银河维克特利奥特曼",
         "罗布奥特曼",
         "格罗布奥特曼",
-        "泰迦奥特曼·三重斯特利姆",
+        "泰迦奥特曼·三重斯特利姆形态",
         "令迦奥特曼",
-        "特利迦真理形态",
+        "真理特利迦",
         # 2025-2026 TV形态
-        "欧米伽奥特曼·雷基尼斯装甲",
+        "欧米伽奥特曼·雷金斯装甲",
         "欧米伽奥特曼·特里加隆装甲",
-        "欧米伽奥特曼·瓦尔格尼斯装甲",
-        "欧米伽奥特曼·盖梅顿装甲",
+        "欧米伽奥特曼·瓦尔根斯装甲",
+        "欧米伽奥特曼·加梅顿装甲",
     }
     forbidden = {
         # 舞台 / 电影专属非合体 / 街机游戏专属
@@ -193,6 +193,84 @@ def test_tv_forms_and_true_fusion_forms_only():
     assert forbidden.isdisjoint(names)
 
 
+def test_every_form_has_official_alias_metadata_and_resolves_back():
+    form_names = {item[0] for item in ultraman_module._FORM_VARIANTS}
+    assert set(ultraman_module._FORM_ALT_NAMES) == form_names
+
+    for canonical_name, aliases in ultraman_module._FORM_ALT_NAMES.items():
+        assert aliases
+        assert all(alias.strip() for alias in aliases)
+        for alias in aliases:
+            resolved = resolve_ultraman_query(alias)
+            assert resolved is not None
+            assert resolved.name == canonical_name
+
+
+def test_audited_legacy_names_still_resolve_to_new_display_names():
+    expected = {
+        "梦比优斯无限形态": "梦比优斯奥特曼·无限形态",
+        "强壮日冕赛罗": "赛罗奥特曼·强壮日冕型",
+        "月神奇迹赛罗": "赛罗奥特曼·月神奇迹型",
+        "闪耀赛罗": "赛罗奥特曼·闪耀型",
+        "赛罗奥特曼 超越形态": "赛罗奥特曼·无限形态",
+        "银河斯特利姆": "银河奥特曼·斯特利姆形态",
+        "银河维克特利": "银河维克特利奥特曼",
+        "艾克斯奥特曼 超越型": "艾克斯奥特曼·超越形态",
+        "欧布奥特曼 斯佩修姆哉佩利敖": "欧布奥特曼·重光形态",
+        "欧布奥特曼 燃烧炸弹": "欧布奥特曼·暴炎形态",
+        "欧布奥特曼 闪电攻击者": "欧布奥特曼·煌闪形态",
+        "欧布奥特曼 艾梅利姆头镖": "欧布奥特曼·智勇形态",
+        "泰迦奥特曼 三重斯特利姆": "泰迦奥特曼·三重斯特利姆形态",
+        "特利迦真理形态": "真理特利迦",
+        "布莱泽奥特曼 法德兰装甲": "布莱泽奥特曼·法多兰盔甲",
+        "亚刻奥特曼 太阳装甲": "亚刻奥特曼·索利斯装甲",
+        "亚刻奥特曼 月亮装甲": "亚刻奥特曼·露娜装甲",
+        "欧米伽奥特曼 雷基尼斯装甲": "欧米伽奥特曼·雷金斯装甲",
+        "欧米伽奥特曼 瓦尔格尼斯装甲": "欧米伽奥特曼·瓦尔根斯装甲",
+        "欧米伽奥特曼 盖梅顿装甲": "欧米伽奥特曼·加梅顿装甲",
+    }
+    for alias, canonical_name in expected.items():
+        resolved = resolve_ultraman_query(alias)
+        assert resolved is not None
+        assert resolved.name == canonical_name
+
+
+def test_orb_official_chinese_aliases_are_not_cross_wired():
+    assert resolve_ultraman_query("欧布智勇形态").name == "欧布奥特曼·智勇形态"
+    assert resolve_ultraman_query("艾梅利姆头镖").name == "欧布奥特曼·智勇形态"
+    assert resolve_ultraman_query("欧布煌闪形态").name == "欧布奥特曼·煌闪形态"
+    assert resolve_ultraman_query("闪电攻击者").name == "欧布奥特曼·煌闪形态"
+
+
+def test_related_special_forms_also_require_specific_artwork():
+    expected = {
+        "帝纳斯奥特曼",
+        "诺亚奥特曼",
+        "雷杰多奥特曼",
+        "贝利亚早期形态",
+        "托雷基亚早期形态",
+    }
+    assert ultraman_module._RELATED_VARIANT_NAMES == expected
+    for name in expected:
+        hero = ultraman_module.ULTRAMAN_BY_NAME[name]
+        assert is_ultraman_form_variant(hero)
+
+    for canonical_name, aliases in ultraman_module._RELATED_ALT_NAMES.items():
+        for alias in aliases:
+            resolved = resolve_ultraman_query(alias)
+            assert resolved is not None
+            assert resolved.name == canonical_name
+
+
+def test_form_image_search_is_specific_for_every_form():
+    for form_name, *_ in ultraman_module._FORM_VARIANTS:
+        hero = ultraman_module.ULTRAMAN_BY_NAME[form_name]
+        query = ultraman_image_search_query(hero)
+        assert query.strip()
+        base_name = form_name.split("·", 1)[0]
+        assert base_name in query or form_name in query
+
+
 def test_orb_dark_form_image_search_uses_common_chinese_alias():
     hero = ultraman_module.ULTRAMAN_BY_NAME["欧布奥特曼·暗耀形态"]
     query = ultraman_image_search_query(hero)
@@ -208,10 +286,10 @@ def test_tv_form_aliases_resolve_to_canonical_entries():
     assert resolve_ultraman_query("雷霆胸章").name == "欧布奥特曼·暗耀形态"
     assert resolve_ultraman_query("Thunder Breastar").name == "欧布奥特曼·暗耀形态"
     assert resolve_ultraman_query("サンダーブレスター").name == "欧布奥特曼·暗耀形态"
-    assert resolve_ultraman_query("闪电攻击者").name == "欧布奥特曼·闪电攻击者"
+    assert resolve_ultraman_query("闪电攻击者").name == "欧布奥特曼·煌闪形态"
     assert resolve_ultraman_query("格罗布").name == "格罗布奥特曼"
-    assert resolve_ultraman_query("雷基尼斯装甲").name == "欧米伽奥特曼·雷基尼斯装甲"
-    assert resolve_ultraman_query("盖梅顿装甲").name == "欧米伽奥特曼·盖梅顿装甲"
+    assert resolve_ultraman_query("雷基尼斯装甲").name == "欧米伽奥特曼·雷金斯装甲"
+    assert resolve_ultraman_query("盖梅顿装甲").name == "欧米伽奥特曼·加梅顿装甲"
 
 
 @pytest.mark.asyncio
@@ -279,7 +357,7 @@ async def test_form_without_exact_image_never_falls_back_to_base_art(monkeypatch
         return original_client(**kwargs)
 
     monkeypatch.setattr(ultraman_module.httpx, "AsyncClient", mocked_client)
-    hero = ultraman_module.ULTRAMAN_BY_NAME["闪耀赛罗"]
+    hero = ultraman_module.ULTRAMAN_BY_NAME["赛罗奥特曼·闪耀型"]
     assert is_ultraman_form_variant(hero)
 
     with pytest.raises(RuntimeError, match="没有返回可用图片"):

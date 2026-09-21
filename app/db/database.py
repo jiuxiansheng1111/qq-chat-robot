@@ -159,10 +159,33 @@ class Database:
                 await db.execute(
                     "ALTER TABLE daily_possession ADD COLUMN mode TEXT NOT NULL DEFAULT 'random'"
                 )
-            # Migrate the old mistranslated display key without losing collections.
-            await db.execute(
+            # Keep old collection rows valid when display names are corrected.
+            ultraman_name_migrations = (
+                ("欧布奥特曼·雷霆肩章", "欧布奥特曼·暗耀形态"),
+                ("梦比优斯无限形态", "梦比优斯奥特曼·无限形态"),
+                ("强壮日冕赛罗", "赛罗奥特曼·强壮日冕型"),
+                ("月神奇迹赛罗", "赛罗奥特曼·月神奇迹型"),
+                ("闪耀赛罗", "赛罗奥特曼·闪耀型"),
+                ("赛罗奥特曼·超越形态", "赛罗奥特曼·无限形态"),
+                ("银河斯特利姆", "银河奥特曼·斯特利姆形态"),
+                ("银河维克特利", "银河维克特利奥特曼"),
+                ("艾克斯奥特曼·超越型", "艾克斯奥特曼·超越形态"),
+                ("欧布奥特曼·斯佩修姆哉佩利敖", "欧布奥特曼·重光形态"),
+                ("欧布奥特曼·燃烧炸弹", "欧布奥特曼·暴炎形态"),
+                ("欧布奥特曼·闪电攻击者", "欧布奥特曼·煌闪形态"),
+                ("欧布奥特曼·艾梅利姆头镖", "欧布奥特曼·智勇形态"),
+                ("泰迦奥特曼·三重斯特利姆", "泰迦奥特曼·三重斯特利姆形态"),
+                ("特利迦真理形态", "真理特利迦"),
+                ("布莱泽奥特曼·法德兰装甲", "布莱泽奥特曼·法多兰盔甲"),
+                ("亚刻奥特曼·太阳装甲", "亚刻奥特曼·索利斯装甲"),
+                ("亚刻奥特曼·月亮装甲", "亚刻奥特曼·露娜装甲"),
+                ("欧米伽奥特曼·雷基尼斯装甲", "欧米伽奥特曼·雷金斯装甲"),
+                ("欧米伽奥特曼·瓦尔格尼斯装甲", "欧米伽奥特曼·瓦尔根斯装甲"),
+                ("欧米伽奥特曼·盖梅顿装甲", "欧米伽奥特曼·加梅顿装甲"),
+            )
+            await db.executemany(
                 "UPDATE daily_ultraman SET ultraman_name = ? WHERE ultraman_name = ?",
-                ("欧布奥特曼·暗耀形态", "欧布奥特曼·雷霆肩章"),
+                ((new_name, old_name) for old_name, new_name in ultraman_name_migrations),
             )
             await db.commit()
 
