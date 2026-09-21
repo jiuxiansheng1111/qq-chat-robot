@@ -166,11 +166,11 @@ async def lifespan(app: FastAPI):
         window_seconds=60,
     )
     app.state.llm_limiter = LocalRateLimiter(
-        limit=settings.user_rate_limit_per_minute,
+        limit=settings.llm_user_rate_limit_per_minute,
         window_seconds=60,
     )
     app.state.llm_group_limiter = LocalRateLimiter(
-        limit=settings.group_rate_limit_per_minute,
+        limit=settings.llm_group_rate_limit_per_minute,
         window_seconds=60,
     )
     app.state.rate_limit_notice_limiter = LocalRateLimiter(
@@ -198,7 +198,7 @@ async def lifespan(app: FastAPI):
 
             redis_llm_limiter = RedisRateLimiter(
                 settings.redis_url,
-                limit=settings.user_rate_limit_per_minute,
+                limit=settings.llm_user_rate_limit_per_minute,
                 window_seconds=60,
             )
             await redis_llm_limiter.connect()
@@ -206,7 +206,7 @@ async def lifespan(app: FastAPI):
 
             redis_llm_group_limiter = RedisRateLimiter(
                 settings.redis_url,
-                limit=settings.group_rate_limit_per_minute,
+                limit=settings.llm_group_rate_limit_per_minute,
                 window_seconds=60,
             )
             await redis_llm_group_limiter.connect()
