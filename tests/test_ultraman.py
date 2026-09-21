@@ -1,8 +1,10 @@
 import base64
+from io import BytesIO
 from types import SimpleNamespace
 
 import httpx
 import pytest
+from PIL import Image
 
 import app.services.ultraman as ultraman_module
 from app.services.ultraman import (
@@ -10,12 +12,26 @@ from app.services.ultraman import (
     ULTRAMAN_PROFILES,
     ULTRAMAN_ROSTER,
     official_ultraman_image,
+    render_ultraman_card,
     ultraman_profile_text,
 )
 
 
 def test_every_ultraman_has_complete_collection_card_content():
-    assert len(ULTRAMAN_ROSTER) >= 30
+    assert len(ULTRAMAN_ROSTER) >= 100
+    assert len({hero.name for hero in ULTRAMAN_ROSTER}) == len(ULTRAMAN_ROSTER)
+    expected_expansion = {
+        "奥特之王",
+        "诺亚奥特曼",
+        "雷杰多奥特曼",
+        "赛迦奥特曼",
+        "贝利亚奥特曼",
+        "极恶贝利亚",
+        "闪耀迪迦",
+        "闪耀赛罗",
+        "泽塔奥特曼·德尔塔天爪",
+    }
+    assert expected_expansion <= {hero.name for hero in ULTRAMAN_ROSTER}
     for hero in ULTRAMAN_ROSTER:
         profile = ULTRAMAN_PROFILES[hero.name]
         assert profile.quote.strip()
@@ -64,3 +80,16 @@ async def test_official_image_bypasses_broken_legacy_host_redirect(monkeypatch):
     )
 
     assert base64.b64decode(result.removeprefix("base64://")) == b"official-ultraman-image"
+
+
+def test_long_form_name_renders_inside_collection_card():
+    source = BytesIO()
+    Image.new("RGB", (1200, 900), "navy").save(source, format="JPEG")
+    hero = next(
+        item for item in ULTRAMAN_ROSTER if item.name == "泽塔奥特曼·德尔塔天爪"
+    )
+    result = render_ultraman_card(
+        hero, "base64://" + base64.b64encode(source.getvalue()).decode()
+    )
+    rendered = Image.open(BytesIO(base64.b64decode(result.removeprefix("base64://"))))
+    assert rendered.size == (900, 1200)

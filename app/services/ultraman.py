@@ -2,7 +2,7 @@ import base64
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from io import BytesIO
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import httpx
 from PIL import Image, ImageDraw, ImageFont
@@ -19,6 +19,8 @@ OFFICIAL_USER_AGENT = (
 class Ultraman:
     name: str
     slug: str
+    page_path: str = ""
+    image_hint: str = ""
 
 
 @dataclass(frozen=True)
@@ -247,17 +249,166 @@ ULTRAMAN_DEBUT_YEARS = {
     "提欧奥特曼": 2026,
 }
 
+# The first version only contained one default form for each TV lead.  Keep the
+# catalog data here so every form is independently collectible without changing
+# the persistence schema (the database stores the display name as its key).
+_EXPANDED_ULTRAMAN_DATA = (
+    # Official hero encyclopedia entries omitted by the original 30-character pool.
+    ("佐菲奥特曼", "zoffy", "", 1967, "宇宙警备队队长，M87光线拥有顶尖威力。", "多次在奥特兄弟陷入绝境时率领援军抵达。"),
+    ("奥特之父", "father-of-ultra", "", 1972, "光之国宇宙警备队大队长，象征久经战火的领袖力量。", "在奥特大战争中守护光之国，并培养一代代年轻战士。"),
+    ("奥特之母", "mother-of-ultra", "", 1973, "银十字军队长，拥有卓越的治愈与复苏能力。", "她以温柔而坚定的光守护宇宙警备队员。"),
+    ("阿斯特拉奥特曼", "astra", "", 1974, "雷欧的弟弟，经历磨难后练就敏捷而坚韧的宇宙拳法。", "L77星毁灭后与兄长重逢，并肩守护宇宙。"),
+    ("奥特之王", "ultraman-king", "", 1974, "传说中的超人，能够干涉宇宙尺度的灾难与奇迹。", "独居王者之星，在真正的绝境中为年轻战士指明道路。"),
+    ("乔尼亚斯奥特曼", "ultraman-joneus", "", 1979, "来自U40的强大战士，体型与能量均可自由变化。", "与科学警备队员光超一郎并肩迎战怪兽与宇宙威胁。"),
+    ("尤莉安奥特曼", "yullian", "", 1981, "光之国王族成员，兼具战斗意志与守护者的气度。", "来到地球后与爱迪并肩作战，也长期活跃于宇宙警备队。"),
+    ("史考特奥特曼", "ultraman-scott", "", 1989, "奥特美国三人组的队长型战士，擅长正面格斗。", "追击索尔金特来到地球，与伙伴共同守护美国大陆。"),
+    ("贝斯奥特曼", "ultrawoman-beth", "", 1989, "奥特美国三人组中灵活而果敢的女战士。", "与贝斯·奥布莱恩合体，在陌生星球承担守护使命。"),
+    ("查克奥特曼", "ultraman-chuck", "", 1989, "沉着稳健的奥特美国战士，善于分析战局。", "与史考特、贝斯组成团队对抗宇宙生物兵器。"),
+    ("葛雷奥特曼", "ultraman-great", "", 1990, "招式丰富、气质沉稳，擅长处理戈迪斯细胞引发的危机。", "在火星与杰克·辛多融合，随后来到地球继续战斗。"),
+    ("帕瓦特奥特曼", "ultraman-powered", "", 1993, "来自M78星云，以强健体魄和梅加斯佩修姆光线战斗。", "追踪巴尔坦星人来到地球，与W.I.N.R.成员凯伊合体。"),
+    ("奈欧斯奥特曼", "ultraman-neos", "", 2000, "宇宙保安厅的精锐战士，攻防均衡且行动迅捷。", "在黑暗物质影响太阳系时，与神乐元气共同守护地球。"),
+    ("赛文21奥特曼", "ultraseven-21", "", 2000, "擅长隐秘行动与头镖战法的宇宙保安厅精英。", "经常先行调查威胁，并在关键时刻与奈欧斯并肩作战。"),
+    ("阿古茹奥特曼", "ultraman-agul", "", 1998, "由海洋之光诞生，战斗冷峻凌厉，擅长光剑与光子粉碎机。", "藤宫博也承载海洋意志，在冲突与理解后选择守护整个地球。"),
+    ("杰斯提斯奥特曼", "ultraman-justice", "", 2002, "贯彻宇宙正义的战士，拥有标准与粉碎两种战斗姿态。", "最初执行宇宙裁决，后来因理解人类的可能性与高斯并肩。"),
+    ("杰诺奥特曼", "ultraman-xenon", "", 2005, "麦克斯的可靠同伴，曾送来麦克斯银河扭转战局。", "作为文明监视员的一员，在宇宙危机中支援地球战线。"),
+    ("希卡利奥特曼", "ultraman-hikari", "", 2006, "兼具顶尖科学头脑与骑士剑术的蓝族战士。", "曾被复仇执念化为猎手骑士剑，最终重拾光并与梦比优斯并肩。"),
+    ("格丽乔奥特曼", "ultrawoman-grigio", "", 2019, "擅长防御与治疗，以温柔之光支援伙伴。", "凑朝阳继承光之力量后，与罗索和布鲁组成真正的三兄妹战线。"),
+    ("泰塔斯奥特曼", "ultraman-titas", "", 2019, "来自U40的贤者与力士，肌肉中蕴含冷静判断。", "作为三人小队成员寄宿于工藤优幸体内，为荣誉与友情而战。"),
+    ("风马奥特曼", "ultraman-fuma", "", 2019, "来自O-50的速度型战士，忍者般的光轮技变化莫测。", "凭自身努力获得光之力量，并成为三人小队最迅捷的一翼。"),
+    ("利布特奥特曼", "ultraman-ribut", "", 2014, "银河救援队成员，使用利布特盾与精确格斗保护生命。", "活跃在多元宇宙救援前线，面对未知灾害总是率先出动。"),
+    ("雷古洛思奥特曼", "ultraman-regulos", "", 2021, "掌握赤龙白虎拳的宇宙幻兽拳斗士。", "在D60修行并背负同门意志，于绝境中完成真正的传承。"),
+    ("帝纳斯奥特曼", "ultraman-decker", "", 2023, "以怪兽卡片之力战斗的女性光之巨人。", "拉维安星少女帝纳斯得到戴拿之光后，以自己的方式延续希望。"),
+    # Legendary and dark Ultras. Some use an official related page when no hero entry exists.
+    ("诺亚奥特曼", "ultraman-nexus", "", 2004, "跨越时空的究极光之巨人，拥有诺亚之翼与近乎神迹的力量。", "奈克瑟斯之光不断进化后显现的本来姿态，是传承与希望的终点。"),
+    ("雷杰多奥特曼", "ultraman-cosmos", "", 2003, "高斯与杰斯提斯之光融合而成的宇宙传说，能够推动或化解终极能量。", "当两种正义真正达成一致时，宇宙意志让传说之光降临。"),
+    ("赛迦奥特曼", "ultraman-zero", "/business/titlelist/8015", 2012, "由赛罗、戴拿与高斯的光和人类勇气共同诞生的奇迹战士。", "在未来地球的绝望战场上，三道跨越宇宙的光合为希望。"),
+    ("贝利亚奥特曼", "ultraman-belial", "/encyclopedia/ultraman-belial", 2009, "手持终极战斗仪的黑暗奥特战士，能够统率百体怪兽。", "曾是光之国战士，却因追逐等离子火花的力量而坠入黑暗。"),
+    ("贝利亚早期形态", "ultraman-belial", "/encyclopedia/ultraman-belial", 2020, "尚未被雷布朗多之力侵蚀的银红战士，骄傲而好胜。", "奥特大战争时期与健并肩作战，命运尚未滑向黑暗深渊。"),
+    ("凯撒贝利亚", "kaiser-belial", "/encyclopedia/kaiser-belial", 2010, "披挂猩红皇袍、统治银河帝国的贝利亚强化姿态。", "在异宇宙建立帝国，以艾美拉鲁矿石发动跨星系侵略。"),
+    ("电弧贝利亚", "arch-belial", "/encyclopedia/arch-belial", 2010, "吞噬巨量艾美拉鲁矿石后形成的三百米超巨大形态。", "失控的能量让皇帝化为足以摧毁行星的宇宙巨兽。"),
+    ("极恶贝利亚", "ultraman-belial-atrocious", "/encyclopedia/ultraman-belial-atrocious", 2017, "融合黑暗路基艾尔与安培拉星人力量，能吸收奥特之王能量。", "贝利亚以恶魔融合升华抵达极恶形态，成为捷德最终必须跨越的宿命。"),
+    ("托雷基亚奥特曼", "ultraman-tregear", "/encyclopedia/ultraman-tregear", 2019, "以优雅言辞玩弄人心、操纵混沌之力的堕落蓝族。", "曾是泰罗挚友与光之国科学家，因质疑光明与正义走向虚无。"),
+    ("托雷基亚早期形态", "ultraman-tregear", "/encyclopedia/ultraman-tregear", 2020, "尚在光之国科学技术局时期的蓝族研究者。", "他曾真诚追寻力量与真理，后来却在自我怀疑中偏离道路。"),
+    ("黑暗特利迦", "ultraman-trigger", "/encyclopedia/trigger-dark", 2021, "三千万年前的黑暗巨人，以强横蛮力压制对手。", "特利迦选择光明前的旧姿态，也在伊格尼斯手中获得新的意志。"),
+    ("邪恶迪迦", "ultraman-tiga", "/encyclopedia/evil-tiga", 1997, "错误之心驾驭巨人石像后诞生的扭曲之光。", "正木敬吾试图凭科学复制光，却因傲慢失去控制。"),
+    ("黑暗扎基", "ultraman-nexus", "/encyclopedia/dark-zagi", 2004, "以诺亚为蓝本制造、最终失控的黑暗破坏神。", "跨越漫长布局吸收恐惧，最终在新宿决战中直面诺亚之光。"),
+)
+
+_FORM_VARIANTS = (
+    ("迪迦奥特曼·强力型", "ultraman-tiga", 1996, "力量与近身战显著强化的红色形态。", "迪迦将复合型能量集中于力量后完成类型转换。"),
+    ("迪迦奥特曼·空中型", "ultraman-tiga", 1996, "速度、飞行与远距离技巧强化的紫色形态。", "面对高速敌人时，迪迦以轻盈姿态夺回天空主动权。"),
+    ("闪耀迪迦", "ultraman-tiga", 1996, "汇聚全人类希望之光诞生的金色奇迹形态。", "孩子们化作光进入石像，让已经倒下的迪迦再次站起。"),
+    ("黑暗迪迦", "ultraman-tiga", 2000, "迪迦在超古代文明时期拥有的黑暗本源姿态。", "在最终圣战的记忆中，光明选择之前的过去重新浮现。"),
+    ("戴拿奥特曼·强壮型", "ultraman-dyna", 1997, "以红色力量压制敌人的重战形态。", "戴拿面对需要正面突破的战局时进行类型转换。"),
+    ("戴拿奥特曼·奇迹型", "ultraman-dyna", 1997, "操纵超能力、速度与空间能量的蓝色形态。", "飞鸟的想象与宇宙之光结合，创造难以预测的奇迹战法。"),
+    ("盖亚奥特曼V2", "ultraman-gaia", 1999, "同时拥有大地与部分海洋之光，整体能力全面跃升。", "藤宫将阿古茹之光托付给我梦，两位地球之子的信念合流。"),
+    ("盖亚奥特曼·至高型", "ultraman-gaia", 1999, "将大地与海洋力量完全释放的红黑最强姿态。", "只有当两道地球之光真正共鸣，至高形态才会震撼降临。"),
+    ("阿古茹奥特曼V2", "ultraman-agul", 1999, "重生后的海洋之光，力量、光剑与防御均大幅强化。", "藤宫重新理解地球意志后，再次获得海洋认可。"),
+    ("高斯奥特曼·日冕模式", "ultraman-cosmos", 2001, "面对无法感化之敌时使用的红色战斗模式。", "慈爱的月神之光收起温柔，将意志转化为炽热力量。"),
+    ("高斯奥特曼·日蚀模式", "ultraman-cosmos", 2002, "兼具月神的温柔与日冕的力量，攻守与净化并重。", "武藏与高斯心灵进一步融合后诞生的勇气之光。"),
+    ("高斯奥特曼·未来模式", "ultraman-cosmos", 2003, "接受伙伴未来之光后抵达的究极模式。", "为了与杰斯提斯共同阻止最终重置，高斯跨越自身极限。"),
+    ("杰斯提斯奥特曼·粉碎模式", "ultraman-justice", 2003, "将宇宙正义转化为压倒性格斗力量的强化姿态。", "杰斯提斯认可人类未来后，以全部力量守护自己的选择。"),
+    ("奈克瑟斯奥特曼·青年形态", "ultraman-nexus", 2004, "展开美塔领域、发挥适能者意志的红色战斗形态。", "适能者与光建立更深纽带后，奈克瑟斯完成阶段性进化。"),
+    ("奈克瑟斯奥特曼·青年蓝色形态", "ultraman-nexus", 2004, "以速度与弓箭光线见长的蓝色进化形态。", "千树怜短暂而炽烈的生命，让光呈现出自由迅疾的姿态。"),
+    ("梦比优斯奥特曼·勇者形态", "ultraman-mebius", 2006, "得到骑士气息后掌握双腕光剑的强化形态。", "希卡利将认可与力量交给未来，友情化作新的剑锋。"),
+    ("梦比优斯奥特曼·燃烧勇者", "ultraman-mebius", 2006, "伙伴羁绊化作火焰纹章，爆发力与格斗能力急剧提升。", "GUYS全员的友情让梦比优斯在烈焰中完成再生。"),
+    ("梦比优斯奥特曼·凤凰勇者", "ultraman-mebius", 2007, "梦比优斯、希卡利与GUYS伙伴之心融合的最终形态。", "地球最终决战中，彼此信赖让分散的生命化作不灭凤凰。"),
+    ("梦比优斯无限形态", "ultraman-mebius", 2006, "与奥特六兄弟力量融合诞生的电影级究极形态。", "面对究极超兽萨乌鲁斯，跨越世代的兄弟之光合而为一。"),
+    ("终极赛罗", "ultraman-zero", 2010, "披挂诺亚赐予的帕拉吉之盾，可穿越次元并化作终极圣盾。", "同伴与整个宇宙的光回应赛罗，传说装备在绝境中完成。"),
+    ("强壮日冕赛罗", "ultraman-zero", 2012, "继承戴拿强壮型与高斯日冕力量的红色重战形态。", "赛迦分离后留下的伙伴之光，成为赛罗新的战斗可能。"),
+    ("月神奇迹赛罗", "ultraman-zero", 2012, "融合高斯月神与戴拿奇迹力量的蓝色超能力形态。", "温柔与奇迹并存，使赛罗能够操纵空间并净化敌人。"),
+    ("闪耀赛罗", "ultraman-zero", 2013, "情感突破极限后觉醒，能够逆转局部时间的金色形态。", "为了挽回同伴，赛罗让体内全部光芒燃烧成奇迹。"),
+    ("赛罗奥特曼·超越形态", "ultraman-zero", 2017, "新生代四位战士力量凝聚而成的高速强化形态。", "在捷德的宇宙中，人们的愿望让受损的赛罗再次超越极限。"),
+    ("银河斯特利姆", "ultraman-ginga", 2014, "融合泰罗与奥特六兄弟必杀技的强化形态。", "泰罗化作斯特利姆手镯，把兄弟们的战斗记忆托付给银河。"),
+    ("银河维克特利", "ultraman-ginga", 2015, "银河与维克特利合体，并能使用历代奥特十勇士之力。", "两位年轻战士真正同心后，跨越系列的光汇成一体。"),
+    ("维克特利骑士", "ultraman-victory", 2015, "持有骑士剑笛、能够运用净化力量的蓝色强化形态。", "希卡利将骑士之力交给翔，让地底战士承担更广阔的守护责任。"),
+    ("艾克斯奥特曼·超越型", "ultraman-x", 2015, "由彩虹之力进化而成，使用艾克斯头镖战斗。", "大地与艾克斯的羁绊跨过数据与生命边界，唤醒真正进化。"),
+    ("贝塔火花艾克斯", "ultraman-x", 2016, "装备贝塔火花圣剑，融合初代与迪迦之力的究极装甲。", "地球所有生命的光汇入圣剑，赋予艾克斯迎战宇宙之暗的力量。"),
+    ("欧布奥特曼·斯佩修姆哉佩利敖", "ultraman-orb", 2016, "融合初代与迪迦力量，攻守均衡的基本融合形态。", "红凯借用两位前辈之光，重新迈出成为英雄的一步。"),
+    ("欧布奥特曼·燃烧炸弹", "ultraman-orb", 2016, "融合泰罗与梦比优斯力量，擅长烈焰与爆发格斗。", "两道燃烧的奥特之心在欧布体内化作灼热战甲。"),
+    ("欧布奥特曼·疾风形态", "ultraman-orb", 2016, "融合杰克与赛罗力量，以长枪和高速连击作战。", "跨越世代的敏捷技巧让欧布如暴风般切开战场。"),
+    ("欧布奥特曼·雷霆肩章", "ultraman-orb", 2016, "融合佐菲与贝利亚力量，拥有危险而惊人的破坏力。", "红凯直面黑暗力量，在失控边缘学会接受自己的过去。"),
+    ("欧布奥特曼·原生形态", "ultraman-orb", 2016, "使用欧布圣剑与四元素之力的本来姿态。", "红凯跨越迷惘，终于不再只借前辈力量，而是找回自己的光。"),
+    ("欧布奥特曼·三位一体", "ultraman-orb", 2017, "融合银河、维克特利与艾克斯力量的电影究极形态。", "三位新生代英雄与欧布的羁绊共同点亮三重光轮。"),
+    ("捷德奥特曼·原始形态", "ultraman-geed", 2017, "融合初代与贝利亚力量，野性外表下坚持正义。", "朝仓陆拒绝由血统决定命运，以自己的选择成为英雄。"),
+    ("捷德奥特曼·刚燃形态", "ultraman-geed", 2017, "融合赛文与雷欧力量，铠甲厚重、格斗刚猛。", "师徒般的两道光让捷德拥有正面击碎强敌的勇气。"),
+    ("捷德奥特曼·机敏形态", "ultraman-geed", 2017, "融合希卡利与高斯力量，速度与光线控制出色。", "科学与慈爱之光让捷德用更聪明的方式结束战斗。"),
+    ("捷德奥特曼·豪勇形态", "ultraman-geed", 2017, "融合奥特之父与赛罗力量，使用强力武装作战。", "两代守护者的意志化作威严战甲，支撑捷德直面父亲。"),
+    ("捷德奥特曼·尊皇形态", "ultraman-geed", 2017, "融合贝利亚与奥特之王力量，能够调用历代战士能力。", "最深的黑暗与最高贵的光在陆的意志下达成平衡。"),
+    ("捷德奥特曼·终极形态", "ultraman-geed", 2018, "以进化胶囊和终极升华器释放自身全部潜力。", "不再依赖既定组合的捷德，以纯粹属于自己的力量连接愿望。"),
+    ("捷德奥特曼·银河初升", "ultraman-geed", 2020, "融合银河、艾克斯与欧布力量，擅长高速连续作战。", "升华器损坏后，遥辉宇宙的新生代勋章让捷德再次升华。"),
+    ("罗布奥特曼", "ultraman-rosso", 2018, "罗索与布鲁融合而成，使用罗布光轮统合四元素。", "凑家兄弟放下分歧、真正同心时，双色之光完成融合。"),
+    ("格罗布奥特曼", "ultrawoman-grigio", 2019, "罗索、布鲁与格丽乔三兄妹融合的家族究极形态。", "守护家人的愿望让三道光合为一体，爆发超越兄弟的力量。"),
+    ("泰迦奥特曼·光子地球", "ultraman-taiga", 2019, "吸收地球大地与水之能量形成的金色强化形态。", "优幸与泰迦理解地球生命后，让脚下星球回应他们的决心。"),
+    ("泰迦奥特曼·三重斯特利姆", "ultraman-taiga", 2019, "泰迦、泰塔斯与风马力量合一的三人小队最终形态。", "三位战士不再轮流作战，而是把友情化作同一束光。"),
+    ("令迦奥特曼", "ultraman-taiga", 2020, "新生代十一位奥特英雄力量融合而成的究极战士。", "面对格里姆德，跨越多个宇宙的伙伴同时回应泰迦。"),
+    ("泽塔奥特曼·阿尔法装甲", "ultraman-z", 2020, "融合赛文、雷欧与赛罗力量，擅长宇宙拳法与头镖。", "师徒三代的战斗意志让年轻的泽塔获得锋利身法。"),
+    ("泽塔奥特曼·贝塔冲击", "ultraman-z", 2020, "融合初代、艾斯与泰罗力量的红色力量形态。", "昭和战士的热血与刚力在泽塔体内正面爆发。"),
+    ("泽塔奥特曼·伽马未来", "ultraman-z", 2020, "融合迪迦、戴拿与盖亚力量，擅长超能力与光线变化。", "平成三杰之光让泽塔能够以幻影和空间技巧掌控战局。"),
+    ("泽塔奥特曼·德尔塔天爪", "ultraman-z", 2020, "融合极恶贝利亚、捷德与赛罗力量，使用贝利亚黄昏。", "三股相克力量在遥辉的意志下被驯服为最强之刃。"),
+    ("特利迦奥特曼·强力型", "ultraman-trigger", 2021, "以力量和熔岩般能量突破重甲敌人的红色形态。", "剑悟通过胜利超越之钥唤醒特利迦的力量侧面。"),
+    ("特利迦奥特曼·空中型", "ultraman-trigger", 2021, "强化高速飞行与远程技巧的紫色形态。", "面对天空与速度战，特利迦让光变得像风一样轻盈。"),
+    ("闪耀特利迦永恒", "ultraman-trigger", 2021, "掌握永恒核心力量、使用闪耀利刃的金色形态。", "超古代核心的巨大能量被剑悟以守护笑容的意志驾驭。"),
+    ("特利迦真理形态", "ultraman-trigger", 2022, "光明特利迦与黑暗特利迦力量融合的最终姿态。", "剑悟与伊格尼斯共同跨越光暗对立，让真正的特利迦诞生。"),
+    ("德凯奥特曼·强壮型", "ultraman-decker", 2022, "专注怪力、防御与近身压制的红色形态。", "奏大将守护故乡的冲劲凝聚成不会后退的力量。"),
+    ("德凯奥特曼·奇迹型", "ultraman-decker", 2022, "操纵空间、念力与速度的蓝色超能力形态。", "宇宙未来的可能性让德凯以不可思议的方式改写战局。"),
+    ("德凯奥特曼·强劲型", "ultraman-decker", 2022, "融合三种基础类型优势、使用德凯盾剑的最强形态。", "奏大不再依赖未来答案，以此刻的决心创造自己的力量。"),
+    ("布莱泽奥特曼·法德兰装甲", "ultraman-blazar", 2023, "与炎龙怪兽法德兰共鸣，获得火焰铠甲与双刃武装。", "弦人与布莱泽理解伙伴怪兽后，让野性之光披上烈焰。"),
+    ("亚刻奥特曼·太阳装甲", "ultraman-arc", 2024, "以太阳意象构筑的重装力量形态。", "优马把对炽热守护力的想象化作现实装甲。"),
+    ("亚刻奥特曼·月亮装甲", "ultraman-arc", 2024, "以月亮意象构筑的敏捷与技巧形态。", "柔和月光在想象力中化作灵活而精准的战斗能力。"),
+    ("亚刻奥特曼·银河装甲", "ultraman-arc", 2024, "将广阔银河意象实体化的终极装甲。", "优马让想象冲出星球边界，塑造足以回应宇宙危机的力量。"),
+)
+
+_FORM_IMAGE_HINTS = {
+    "泽塔奥特曼·阿尔法装甲": "AlphaEdge",
+    "泽塔奥特曼·贝塔冲击": "BetaSmash",
+    "泽塔奥特曼·伽马未来": "GammaFuture",
+    "特利迦奥特曼·强力型": "PowerType",
+    "特利迦奥特曼·空中型": "SkyType",
+}
+
+for _name, _slug, _page_path, _year, _description, _background in _EXPANDED_ULTRAMAN_DATA:
+    ULTRAMAN_ROSTER += (Ultraman(_name, _slug, _page_path),)
+    ULTRAMAN_DEBUT_YEARS[_name] = _year
+    _dark = any(word in _name for word in ("贝利亚", "托雷基亚", "黑暗", "邪恶", "扎基"))
+    ULTRAMAN_PROFILES[_name] = UltramanProfile(
+        "力量会证明谁才配支配命运。" if _dark else "光会回应每一个不肯放弃的人。",
+        _description,
+        _background,
+    )
+
+for _name, _slug, _year, _description, _background in _FORM_VARIANTS:
+    ULTRAMAN_ROSTER += (
+        Ultraman(_name, _slug, image_hint=_FORM_IMAGE_HINTS.get(_name, "")),
+    )
+    ULTRAMAN_DEBUT_YEARS[_name] = _year
+    ULTRAMAN_PROFILES[_name] = UltramanProfile(
+        "形态会改变，守护之心不会。",
+        _description,
+        _background,
+    )
+
+ULTRAMAN_BY_NAME = {hero.name: hero for hero in ULTRAMAN_ROSTER}
+
 
 class _OpenGraphImageParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.image_url = ""
+        self.content_image_urls: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag.lower() != "meta" or self.image_url:
-            return
         values = {key.lower(): value or "" for key, value in attrs}
-        if values.get("property", "").lower() == "og:image":
+        if tag.lower() == "img":
+            source = values.get("src") or values.get("data-src")
+            if source and "/uploads/" in source and not source.startswith("data:"):
+                self.content_image_urls.append(source)
+            return
+        if (
+            tag.lower() == "meta"
+            and not self.image_url
+            and values.get("property", "").lower() == "og:image"
+        ):
             self.image_url = values.get("content", "")
 
 
@@ -284,7 +435,11 @@ def _official_image_candidates(image_url: str) -> tuple[str, ...]:
 
 
 async def official_ultraman_image(hero: Ultraman, settings: Settings) -> str:
-    page_url = f"{OFFICIAL_HERO_BASE_URL}/{hero.slug}"
+    page_url = (
+        urljoin("https://tsuburaya-prod.com/", hero.page_path.lstrip("/"))
+        if hero.page_path
+        else f"{OFFICIAL_HERO_BASE_URL}/{hero.slug}"
+    )
     timeout = min(float(settings.media_timeout_seconds), 30.0)
     headers = {"User-Agent": OFFICIAL_USER_AGENT}
     async with httpx.AsyncClient(
@@ -294,7 +449,22 @@ async def official_ultraman_image(hero: Ultraman, settings: Settings) -> str:
         page.raise_for_status()
         parser = _OpenGraphImageParser()
         parser.feed(page.text)
-        candidates = _official_image_candidates(parser.image_url)
+        candidate_urls: list[str] = []
+        if hero.image_hint:
+            hinted = next(
+                (
+                    source
+                    for source in parser.content_image_urls
+                    if hero.image_hint.casefold() in source.casefold()
+                ),
+                "",
+            )
+            if hinted:
+                candidate_urls.extend(
+                    _official_image_candidates(urljoin(page_url, hinted))
+                )
+        candidate_urls.extend(_official_image_candidates(parser.image_url))
+        candidates = tuple(dict.fromkeys(candidate_urls))
         if not candidates:
             raise RuntimeError("圆谷官方角色页没有返回可用图片")
         errors: list[str] = []
@@ -335,7 +505,14 @@ def render_ultraman_card(hero: Ultraman, image_file: str) -> str:
     draw = ImageDraw.Draw(card)
     font_path = "C:/Windows/Fonts/msyh.ttc"
     title_font = ImageFont.truetype(font_path, 42)
-    name_font = ImageFont.truetype(font_path, 70)
+    name_font_size = 70
+    while name_font_size > 34:
+        name_font = ImageFont.truetype(font_path, name_font_size)
+        if draw.textbbox((0, 0), hero.name, font=name_font, stroke_width=3)[2] <= 790:
+            break
+        name_font_size -= 2
+    else:
+        name_font = ImageFont.truetype(font_path, 34)
     year_font = ImageFont.truetype(font_path, 34)
     draw.rounded_rectangle((44, 42, 334, 108), radius=22, fill=(0, 0, 0, 145))
     draw.text((68, 53), "今日奥特曼", font=title_font, fill="white")
