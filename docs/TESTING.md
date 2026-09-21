@@ -4,11 +4,16 @@
 
 ## 本地测试
 
-不访问外部 API，不消耗额度，也不会向 QQ 发送消息：
+不访问外部 API，不消耗额度，也不会向 QQ 发送消息。Windows 推荐直接双击项目根目录的 `测试项目.bat`，它会自动创建/修复 `.venv`、安装开发依赖并依次运行 pytest、ruff、compileall。
+
+也可以手动执行：
 
 ```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap_windows.ps1 -IncludeDev
 .\.venv\Scripts\python.exe -m pytest -q
 ```
+
+项目已通过 pytest 配置把临时目录固定到 `.test-tmp/pytest`，因此不会再依赖 `%LOCALAPPDATA%\Temp\pytest-of-用户名`；这可以规避 Windows 上旧 pytest 临时目录 ACL 损坏导致的 `PermissionError: [WinError 5]`。
 
 普通测试覆盖长期记忆的保存、裁剪和删除，随机夺舍的 15 条活跃度阈值、指向夺舍、退出状态、@ 位置无关解析、匿名风格摘要、目标成员历史消息筛选与语气摘要持久化、网易云响应解析与原唱筛选、Deezer 兼容解析和 Bing RSS XML 的离线解析。联网搜索、网易云和 OneBot 历史消息的真实访问不放进默认 CI，避免外部服务波动导致误报。
 
