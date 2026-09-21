@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 import httpx
 import pytest
 
