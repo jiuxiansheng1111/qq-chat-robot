@@ -222,3 +222,22 @@ async def test_daily_ultraman_collection_is_persistent_and_counted_once_per_day(
         "迪迦奥特曼",
         2,
     )
+
+
+async def test_database_migrates_legacy_orb_dark_form_name(tmp_path):
+    settings = Settings(database_path=str(tmp_path / "legacy-orb.db"), _env_file=None)
+    db = Database(settings)
+    await db.init()
+    await db.execute(
+        "INSERT INTO daily_ultraman(user_id, draw_date, group_id, ultraman_name) "
+        "VALUES (?, ?, ?, ?)",
+        ("user", "2026-09-20", "group", "欧布奥特曼·雷霆肩章"),
+    )
+
+    await db.init()
+
+    row = await db.fetchone(
+        "SELECT ultraman_name FROM daily_ultraman WHERE user_id = ? AND draw_date = ?",
+        ("user", "2026-09-20"),
+    )
+    assert row[0] == "欧布奥特曼·暗耀形态"
