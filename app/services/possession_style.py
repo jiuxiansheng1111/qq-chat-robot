@@ -256,7 +256,7 @@ def select_possession_recall_evidence(
 
 
 def _compact_recall_text(value: str) -> str:
-    return re.sub(r"[^\\w\\u4e00-\\u9fff]+", "", str(value).casefold())
+    return re.sub(r"[^\w\u4e00-\u9fff]+", "", str(value).casefold())
 
 
 def _recall_field_replays_source(value: str, evidence: list[str], window: int = 6) -> bool:
