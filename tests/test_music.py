@@ -1,6 +1,4 @@
 from app.main import resolve_music_identity
-from app.services.web_search import SearchResult
-
 from app.services.music import (
     choose_netease_track,
     music_query_suffixes,
@@ -9,6 +7,7 @@ from app.services.music import (
     parse_music_identity,
     parse_netease_tracks,
 )
+from app.services.web_search import SearchResult
 
 
 def test_parse_deezer_tracks_accepts_safe_preview_and_deduplicates():
