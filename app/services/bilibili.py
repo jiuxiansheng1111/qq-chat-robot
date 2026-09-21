@@ -1,6 +1,5 @@
 import base64
 import html
-import math
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -152,6 +151,22 @@ def bilibili_relevance_score(query: str, video: BilibiliVideo) -> float:
     return score
 
 
+def _relevance_tier(query: str, video: BilibiliVideo) -> int:
+    query_compact = _compact(query)
+    title = _compact(video.title)
+    if not query_compact or not title:
+        return 0
+    if query_compact in title:
+        return 3
+
+    terms = [term for term in _query_terms(query) if term != query_compact]
+    if terms and all(term in title for term in terms):
+        return 2
+    if any(term in title for term in terms):
+        return 1
+    return 0
+
+
 def choose_bilibili_video(
     query: str,
     videos: list[BilibiliVideo],
@@ -159,28 +174,21 @@ def choose_bilibili_video(
     if not videos:
         return None
 
-    scored: list[tuple[float, int, BilibiliVideo]] = []
+    scored: list[tuple[int, int, float, int, BilibiliVideo]] = []
     for video in videos:
         relevance = bilibili_relevance_score(query, video)
-        if relevance < 18:
+        tier = _relevance_tier(query, video)
+        if relevance < 18 or tier == 0:
             continue
-        # Content relevance is primary. Within roughly the same relevance band,
-        # higher playback wins, matching the requested "relevant + popular" behavior.
-        relevance_band = math.floor(relevance / 12)
-        scored.append((relevance_band, video.play, video))
+        # Semantic tier comes first. Once two titles are both strong matches,
+        # playback becomes the main tie-breaker; the fine-grained score and date
+        # only decide between similarly popular candidates.
+        scored.append((tier, video.play, relevance, video.pubdate, video))
 
     if not scored:
         return None
-    scored.sort(
-        key=lambda item: (
-            item[0],
-            item[1],
-            bilibili_relevance_score(query, item[2]),
-            item[2].pubdate,
-        ),
-        reverse=True,
-    )
-    return scored[0][2]
+    scored.sort(key=lambda item: item[:4], reverse=True)
+    return scored[0][4]
 
 
 def _extract_video_items(payload: dict) -> list[dict]:
