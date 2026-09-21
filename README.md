@@ -124,11 +124,13 @@ cd qq-chatrobot
 
 ### 2. 创建 Python 环境
 
+Windows 可以直接使用项目自带的自愈脚本；它会优先使用 Python 3.12，没有时自动使用 Python 3.11，并在缺少 `.venv` 或依赖时自动创建和安装：
+
 ```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev]"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap_windows.ps1 -IncludeDev
 ```
+
+也可以直接双击 `测试项目.bat`，它会先自动修复 Python 环境，再执行 pytest、ruff 和 compileall。
 
 ### 3. 创建配置
 
@@ -195,6 +197,8 @@ Windows 一键启动 NapCatQQ Desktop、OneBot 和 FastAPI：
 ```text
 双击 start-qq-chatrobot.bat
 ```
+
+启动脚本现在会自动检查 `.venv` 和运行依赖：虚拟环境不存在时自动用本机 Python 3.11/3.12 创建，依赖缺失时自动安装，不再因为 `.venv\Scripts\python.exe` 不存在直接退出。
 
 为了避免重启电脑或机器人进程退出后出现 `ECONNREFUSED 127.0.0.1:8000`，管理员身份双击：
 
@@ -368,13 +372,15 @@ NapCat HTTP Client 仍可通过宿主机映射端口向 `http://127.0.0.1:8000/o
 
 ## 测试与质量检查
 
-普通测试不会访问外部 API，也不会向 QQ 群发送消息：
+普通测试不会访问外部 API，也不会向 QQ 群发送消息。推荐直接双击 `测试项目.bat`，或执行：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe -m ruff check app tests
 .\.venv\Scripts\python.exe -m compileall -q app tests
 ```
+
+pytest 的临时目录固定在项目内的 `.test-tmp/pytest`，避免 Windows 用户临时目录 ACL 异常导致 `PermissionError: [WinError 5]`。
 
 当前本地非 live 测试基线：`85 passed, 15 skipped`。其中外部真实服务测试默认跳过；需要显式添加 `--live` 才会调用已配置的 LLM、OneBot 等外部服务。
 
