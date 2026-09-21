@@ -7,6 +7,7 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $desktopRoot = Split-Path -Parent $projectRoot
 $envPath = Join-Path $projectRoot ".env"
 $pythonPath = Join-Path $projectRoot ".venv\Scripts\python.exe"
+$bootstrapScript = Join-Path $PSScriptRoot "bootstrap_windows.ps1"
 $logRoot = Join-Path $projectRoot "logs"
 $botOutputLog = Join-Path $logRoot "bot.out.log"
 $botErrorLog = Join-Path $logRoot "bot.error.log"
