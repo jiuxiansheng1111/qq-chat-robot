@@ -13,6 +13,7 @@ from app.services.possession_style import (
     select_possession_recall_evidence,
     style_catchphrases,
     style_reference_examples,
+    summarize_possession_recall,
 )
 
 
@@ -210,13 +211,64 @@ def test_possession_recall_can_answer_generic_preference_question():
     assert evidence == ["我本命是初音未来"]
 
 
-def test_possession_recall_prompt_marks_history_as_personal_evidence_not_objective_fact():
+def test_possession_recall_prompt_is_non_verbatim_fallback():
+    source = ["山乃乃怎么又来了", "我最喜欢干山乃乃"]
     prompt = possession_recall_prompt(
         "羽入",
         "你觉得山乃乃怎么样",
-        ["山乃乃怎么又来了", "我最喜欢干山乃乃"],
+        source,
     )
-    assert "羽入本人历史群聊" in prompt
+    assert "羽入的相关历史认知摘要" in prompt
     assert "山乃乃" in prompt
-    assert "不自动证明现实世界事实" in prompt
-    assert "不要升级成现实中的朋友" in prompt
+    assert "不能据此推断现实中的朋友" in prompt
+    assert "不要引用、复述" in prompt
+    assert all(item not in prompt for item in source)
+
+
+@pytest.mark.asyncio
+async def test_possession_recall_summary_only_exposes_semantic_digest():
+    class FakeLLM:
+        async def ask(self, messages):
+            assert "我最喜欢干山乃乃" in messages[1]["content"]
+            return (
+                '{"knowledge":"过去多次提到山乃乃，对这个名字并不陌生",'
+                '"attitude":"相关表达带有明显调侃意味",'
+                '"relationship":"无法从群聊判断现实中是否认识",'
+                '"uncertainty":"具体关系和真实态度仍不确定"}'
+            )
+
+    result = await summarize_possession_recall(
+        "羽入",
+        "你认识山乃乃吗",
+        ["山乃乃怎么又来了", "我最喜欢干山乃乃", "一拳打的山乃乃"],
+        FakeLLM(),
+    )
+    assert "并不陌生" in result
+    assert "调侃意味" in result
+    assert "我最喜欢干山乃乃" not in result
+    assert "一拳打的山乃乃" not in result
+    assert "不要引用历史原句" in result
+
+
+@pytest.mark.asyncio
+async def test_possession_recall_summary_drops_model_parroting_and_falls_back():
+    class ParrotingLLM:
+        async def ask(self, messages):
+            return (
+                '{"knowledge":"我最喜欢干山乃乃",'
+                '"attitude":"一拳打的山乃乃",'
+                '"relationship":"",'
+                '"uncertainty":""}'
+            )
+
+    source = ["山乃乃怎么又来了", "我最喜欢干山乃乃", "一拳打的山乃乃"]
+    result = await summarize_possession_recall(
+        "羽入",
+        "你认识山乃乃吗",
+        source,
+        ParrotingLLM(),
+    )
+    assert "山乃乃" in result
+    assert "我最喜欢干山乃乃" not in result
+    assert "一拳打的山乃乃" not in result
+    assert "完全没听过" in result
