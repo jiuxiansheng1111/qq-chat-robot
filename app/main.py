@@ -42,9 +42,11 @@ from app.services.music import (
     search_netease_music,
 )
 from app.services.possession_style import (
+    fetch_member_recall_samples,
     fetch_member_style_image_refs,
     image_references_from_message,
     learn_possession_style,
+    possession_recall_prompt,
     style_catchphrases,
     style_reference_examples,
 )
@@ -144,6 +146,7 @@ async def lifespan(app: FastAPI):
     app.state.possession_style_examples = {}
     app.state.possession_style_catchphrases = {}
     app.state.possession_style_images = {}
+    app.state.possession_recall_samples = {}
     app.state.recent_member_messages = {}
     app.state.recent_member_images = {}
     app.state.translation_cache = {}
@@ -657,7 +660,7 @@ def schedule_possession_style_learning(
     current = tasks.get(key)
     if current and not current.done():
         return
-    async def learn_assets() -> tuple[list[str], list[str]]:
+    async def learn_assets() -> tuple[list[str], list[str], list[str]]:
         persisted_samples = await request.app.state.db.possession_style_messages(
             group_id, user_id, limit=30
         )
@@ -674,8 +677,9 @@ def schedule_possession_style_learning(
             ) + persisted_samples,
         )
         image_job = fetch_member_style_image_refs(settings, group_id, user_id)
-        samples, image_refs = await asyncio.gather(
-            style_job, image_job, return_exceptions=True
+        recall_job = fetch_member_recall_samples(settings, group_id, user_id)
+        samples, image_refs, recall_samples = await asyncio.gather(
+            style_job, image_job, recall_job, return_exceptions=True
         )
         if isinstance(samples, BaseException):
             logger.warning("possession style samples failed: %s", samples)
@@ -683,17 +687,27 @@ def schedule_possession_style_learning(
         if isinstance(image_refs, BaseException):
             logger.warning("possession image history failed: %s", image_refs)
             image_refs = list(request.app.state.recent_member_images.get(key, ()))
-        return samples, image_refs
+        if isinstance(recall_samples, BaseException):
+            logger.warning("possession recall history failed: %s", recall_samples)
+            recall_samples = list(
+                request.app.state.recent_member_messages.get(key, ())
+            ) + await request.app.state.db.possession_recall_messages(
+                group_id,
+                user_id,
+                limit=settings.possession_recall_history_count,
+            )
+        return samples, image_refs, recall_samples
 
     task = asyncio.create_task(learn_assets())
     tasks[key] = task
 
     def remember_examples(completed: asyncio.Task, task_key: tuple[str, str] = key) -> None:
         try:
-            samples, image_refs = completed.result()
+            samples, image_refs, recall_samples = completed.result()
         except (asyncio.CancelledError, RuntimeError, ValueError):
             samples = []
             image_refs = []
+            recall_samples = []
         examples = style_reference_examples(samples)
         if examples:
             request.app.state.possession_style_examples[task_key] = examples
@@ -702,6 +716,10 @@ def schedule_possession_style_learning(
             request.app.state.possession_style_catchphrases[task_key] = catchphrases
         if image_refs:
             request.app.state.possession_style_images[task_key] = image_refs[-5:]
+        if recall_samples:
+            request.app.state.possession_recall_samples[task_key] = recall_samples[
+                -max(20, min(settings.possession_recall_history_count, 500)) :
+            ]
         tasks.pop(task_key, None)
 
     task.add_done_callback(remember_examples)
@@ -856,6 +874,7 @@ async def onebot_webhook(
             sender_display_name(event),
             text,
             has_image=bool(image_refs),
+            max_messages=max(100, min(settings.possession_recall_history_count, 1000)),
         )
     if not await request.app.state.limiter.allow(f"user:{user_id}"):
         return {"ok": True, "ignored": True, "reason": "user_rate_limited"}
@@ -989,6 +1008,7 @@ async def onebot_webhook(
                 request.app.state.possession_style_examples.pop(key, None)
                 request.app.state.possession_style_catchphrases.pop(key, None)
                 request.app.state.possession_style_images.pop(key, None)
+                request.app.state.possession_recall_samples.pop(key, None)
                 request.app.state.recent_member_messages.pop(key, None)
                 request.app.state.recent_member_images.pop(key, None)
                 await send_group_message(group_id, "这个人的语气和临时样本已经删掉了。")
@@ -1382,7 +1402,10 @@ async def onebot_webhook(
                 except (LLMError, httpx.HTTPError) as exc:
                     logger.info("possession name translation unavailable: %s", exc)
             style_key = (group_id, target_id)
-            if style_key not in request.app.state.possession_style_examples:
+            if (
+                style_key not in request.app.state.possession_style_examples
+                or style_key not in request.app.state.possession_recall_samples
+            ):
                 schedule_possession_style_learning(request, group_id, target_id, name)
             style_task = request.app.state.style_learning_tasks.get(
                 style_key
@@ -1390,6 +1413,28 @@ async def onebot_webhook(
             if style_task and not style_task.done():
                 with suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(asyncio.shield(style_task), timeout=3)
+
+            persisted_recall = await request.app.state.db.possession_recall_messages(
+                group_id,
+                target_id,
+                limit=settings.possession_recall_history_count,
+            )
+            recall_samples = list(
+                request.app.state.possession_recall_samples.get(style_key, ())
+            )
+            recall_samples.extend(persisted_recall)
+            recall_samples.extend(
+                request.app.state.recent_member_messages.get(style_key, ())
+            )
+            recall_context = possession_recall_prompt(
+                name,
+                prompt,
+                recall_samples,
+                limit=settings.possession_recall_result_limit,
+            )
+            if recall_context:
+                persona_context.append(recall_context)
+
             learned_style = await request.app.state.db.possession_style_profile(
                 group_id, target_id
             )
