@@ -161,6 +161,7 @@ async def lifespan(app: FastAPI):
     app.state.possession_recall_samples = {}
     app.state.recent_member_messages = {}
     app.state.recent_member_images = {}
+    app.state.recent_ultraman_queries = {}
     app.state.translation_cache = {}
     app.state.deduplicator = EventDeduplicator(settings.event_dedupe_ttl_seconds)
     registry.load_modules(settings.plugin_modules)
@@ -526,6 +527,37 @@ def extract_bilibili_video_query(event: dict, text: str) -> str | None:
             if text.lower().startswith(prefix.lower()):
                 return text[len(prefix) :].strip(" ：:")[:100]
     return None
+
+
+def asks_for_ultraman_image_followup(text: str) -> bool:
+    compact = re.sub(r"[\s，。！？!?、~～]", "", text)
+    for prefix in ("对的", "对", "是的", "嗯", "没错"):
+        if compact.startswith(prefix):
+            compact = compact[len(prefix) :]
+            break
+    return compact in {
+        "图片",
+        "图片呢",
+        "图",
+        "图呢",
+        "我要图片",
+        "我要看图片",
+        "我想看图片",
+        "我要看图",
+        "我想看图",
+        "看图片",
+        "看图",
+        "看看图片",
+        "看看图",
+        "给我看图片",
+        "给我看看图片",
+        "给我看图",
+        "给我看看图",
+        "发图片",
+        "发图",
+        "把图片发出来",
+        "把图发出来",
+    }
 
 
 def is_identity_question(text: str) -> bool:
@@ -1303,6 +1335,7 @@ async def onebot_webhook(
             group_id, user_id, today, candidate.name
         )
         hero = ULTRAMAN_BY_NAME[hero_name]
+        request.app.state.recent_ultraman_queries[(group_id, user_id)] = hero.name
         status = "今日首次获得" if created else "今天已经抽到过"
         caption = (
             f"✨ {sender_display_name(event)} 的今日奥特曼\n"
@@ -1347,6 +1380,7 @@ async def onebot_webhook(
             for page in ultraman_catalog_text_pages():
                 await send_group_message(group_id, page)
     elif bot_mentioned(event) and (catalog_hero := resolve_ultraman_query(text)):
+        request.app.state.recent_ultraman_queries[(group_id, user_id)] = catalog_hero.name
         caption = (
             "✦ 奥特曼图鉴 · 角色资料 ✦\n"
             f"【{catalog_hero.name}】\n"
@@ -1360,6 +1394,35 @@ async def onebot_webhook(
         except (RuntimeError, httpx.HTTPError) as exc:
             logger.warning("Ultraman encyclopedia image failed: %s", exc)
             await send_group_message(group_id, caption + "\n图片暂时加载失败，稍后再查看吧。")
+    elif (
+        bot_mentioned(event)
+        and asks_for_ultraman_image_followup(text)
+        and (
+            recent_ultraman_name := request.app.state.recent_ultraman_queries.get(
+                (group_id, user_id)
+            )
+        )
+    ):
+        recent_ultraman = ULTRAMAN_BY_NAME.get(recent_ultraman_name)
+        if recent_ultraman is not None:
+            caption = (
+                f"Ciallo～，苟修金。吾辈把【{recent_ultraman.name}】的图找来了。\n"
+                f"{ultraman_profile_text(recent_ultraman)}"
+            )
+            try:
+                image = await resolve_ultraman_card_image(recent_ultraman)
+                card = render_ultraman_card(
+                    recent_ultraman,
+                    image,
+                    heading="奥特曼图鉴",
+                )
+                await send_group_image(group_id, card, caption)
+            except (RuntimeError, httpx.HTTPError) as exc:
+                logger.warning("Ultraman follow-up image failed: %s", exc)
+                await send_group_message(
+                    group_id,
+                    f"苟修金，【{recent_ultraman.name}】的图片这次加载失败了，稍后再试。",
+                )
     elif text in CAT_IMAGE_COMMANDS or mentioned_image_command(event, CAT_IMAGE_COMMANDS):
         try:
             image = await random_cat_gif(settings)
