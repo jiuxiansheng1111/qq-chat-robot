@@ -267,7 +267,7 @@ def _recall_field_replays_source(value: str, evidence: list[str], window: int = 
         source = _compact_recall_text(sample)
         if len(source) < window:
             continue
-        for start in range(0, len(source) - window + 1):
+        for start in range(len(source) - window + 1):
             if source[start : start + window] in compact:
                 return True
     return False
