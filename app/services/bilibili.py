@@ -292,11 +292,11 @@ async def search_bilibili_videos(
 
 def format_play_count(play: int) -> str:
     if play >= 100_000_000:
-        value = play / 100_000_000
-        return f"{value:.1f}亿".rstrip("0").rstrip(".")
+        value = f"{play / 100_000_000:.1f}".rstrip("0").rstrip(".")
+        return value + "亿"
     if play >= 10_000:
-        value = play / 10_000
-        return f"{value:.1f}万".rstrip("0").rstrip(".")
+        value = f"{play / 10_000:.1f}".rstrip("0").rstrip(".")
+        return value + "万"
     return str(max(0, play))
 
 
