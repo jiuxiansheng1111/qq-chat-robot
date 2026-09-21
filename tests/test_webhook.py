@@ -402,14 +402,14 @@ def test_group_lifecycle_and_blacklist(tmp_path):
 def test_generic_ai_chat_rate_limit_is_explicit_not_silent(tmp_path):
     previous_database_path = settings.database_path
     previous_onebot_api_base = settings.onebot_api_base
-    previous_user_limit = settings.user_rate_limit_per_minute
-    previous_group_limit = settings.group_rate_limit_per_minute
+    previous_user_limit = settings.llm_user_rate_limit_per_minute
+    previous_group_limit = settings.llm_group_rate_limit_per_minute
     previous_ingress_user = settings.ingress_user_rate_limit_per_minute
     previous_ingress_group = settings.ingress_group_rate_limit_per_minute
     settings.database_path = str(tmp_path / "rate-limit-webhook.db")
     settings.onebot_api_base = ""
-    settings.user_rate_limit_per_minute = 1
-    settings.group_rate_limit_per_minute = 10
+    settings.llm_user_rate_limit_per_minute = 1
+    settings.llm_group_rate_limit_per_minute = 10
     settings.ingress_user_rate_limit_per_minute = 100
     settings.ingress_group_rate_limit_per_minute = 100
     try:
@@ -428,8 +428,8 @@ def test_generic_ai_chat_rate_limit_is_explicit_not_silent(tmp_path):
     finally:
         settings.database_path = previous_database_path
         settings.onebot_api_base = previous_onebot_api_base
-        settings.user_rate_limit_per_minute = previous_user_limit
-        settings.group_rate_limit_per_minute = previous_group_limit
+        settings.llm_user_rate_limit_per_minute = previous_user_limit
+        settings.llm_group_rate_limit_per_minute = previous_group_limit
         settings.ingress_user_rate_limit_per_minute = previous_ingress_user
         settings.ingress_group_rate_limit_per_minute = previous_ingress_group
 
@@ -437,14 +437,14 @@ def test_generic_ai_chat_rate_limit_is_explicit_not_silent(tmp_path):
 def test_local_plugin_commands_do_not_consume_llm_chat_quota(tmp_path):
     previous_database_path = settings.database_path
     previous_onebot_api_base = settings.onebot_api_base
-    previous_user_limit = settings.user_rate_limit_per_minute
-    previous_group_limit = settings.group_rate_limit_per_minute
+    previous_user_limit = settings.llm_user_rate_limit_per_minute
+    previous_group_limit = settings.llm_group_rate_limit_per_minute
     previous_ingress_user = settings.ingress_user_rate_limit_per_minute
     previous_ingress_group = settings.ingress_group_rate_limit_per_minute
     settings.database_path = str(tmp_path / "rate-limit-local-command.db")
     settings.onebot_api_base = ""
-    settings.user_rate_limit_per_minute = 1
-    settings.group_rate_limit_per_minute = 10
+    settings.llm_user_rate_limit_per_minute = 1
+    settings.llm_group_rate_limit_per_minute = 10
     settings.ingress_user_rate_limit_per_minute = 100
     settings.ingress_group_rate_limit_per_minute = 100
     try:
@@ -469,8 +469,8 @@ def test_local_plugin_commands_do_not_consume_llm_chat_quota(tmp_path):
     finally:
         settings.database_path = previous_database_path
         settings.onebot_api_base = previous_onebot_api_base
-        settings.user_rate_limit_per_minute = previous_user_limit
-        settings.group_rate_limit_per_minute = previous_group_limit
+        settings.llm_user_rate_limit_per_minute = previous_user_limit
+        settings.llm_group_rate_limit_per_minute = previous_group_limit
         settings.ingress_user_rate_limit_per_minute = previous_ingress_user
         settings.ingress_group_rate_limit_per_minute = previous_ingress_group
 
