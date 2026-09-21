@@ -15,10 +15,14 @@ class Settings(BaseSettings):
     # High-ceiling ingress protection for all group events.
     ingress_user_rate_limit_per_minute: int = 60
     ingress_group_rate_limit_per_minute: int = 300
-    # Stricter limit applies only to generic LLM chat after local commands/memory lookup.
-    user_rate_limit_per_minute: int = 20
-    group_rate_limit_per_minute: int = 120
+    # Dedicated keys prevent legacy USER_RATE_LIMIT_PER_MINUTE=5 values in old
+    # .env files from silently keeping generic AI chat on the old strict limit.
+    llm_user_rate_limit_per_minute: int = 20
+    llm_group_rate_limit_per_minute: int = 120
     rate_limit_notice_cooldown_seconds: int = 10
+    # Legacy keys are accepted for old .env files but no longer drive runtime limiting.
+    user_rate_limit_per_minute: int = 5
+    group_rate_limit_per_minute: int = 60
     plugin_modules: str = "app.plugins.hello"
 
     jwt_secret_key: str = Field(default="change-me", repr=False)
