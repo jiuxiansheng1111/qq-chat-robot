@@ -527,6 +527,18 @@ _FORM_IMAGE_HINTS = {
     "特利迦奥特曼·空中型": "SkyType",
 }
 
+_FORM_IMAGE_PAGE_URLS = {
+    # Tsuburaya's official store page has a dedicated Glitter Tiga product image.
+    "闪耀迪迦": "https://store.m-78.jp/collections/tdg/products/4582769901454",
+}
+_FORM_VARIANT_NAMES = {item[0] for item in _FORM_VARIANTS}
+
+
+def is_ultraman_form_variant(hero: Ultraman) -> bool:
+    return hero.name in _FORM_VARIANT_NAMES
+
+
+
 for _name, _slug, _page_path, _year, _description, _background in _EXPANDED_ULTRAMAN_DATA:
     ULTRAMAN_ROSTER += (Ultraman(_name, _slug, _page_path),)
     ULTRAMAN_DEBUT_YEARS[_name] = _year
@@ -596,10 +608,14 @@ def _official_image_candidates(image_url: str) -> tuple[str, ...]:
 
 
 async def official_ultraman_image(hero: Ultraman, settings: Settings) -> str:
+    dedicated_page = _FORM_IMAGE_PAGE_URLS.get(hero.name, "")
     page_url = (
-        urljoin("https://tsuburaya-prod.com/", hero.page_path.lstrip("/"))
-        if hero.page_path
-        else f"{OFFICIAL_HERO_BASE_URL}/{hero.slug}"
+        dedicated_page
+        or (
+            urljoin("https://tsuburaya-prod.com/", hero.page_path.lstrip("/"))
+            if hero.page_path
+            else f"{OFFICIAL_HERO_BASE_URL}/{hero.slug}"
+        )
     )
     timeout = min(float(settings.media_timeout_seconds), 30.0)
     headers = {"User-Agent": OFFICIAL_USER_AGENT}
@@ -624,7 +640,11 @@ async def official_ultraman_image(hero: Ultraman, settings: Settings) -> str:
                 candidate_urls.extend(
                     _official_image_candidates(urljoin(page_url, hinted))
                 )
-        candidate_urls.extend(_official_image_candidates(parser.image_url))
+
+        # Base characters may safely use the page's og:image. Independent forms
+        # must never silently fall back to the base character artwork.
+        if dedicated_page or not is_ultraman_form_variant(hero):
+            candidate_urls.extend(_official_image_candidates(parser.image_url))
         candidates = tuple(dict.fromkeys(candidate_urls))
         if not candidates:
             raise RuntimeError("圆谷官方角色页没有返回可用图片")
