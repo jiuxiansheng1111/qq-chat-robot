@@ -77,6 +77,7 @@ from app.services.ultraman import (
     render_ultraman_catalog,
     resolve_ultraman_query,
     ultraman_catalog_text_pages,
+    ultraman_image_search_query,
     ultraman_profile_text,
 )
 from app.services.web_search import SearchResult, search_web
@@ -944,8 +945,9 @@ async def resolve_ultraman_card_image(hero) -> str:
             hero.name,
             exc,
         )
-        videos = await search_bilibili_videos(hero.name, settings)
-        video = choose_bilibili_video(hero.name, videos)
+        image_query = ultraman_image_search_query(hero)
+        videos = await search_bilibili_videos(image_query, settings)
+        video = choose_bilibili_video(image_query, videos)
         if video is None:
             raise RuntimeError(f"没有找到“{hero.name}”的可靠形态图片") from exc
         return await download_bilibili_cover(video, settings)
