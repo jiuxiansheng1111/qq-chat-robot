@@ -2,6 +2,7 @@ import pytest
 
 import app.services.possession_style as possession_style_module
 from app.services.possession_style import (
+    fetch_member_style_history,
     history_message_text,
     image_references_from_message,
     learn_possession_style,
@@ -272,3 +273,44 @@ async def test_possession_recall_summary_drops_model_parroting_and_falls_back():
     assert "我最喜欢干山乃乃" not in result
     assert "一拳打的山乃乃" not in result
     assert "完全没听过" in result
+
+
+@pytest.mark.asyncio
+async def test_onebot_history_client_bypasses_system_proxy(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {"status": "ok", "retcode": 0, "data": {"messages": []}}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            captured.update(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(possession_style_module.httpx, "AsyncClient", FakeClient)
+    fake_settings = type(
+        "Settings",
+        (),
+        {
+            "onebot_api_base": "http://127.0.0.1:3000",
+            "onebot_access_token": "",
+            "possession_style_history_count": 200,
+        },
+    )()
+
+    payload = await fetch_member_style_history(fake_settings, "group", "member")
+
+    assert payload["status"] == "ok"
+    assert captured["trust_env"] is False

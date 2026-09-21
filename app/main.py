@@ -726,7 +726,7 @@ async def send_group_message(group_id: str, message: str) -> None:
         if settings.onebot_access_token
         else {}
     )
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
         response = await client.post(
             f"{settings.onebot_api_base.rstrip('/')}/send_group_msg",
             headers=headers,
@@ -785,7 +785,7 @@ async def send_group_share_card(
         data["content"] = content[:180]
     if image:
         data["image"] = image
-    async with httpx.AsyncClient(timeout=12) as client:
+    async with httpx.AsyncClient(timeout=12, trust_env=False) as client:
         response = await client.post(
             f"{settings.onebot_api_base.rstrip('/')}/send_group_msg",
             headers=headers,
@@ -812,7 +812,7 @@ async def group_member_name(group_id: str, user_id: str) -> str:
         if settings.onebot_access_token
         else {}
     )
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
         response = await client.post(
             f"{settings.onebot_api_base.rstrip('/')}/get_group_member_info",
             headers=headers,
@@ -932,7 +932,7 @@ async def send_group_image(group_id: str, image_file: str, caption: str = "") ->
                 "data": {"text": f"\n{caption}"},
             }
         )
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
         response = await client.post(
             f"{settings.onebot_api_base.rstrip('/')}/send_group_msg",
             headers=headers,
@@ -962,7 +962,7 @@ async def send_group_music_card(group_id: str, track: MusicTrack) -> None:
     }
     if track.cover_url:
         data["image"] = track.cover_url
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
         response = await client.post(
             f"{settings.onebot_api_base.rstrip('/')}/send_group_msg",
             headers=headers,
@@ -983,7 +983,7 @@ async def send_group_netease_card(group_id: str, track: NeteaseTrack) -> None:
         if settings.onebot_access_token
         else {}
     )
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
         response = await client.post(
             f"{settings.onebot_api_base.rstrip('/')}/send_group_msg",
             headers=headers,

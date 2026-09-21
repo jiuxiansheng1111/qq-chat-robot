@@ -484,7 +484,7 @@ async def fetch_member_style_history(
         "count": max(20, min(history_count, 500)),
         "reverseOrder": False,
     }
-    async with httpx.AsyncClient(timeout=12) as client:
+    async with httpx.AsyncClient(timeout=12, trust_env=False) as client:
         response = await client.post(
             f"{settings.onebot_api_base.rstrip('/')}/get_group_msg_history",
             headers=headers,
