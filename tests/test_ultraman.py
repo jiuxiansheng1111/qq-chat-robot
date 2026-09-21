@@ -194,6 +194,9 @@ def test_tv_forms_and_true_fusion_forms_only():
 
 def test_tv_form_aliases_resolve_to_canonical_entries():
     assert resolve_ultraman_query("欧布原生").name == "欧布奥特曼·原生形态"
+    assert resolve_ultraman_query("欧布奥特曼 暗耀形态").name == "欧布奥特曼·雷霆肩章"
+    assert resolve_ultraman_query("欧布暗耀").name == "欧布奥特曼·雷霆肩章"
+    assert resolve_ultraman_query("暗耀形态").name == "欧布奥特曼·雷霆肩章"
     assert resolve_ultraman_query("闪电攻击者").name == "欧布奥特曼·闪电攻击者"
     assert resolve_ultraman_query("格罗布").name == "格罗布奥特曼"
     assert resolve_ultraman_query("雷基尼斯装甲").name == "欧米伽奥特曼·雷基尼斯装甲"
