@@ -2,8 +2,11 @@ import hashlib
 import hmac
 from unittest.mock import AsyncMock
 
+import pytest
+
 from fastapi.testclient import TestClient
 
+from app.core.rate_limit import LocalRateLimiter
 from app.main import (
     CAT_IMAGE_COMMANDS,
     NAILONG_IMAGE_COMMANDS,
@@ -32,6 +35,7 @@ from app.main import (
     polish_chat_reply,
     possession_recent_messages_prompt,
     qualify_group_memory,
+    send_group_message,
     sender_display_name,
     settings,
     webhook_token_valid,
@@ -480,9 +484,7 @@ async def test_rate_limit_notice_has_cooldown(monkeypatch):
     monkeypatch.setattr("app.main.send_group_message", fake_send_group_message)
 
     class State:
-        rate_limit_notice_limiter = __import__(
-            "app.core.rate_limit", fromlist=["LocalRateLimiter"]
-        ).LocalRateLimiter(limit=1, window_seconds=60)
+        rate_limit_notice_limiter = LocalRateLimiter(limit=1, window_seconds=60)
 
     class DummyApp:
         state = State()
@@ -507,3 +509,35 @@ async def test_rate_limit_notice_has_cooldown(monkeypatch):
     )
 
     assert sent == [("group-1", "消息有点快")]
+
+
+async def test_text_send_raises_when_onebot_reports_failure(monkeypatch):
+    previous_api_base = settings.onebot_api_base
+    settings.onebot_api_base = "http://onebot.test"
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {"status": "failed", "retcode": 1404, "wording": "send failed"}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr("app.main.httpx.AsyncClient", FakeClient)
+    try:
+        with pytest.raises(RuntimeError, match="send failed"):
+            await send_group_message("group-1", "hello")
+    finally:
+        settings.onebot_api_base = previous_api_base
