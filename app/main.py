@@ -1055,15 +1055,6 @@ async def onebot_webhook(
                 group_id,
                 f"我现在是机器人“{settings.persona_name}”，没有在夺舍。",
             )
-    elif bot_mentioned(event) and text:
-        group_memories = await request.app.state.db.group_memories(group_id)
-        memory_answer = resolve_group_memory_question(text, group_memories)
-        if memory_answer is not None:
-            await send_group_message(
-                group_id,
-                format_group_memory_answer(memory_answer, text),
-            )
-            return {"ok": True, "source": "group_memory_relation"}
     elif is_targeted_possession_command(event, text):
         targets = mentioned_user_ids(event)
         if len(targets) != 1:
@@ -1344,9 +1335,16 @@ async def onebot_webhook(
                 await send_group_message(group_id, "联网搜索暂时不可用，稍后再试一下吧。")
     elif text.startswith(("/ai ", "/AI ")) or (bot_mentioned(event) and text):
         prompt = text.split(" ", 1)[1].strip() if text.startswith(("/ai ", "/AI ")) else text
+        group_memories = await request.app.state.db.group_memories(group_id)
+        memory_answer = resolve_group_memory_question(prompt, group_memories)
+        if memory_answer is not None:
+            await send_group_message(
+                group_id,
+                format_group_memory_answer(memory_answer, prompt),
+            )
+            return {"ok": True, "source": "group_memory_relation"}
         memory_enabled = await request.app.state.db.memory_enabled(group_id, user_id)
         long_memories = await request.app.state.db.long_term_memories(group_id, user_id)
-        group_memories = await request.app.state.db.group_memories(group_id)
         style_hint = await request.app.state.db.group_style_hint(group_id)
         possession = await request.app.state.db.daily_possession(group_id, today)
         persona_context: list[str] = []
