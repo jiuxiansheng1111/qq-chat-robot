@@ -159,6 +159,11 @@ class Database:
                 await db.execute(
                     "ALTER TABLE daily_possession ADD COLUMN mode TEXT NOT NULL DEFAULT 'random'"
                 )
+            # Migrate the old mistranslated display key without losing collections.
+            await db.execute(
+                "UPDATE daily_ultraman SET ultraman_name = ? WHERE ultraman_name = ?",
+                ("欧布奥特曼·暗耀形态", "欧布奥特曼·雷霆肩章"),
+            )
             await db.commit()
 
     async def execute(self, sql: str, params: tuple = ()) -> None:
