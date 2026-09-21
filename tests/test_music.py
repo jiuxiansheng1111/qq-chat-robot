@@ -1,3 +1,6 @@
+from app.main import resolve_music_identity
+from app.services.web_search import SearchResult
+
 from app.services.music import (
     choose_netease_track,
     music_query_suffixes,
@@ -123,3 +126,40 @@ def test_music_identity_parser_accepts_json_only():
     assert identity is not None
     assert identity.artist == "ヨルシカ"
     assert parse_music_identity("我觉得可能是春泥棒") is None
+
+
+async def test_music_identity_resolver_uses_translation_aliases(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def fake_search_web(query: str, limit: int = 5):
+        captured["query"] = query
+        captured["limit"] = limit
+        return [
+            SearchResult(
+                title="Stellar Stellar - 星街すいせい",
+                url="https://example.com/song",
+                snippet="星街すいせい演唱的 Stellar Stellar",
+            )
+        ]
+
+    class FakeLLM:
+        async def ask(self, messages):
+            captured["messages"] = messages
+            return (
+                '{"title":"Stellar Stellar","artist":"星街すいせい",'
+                '"search_query":"星街すいせい Stellar Stellar"}'
+            )
+
+    monkeypatch.setattr("app.main.search_web", fake_search_web)
+    identity, results = await resolve_music_identity(
+        "星街すいせい Stellar Stellar",
+        FakeLLM(),
+        ["Hoshimachi Suisei Stellar Stellar", "星街彗星 Stellar Stellar"],
+    )
+
+    assert identity is not None
+    assert identity.artist == "星街すいせい"
+    assert len(results) == 1
+    assert "Hoshimachi Suisei Stellar Stellar" in str(captured["query"])
+    user_prompt = captured["messages"][1]["content"]
+    assert "星街彗星 Stellar Stellar" in user_prompt
