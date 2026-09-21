@@ -46,9 +46,9 @@ from app.services.possession_style import (
     fetch_member_style_image_refs,
     image_references_from_message,
     learn_possession_style,
-    summarize_possession_recall,
     style_catchphrases,
     style_reference_examples,
+    summarize_possession_recall,
 )
 from app.services.translation import (
     TranslationResult,
