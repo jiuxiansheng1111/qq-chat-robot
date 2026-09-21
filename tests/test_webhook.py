@@ -701,3 +701,38 @@ def test_text_send_error_contains_onebot_retcode(monkeypatch):
             __import__("asyncio").run(send_group_message("group-1", "hello"))
     finally:
         settings.onebot_api_base = previous_api_base
+
+
+@pytest.mark.asyncio
+async def test_onebot_http_client_bypasses_system_proxy(monkeypatch):
+    previous_api_base = settings.onebot_api_base
+    settings.onebot_api_base = "http://127.0.0.1:3000"
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {"status": "ok", "retcode": 0}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            captured.update(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr("app.main.httpx.AsyncClient", FakeClient)
+    try:
+        await send_group_message("group-1", "hello")
+    finally:
+        settings.onebot_api_base = previous_api_base
+
+    assert captured["trust_env"] is False
