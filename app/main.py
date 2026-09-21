@@ -954,10 +954,24 @@ async def onebot_webhook(
             has_image=bool(image_refs),
             max_messages=max(100, min(settings.possession_recall_history_count, 1000)),
         )
-    if not await request.app.state.limiter.allow(f"user:{user_id}"):
-        return {"ok": True, "ignored": True, "reason": "user_rate_limited"}
-    if not await request.app.state.group_limiter.allow(f"group:{group_id}"):
-        return {"ok": True, "ignored": True, "reason": "group_rate_limited"}
+    if not await request.app.state.ingress_limiter.allow(f"user:{user_id}"):
+        await notify_rate_limited(
+            request,
+            group_id,
+            user_id,
+            scope="ingress-user",
+            message="消息太快啦，先等几秒再发吧～",
+        )
+        return {"ok": True, "ignored": True, "reason": "user_ingress_rate_limited"}
+    if not await request.app.state.ingress_group_limiter.allow(f"group:{group_id}"):
+        await notify_rate_limited(
+            request,
+            group_id,
+            user_id,
+            scope="ingress-group",
+            message="这个群刚才消息有点多，等几秒再试一下吧～",
+        )
+        return {"ok": True, "ignored": True, "reason": "group_ingress_rate_limited"}
 
     plugin_spec, _ = registry.resolve(text)
     if plugin_spec and plugin_spec.name != "group_admin" and not await request.app.state.db.plugin_enabled(group_id, plugin_spec.name):
@@ -1413,6 +1427,24 @@ async def onebot_webhook(
                 format_group_memory_answer(memory_answer, prompt),
             )
             return {"ok": True, "source": "group_memory_relation"}
+        if not await request.app.state.llm_limiter.allow(f"llm-user:{user_id}"):
+            await notify_rate_limited(
+                request,
+                group_id,
+                user_id,
+                scope="llm-user",
+                message="刚才聊得有点快，给我几秒整理一下再问吧～",
+            )
+            return {"ok": True, "ignored": True, "reason": "user_llm_rate_limited"}
+        if not await request.app.state.llm_group_limiter.allow(f"llm-group:{group_id}"):
+            await notify_rate_limited(
+                request,
+                group_id,
+                user_id,
+                scope="llm-group",
+                message="群里同时问我的人有点多，稍等几秒再叫我吧～",
+            )
+            return {"ok": True, "ignored": True, "reason": "group_llm_rate_limited"}
         memory_enabled = await request.app.state.db.memory_enabled(group_id, user_id)
         long_memories = await request.app.state.db.long_term_memories(group_id, user_id)
         style_hint = await request.app.state.db.group_style_hint(group_id)
