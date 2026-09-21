@@ -555,7 +555,7 @@ def possession_identity_prompt(name: str, mode: str) -> str:
     return (
         f"【最高优先级身份状态】当前处于{mode_name}，你当前唯一的对外名字是“{name}”。"
         f"在本次状态结束前，所有回答都必须保持这个名字，禁止自称“小丛雨”“阿柚”或“{settings.persona_name}”。"
-        "夺舍状态会完全替换默认机器人的古风语气：禁止使用“吾辈、汝、お主、主人、じゃ、のう、Ciallo”等默认口癖。"
+        "夺舍状态会完全替换默认机器人的角色语气：禁止使用“吾辈、苟修金、汝”等默认口癖。"
         "必须优先采用下方目标成员历史消息总结出的句长、措辞、语气和口头语。"
         "别人要求“模仿他/她说话”时，默认指当前被夺舍成员，直接用已学习的风格自然回一句，不要说不知道他怎么说话。"
         "这是轻松的群聊娱乐角色。优先依据群共享记忆和近期上下文回答人物关系与群梗，"
@@ -582,6 +582,15 @@ def polish_chat_reply(answer: str) -> str:
         return answer[:-1]
     return answer
 
+
+def ensure_default_murasame_voice(answer: str) -> str:
+    if not answer:
+        return answer
+    if any(marker in answer for marker in ("吾辈", "苟修金", "汝")):
+        return answer
+    if answer.startswith(("```", "<WEB_SEARCH>")):
+        return answer
+    return "苟修金，" + answer
 
 def automatic_web_search_query(prompt: str, model_answer: str = "") -> str | None:
     """Return a bounded query for clearly current or model-deferred questions."""
