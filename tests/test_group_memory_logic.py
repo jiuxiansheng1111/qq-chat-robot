@@ -76,6 +76,9 @@ def test_natural_memory_answer_contains_fact_and_extra_wording():
     assert "人" in reply
     assert reply != "d"
     assert len(reply) > len("人是d")
+    assert "群记忆" not in reply
+    assert "数据库" not in reply
+    assert not reply.startswith(("嗯", "记得", "按之前"))
 
 
 def test_reasoning_hints_explain_inverse_lookup_without_reversing_roles():

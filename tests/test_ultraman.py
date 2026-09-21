@@ -11,6 +11,7 @@ from app.services.ultraman import (
     ULTRAMAN_DEBUT_YEARS,
     ULTRAMAN_PROFILES,
     ULTRAMAN_ROSTER,
+    is_ultraman_form_variant,
     official_ultraman_image,
     render_ultraman_card,
     render_ultraman_catalog,
@@ -197,3 +198,78 @@ def test_tv_form_aliases_resolve_to_canonical_entries():
     assert resolve_ultraman_query("格罗布").name == "格罗布奥特曼"
     assert resolve_ultraman_query("雷基尼斯装甲").name == "欧米伽奥特曼·雷基尼斯装甲"
     assert resolve_ultraman_query("盖梅顿装甲").name == "欧米伽奥特曼·盖梅顿装甲"
+
+
+@pytest.mark.asyncio
+async def test_shining_tiga_uses_dedicated_official_store_page(monkeypatch):
+    requested: list[str] = []
+
+    async def handler(request: httpx.Request):
+        requested.append(str(request.url))
+        if request.url.host == "store.m-78.jp":
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/html"},
+                text=(
+                    '<meta property="og:image" '
+                    'content="https://cdn.shopify.com/s/files/glitter-tiga.jpg">'
+                ),
+            )
+        assert request.url.host == "cdn.shopify.com"
+        return httpx.Response(
+            200,
+            headers={"content-type": "image/jpeg"},
+            content=b"glitter-tiga-image",
+        )
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mocked_client(**kwargs):
+        kwargs["transport"] = transport
+        return original_client(**kwargs)
+
+    monkeypatch.setattr(ultraman_module.httpx, "AsyncClient", mocked_client)
+    hero = ultraman_module.ULTRAMAN_BY_NAME["闪耀迪迦"]
+
+    result = await official_ultraman_image(
+        hero,
+        SimpleNamespace(media_timeout_seconds=10, media_max_bytes=1024),
+    )
+
+    assert is_ultraman_form_variant(hero)
+    assert any("store.m-78.jp" in url for url in requested)
+    assert not any("/heroes/ultraman-tiga" in url for url in requested)
+    assert base64.b64decode(result.removeprefix("base64://")) == b"glitter-tiga-image"
+
+
+@pytest.mark.asyncio
+async def test_form_without_exact_image_never_falls_back_to_base_art(monkeypatch):
+    async def handler(request: httpx.Request):
+        if request.url.path == "/heroes/ultraman-zero":
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/html"},
+                text=(
+                    '<meta property="og:image" '
+                    'content="https://tsuburaya-prod.com/uploads/ordinary-zero.jpg">'
+                ),
+            )
+        raise AssertionError(f"unexpected image request: {request.url}")
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mocked_client(**kwargs):
+        kwargs["transport"] = transport
+        return original_client(**kwargs)
+
+    monkeypatch.setattr(ultraman_module.httpx, "AsyncClient", mocked_client)
+    hero = ultraman_module.ULTRAMAN_BY_NAME["闪耀赛罗"]
+    assert is_ultraman_form_variant(hero)
+
+    with pytest.raises(RuntimeError, match="没有返回可用图片"):
+        await official_ultraman_image(
+            hero,
+            SimpleNamespace(media_timeout_seconds=10, media_max_bytes=1024),
+        )

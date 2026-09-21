@@ -31,6 +31,12 @@ from app.plugins.media import (
     random_real_pig_image,
 )
 from app.plugins.registry import registry
+from app.services.bilibili import (
+    bilibili_card_content,
+    choose_bilibili_video,
+    download_bilibili_cover,
+    search_bilibili_videos,
+)
 from app.services.group_memory_logic import (
     format_group_memory_answer,
     group_memory_reasoning_hints,
@@ -65,6 +71,7 @@ from app.services.translation import (
 from app.services.ultraman import (
     ULTRAMAN_BY_NAME,
     ULTRAMAN_ROSTER,
+    is_ultraman_form_variant,
     official_ultraman_image,
     render_ultraman_card,
     render_ultraman_catalog,
@@ -484,6 +491,21 @@ def extract_translation_query(event: dict, text: str) -> str | None:
     return None
 
 
+def extract_bilibili_video_query(event: dict, text: str) -> str | None:
+    for prefix in ("/视频", "/bili", "/bilibili"):
+        if text.lower() == prefix.lower():
+            return ""
+        if text.lower().startswith(prefix.lower()):
+            return text[len(prefix) :].strip(" ：:")[:100]
+    if bot_mentioned(event):
+        for prefix in ("播放视频", "B站视频", "b站视频"):
+            if text.lower() == prefix.lower():
+                return ""
+            if text.lower().startswith(prefix.lower()):
+                return text[len(prefix) :].strip(" ：:")[:100]
+    return None
+
+
 def is_identity_question(text: str) -> bool:
     normalized = re.sub(r"[\s，。！？!?、~～]", "", text)
     phrases = (
@@ -706,6 +728,46 @@ async def notify_rate_limited(
         logger.warning("rate-limit notice send failed: %s", exc)
 
 
+async def send_group_share_card(
+    group_id: str,
+    *,
+    url: str,
+    title: str,
+    content: str = "",
+    image: str = "",
+) -> None:
+    if not settings.onebot_api_base:
+        logger.info("[dry-run] group=%s share=%s", group_id, url)
+        return
+    headers = (
+        {"Authorization": f"Bearer {settings.onebot_access_token}"}
+        if settings.onebot_access_token
+        else {}
+    )
+    data = {"url": url, "title": title[:120]}
+    if content:
+        data["content"] = content[:180]
+    if image:
+        data["image"] = image
+    async with httpx.AsyncClient(timeout=12) as client:
+        response = await client.post(
+            f"{settings.onebot_api_base.rstrip('/')}/send_group_msg",
+            headers=headers,
+            json={
+                "group_id": group_id,
+                "message": [{"type": "share", "data": data}],
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+    if payload.get("status") != "ok":
+        raise RuntimeError(
+            payload.get("wording")
+            or payload.get("message")
+            or f"OneBot share card failed: retcode={payload.get('retcode')}"
+        )
+
+
 async def group_member_name(group_id: str, user_id: str) -> str:
     if not settings.onebot_api_base:
         raise RuntimeError("OneBot API is not configured")
@@ -801,6 +863,24 @@ def schedule_possession_style_learning(
         tasks.pop(task_key, None)
 
     task.add_done_callback(remember_examples)
+
+
+async def resolve_ultraman_card_image(hero) -> str:
+    try:
+        return await official_ultraman_image(hero, settings)
+    except (RuntimeError, httpx.HTTPError) as exc:
+        if not is_ultraman_form_variant(hero):
+            raise
+        logger.info(
+            "dedicated Ultraman form image unavailable for %s, trying Bilibili cover: %s",
+            hero.name,
+            exc,
+        )
+        videos = await search_bilibili_videos(hero.name, settings)
+        video = choose_bilibili_video(hero.name, videos)
+        if video is None:
+            raise RuntimeError(f"没有找到“{hero.name}”的可靠形态图片") from exc
+        return await download_bilibili_cover(video, settings)
 
 
 async def send_group_image(group_id: str, image_file: str, caption: str = "") -> None:
@@ -910,6 +990,7 @@ async def onebot_webhook(
     text = message_text(event)
     music_query = extract_music_query(event, text)
     translation_query = extract_translation_query(event, text)
+    bilibili_query = extract_bilibili_video_query(event, text)
     group_id = str(event.get("group_id", ""))
     user_id = str(event.get("user_id", event.get("sender", {}).get("user_id", "")))
     sender_role = event.get("sender", {}).get("role", "member")
@@ -1194,7 +1275,7 @@ async def onebot_webhook(
             f"{status}，已收入你的奥特曼收藏！"
         )
         try:
-            image = await official_ultraman_image(hero, settings)
+            image = await resolve_ultraman_card_image(hero)
             card = render_ultraman_card(hero, image)
             await send_group_image(group_id, card, caption)
         except (RuntimeError, httpx.HTTPError) as exc:
@@ -1237,7 +1318,7 @@ async def onebot_webhook(
             "本次仅查看图鉴，不会加入“我的奥特曼”。"
         )
         try:
-            image = await official_ultraman_image(catalog_hero, settings)
+            image = await resolve_ultraman_card_image(catalog_hero)
             card = render_ultraman_card(catalog_hero, image, heading="奥特曼图鉴")
             await send_group_image(group_id, card, caption)
         except (RuntimeError, httpx.HTTPError) as exc:
@@ -1264,6 +1345,41 @@ async def onebot_webhook(
         except (RuntimeError, httpx.HTTPError) as exc:
             logger.warning("nailong image failed: %s", exc)
             await send_group_message(group_id, "奶龙图库暂时不可用，请稍后再试。")
+    elif bilibili_query is not None:
+        if not bilibili_query:
+            await send_group_message(
+                group_id, "想看什么？例如：@我 播放视频 迪迦奥特曼 最终圣战"
+            )
+        else:
+            try:
+                videos = await search_bilibili_videos(bilibili_query, settings)
+                video = choose_bilibili_video(bilibili_query, videos)
+                if video is None:
+                    await send_group_message(
+                        group_id,
+                        f"没找到和“{bilibili_query}”足够相关的视频，换个更具体的关键词试试。",
+                    )
+                else:
+                    try:
+                        await send_group_share_card(
+                            group_id,
+                            url=video.url,
+                            title=video.title,
+                            content=bilibili_card_content(video),
+                            image=video.cover_url,
+                        )
+                    except (RuntimeError, ValueError, httpx.HTTPError) as exc:
+                        logger.warning("Bilibili share card failed: %s", exc)
+                        await send_group_message(
+                            group_id,
+                            f"找到这个：{video.title}\n"
+                            f"{bilibili_card_content(video)}\n{video.url}",
+                        )
+            except (RuntimeError, ValueError, httpx.HTTPError) as exc:
+                logger.warning("Bilibili search failed: %s", exc)
+                await send_group_message(
+                    group_id, "B站搜索这会儿没响应，等一下再试吧。"
+                )
     elif translation_query is not None:
         if not translation_query:
             await send_group_message(

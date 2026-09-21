@@ -17,6 +17,7 @@ from app.main import (
     automatic_web_search_query,
     bot_mentioned,
     enforce_possession_identity,
+    extract_bilibili_video_query,
     extract_group_memory,
     extract_group_memory_deletion,
     extract_long_memory,
@@ -35,6 +36,7 @@ from app.main import (
     possession_recent_messages_prompt,
     qualify_group_memory,
     send_group_message,
+    send_group_share_card,
     sender_display_name,
     settings,
     webhook_token_valid,
@@ -122,6 +124,36 @@ def test_mention_extracts_search_and_explicit_long_memory():
         assert extract_search_query(payload, message_text(payload)) == "Python 新版本"
         payload["message"][1]["data"]["text"] = "记住：我喜欢科幻"
         assert extract_long_memory(payload, message_text(payload)) == "我喜欢科幻"
+    finally:
+        settings.onebot_self_id = previous
+
+
+def test_bilibili_video_query_requires_slash_or_real_bot_mention():
+    previous = settings.onebot_self_id
+    settings.onebot_self_id = "bot-1"
+    try:
+        plain = event("播放视频 迪迦 最终圣战")
+        assert extract_bilibili_video_query(plain, message_text(plain)) is None
+
+        mentioned = event("播放视频 迪迦 最终圣战")
+        mentioned["message"] = [
+            {"type": "at", "data": {"qq": "bot-1"}},
+            {"type": "text", "data": {"text": "播放视频 迪迦 最终圣战"}},
+        ]
+        assert extract_bilibili_video_query(
+            mentioned, message_text(mentioned)
+        ) == "迪迦 最终圣战"
+
+        tight = event("播放视频猫和老鼠")
+        tight["message"] = [
+            {"type": "at", "data": {"qq": "bot-1"}},
+            {"type": "text", "data": {"text": "播放视频猫和老鼠"}},
+        ]
+        assert extract_bilibili_video_query(tight, message_text(tight)) == "猫和老鼠"
+
+        assert extract_bilibili_video_query(
+            event("/bili Python 教程"), "/bili Python 教程"
+        ) == "Python 教程"
     finally:
         settings.onebot_self_id = previous
 
@@ -540,3 +572,52 @@ async def test_text_send_raises_when_onebot_reports_failure(monkeypatch):
             await send_group_message("group-1", "hello")
     finally:
         settings.onebot_api_base = previous_api_base
+
+
+@pytest.mark.asyncio
+async def test_share_card_uses_onebot_share_segment(monkeypatch):
+    previous_api_base = settings.onebot_api_base
+    settings.onebot_api_base = "http://onebot.test"
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {"status": "ok", "retcode": 0}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, **kwargs):
+            captured["url"] = url
+            captured["json"] = kwargs["json"]
+            return FakeResponse()
+
+    monkeypatch.setattr("app.main.httpx.AsyncClient", FakeClient)
+    try:
+        await send_group_share_card(
+            "group-1",
+            url="https://www.bilibili.com/video/BV1xx411c7mD",
+            title="测试视频",
+            content="UP：测试 · 播放：12.3万",
+            image="https://i0.hdslb.com/test.jpg",
+        )
+    finally:
+        settings.onebot_api_base = previous_api_base
+
+    payload = captured["json"]
+    assert payload["group_id"] == "group-1"
+    segment = payload["message"][0]
+    assert segment["type"] == "share"
+    assert segment["data"]["title"] == "测试视频"
+    assert segment["data"]["image"].startswith("https://")
+    assert "BV1xx411c7mD" in segment["data"]["url"]

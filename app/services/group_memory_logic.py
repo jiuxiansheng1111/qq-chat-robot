@@ -266,25 +266,25 @@ def format_group_memory_answer(answer: MemoryAnswer, question: str) -> str:
     if answer.kind == "identity":
         if len(answer.answers) == 1:
             templates = (
-                "嗯，你说的“{target}”就是 {joined}，这个对应关系我还记着。",
-                "记得。按之前记下来的关系，“{target}”对应的是 {joined}。",
-                "有印象，“{target}”指的就是 {joined}，这条关系没忘。",
-                "按之前的群记忆来看，“{target}”就是 {joined}，所以这次能对上。",
+                "“{target}”就是 {joined}。前面这层对应关系能直接对上。",
+                "对得上，“{target}”指的就是 {joined}，不是另一个人。",
+                "这里说的“{target}”就是 {joined}，这两个称呼是连着的。",
+                "答案是 {joined}。“{target}”在这里就是指这个。",
             )
         else:
             templates = (
-                "按之前记住的对应关系，“{target}”能关联到 {joined}。",
-                "我这边记着，“{target}”对应到 {joined}，不只一个。",
-                "之前留下的关系里，“{target}”和 {joined} 都连得上。",
+                "“{target}”这边能顺着关系连到 {joined}，所以不止一个称呼。",
+                "这几个称呼是连在一起的：“{target}”可以对应到 {joined}。",
+                "顺着前面的关系往回看，“{target}”会连到 {joined}。",
             )
         template = _stable_choice(question + joined, templates)
         return template.format(target=answer.subject, joined=joined)
 
     if answer.kind == "inverse_directional":
         templates = (
-            "按之前记住的关系，{predicate}“{obj}”的是 {joined}。",
-            "这条我记得：{joined} {predicate}“{obj}”。",
-            "从之前记下来的关系看，答案是 {joined}——{predicate}的是“{obj}”。",
+            "{predicate}“{obj}”的是 {joined}。这条关系正好能反查出来。",
+            "这里对应的是 {joined}——{joined} {predicate}“{obj}”。",
+            "答案是 {joined}；把关系反过来看就能对上“{obj}”。",
         )
         return _stable_choice(question + joined, templates).format(
             predicate=answer.predicate,
@@ -294,9 +294,9 @@ def format_group_memory_answer(answer: MemoryAnswer, question: str) -> str:
 
     if answer.kind == "forward_directional":
         templates = (
-            "之前记过，{subject}{predicate}的是 {joined}。",
-            "有这条关系：{subject}{predicate} {joined}，我没忘。",
-            "按之前的群记忆，{subject}{predicate}的对象是 {joined}。",
+            "{subject}{predicate}的是 {joined}，这条关系能直接对上。",
+            "这里对应的是 {joined}。也就是 {subject}{predicate}的对象。",
+            "{subject}{predicate}的是 {joined}，没有绕到别的人身上。",
         )
         return _stable_choice(question + joined, templates).format(
             subject=answer.subject,
@@ -305,9 +305,9 @@ def format_group_memory_answer(answer: MemoryAnswer, question: str) -> str:
         )
 
     templates = (
-        "按之前记住的关系，{owner}的{role}是 {joined}。",
-        "这条关系还在：{joined} 是 {owner}的{role}。",
-        "记得，问到{owner}的{role}，对应的是 {joined}。",
+        "{owner}的{role}是 {joined}。这层关系方向别反了就行。",
+        "这里对应的是 {joined}；{joined} 才是 {owner}的{role}。",
+        "问到{owner}的{role}，答案就是 {joined}，关系方向是这一边。",
     )
     return _stable_choice(question + joined, templates).format(
         owner=answer.object,

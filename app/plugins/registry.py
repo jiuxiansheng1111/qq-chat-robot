@@ -83,6 +83,9 @@ class PluginRegistry:
             "│  🎵 点歌\n"
             "│  @我 点歌 歌名\n"
             "│\n"
+            "│  📺 B站视频\n"
+            "│  @我 播放视频 关键词\n"
+            "│\n"
             "│  🎭 夺舍\n"
             "│  @我 夺舍 @群成员\n"
             "│  @我 随机夺舍 / @我 退出\n"
@@ -110,6 +113,13 @@ registry.register(
         "music",
         ("/点歌", "/music"),
         "/点歌 <歌手/歌名> —— 网易云原唱音乐卡片",
+    )
+)
+registry.register(
+    PluginSpec(
+        "bilibili_video",
+        ("/视频", "/bili", "/bilibili"),
+        "/视频 <关键词> 或 @机器人 播放视频 <关键词> —— B站高相关高播放视频卡片",
     )
 )
 registry.register(

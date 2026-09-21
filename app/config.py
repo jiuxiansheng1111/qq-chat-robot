@@ -70,6 +70,9 @@ class Settings(BaseSettings):
     music_timeout_seconds: float = 10
     music_search_limit: int = 8
     netease_music_api_url: str = "https://music.163.com/api/search/get"
+    bilibili_search_url: str = "https://api.bilibili.com/x/web-interface/search/type"
+    bilibili_timeout_seconds: float = 10
+    bilibili_search_result_limit: int = 20
     possession_style_history_count: int = 200
     possession_style_sample_limit: int = 30
     possession_style_refresh_hours: int = 24
