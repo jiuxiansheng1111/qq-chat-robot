@@ -11,9 +11,9 @@ from app.services.possession_style import (
     possession_recall_prompt,
     possession_recall_terms,
     select_possession_recall_evidence,
-    summarize_possession_recall,
     style_catchphrases,
     style_reference_examples,
+    summarize_possession_recall,
 )
 
 
