@@ -134,6 +134,28 @@ async def test_possession_style_messages_persist_and_can_be_deleted(tmp_path):
     assert await db.possession_style_profile("100", "300") == ""
 
 
+async def test_possession_recall_messages_can_read_deeper_history(tmp_path):
+    path = tmp_path / "possession-recall.db"
+    db = Database(Settings(_env_file=None, database_path=str(path)))
+    await db.init()
+    for number in range(140):
+        await db.add_possession_style_message(
+            "100",
+            "300",
+            "羽入",
+            f"message-{number}",
+            max_messages=120,
+        )
+
+    recalled = await db.possession_recall_messages("100", "300", limit=500)
+    assert len(recalled) == 120
+    assert recalled[0] == "message-20"
+    assert recalled[-1] == "message-139"
+    assert await db.possession_style_messages("100", "300", limit=8) == [
+        f"message-{number}" for number in range(132, 140)
+    ]
+
+
 async def test_possession_context_is_shared_persistent_and_bounded(tmp_path):
     path = tmp_path / "possession-context.db"
     db = Database(Settings(_env_file=None, database_path=str(path)))
