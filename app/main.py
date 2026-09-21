@@ -555,7 +555,7 @@ def possession_identity_prompt(name: str, mode: str) -> str:
     return (
         f"【最高优先级身份状态】当前处于{mode_name}，你当前唯一的对外名字是“{name}”。"
         f"在本次状态结束前，所有回答都必须保持这个名字，禁止自称“小丛雨”“阿柚”或“{settings.persona_name}”。"
-        "夺舍状态会完全替换默认机器人的古风语气：禁止使用“吾辈、汝、お主、主人、じゃ、のう、Ciallo”等默认口癖。"
+        "夺舍状态会完全替换默认机器人的角色语气：禁止使用“吾辈、苟修金、汝”等默认口癖。"
         "必须优先采用下方目标成员历史消息总结出的句长、措辞、语气和口头语。"
         "别人要求“模仿他/她说话”时，默认指当前被夺舍成员，直接用已学习的风格自然回一句，不要说不知道他怎么说话。"
         "这是轻松的群聊娱乐角色。优先依据群共享记忆和近期上下文回答人物关系与群梗，"
@@ -582,6 +582,15 @@ def polish_chat_reply(answer: str) -> str:
         return answer[:-1]
     return answer
 
+
+def ensure_default_murasame_voice(answer: str) -> str:
+    if not answer:
+        return answer
+    if any(marker in answer for marker in ("吾辈", "苟修金", "汝")):
+        return answer
+    if answer.startswith(("```", "<WEB_SEARCH>")):
+        return answer
+    return "苟修金，" + answer
 
 def automatic_web_search_query(prompt: str, model_answer: str = "") -> str | None:
     """Return a bounded query for clearly current or model-deferred questions."""
@@ -1536,8 +1545,9 @@ async def onebot_webhook(
     elif text.startswith(("/ai ", "/AI ")) or (bot_mentioned(event) and text):
         prompt = text.split(" ", 1)[1].strip() if text.startswith(("/ai ", "/AI ")) else text
         group_memories = await request.app.state.db.group_memories(group_id)
+        active_possession = await request.app.state.db.daily_possession(group_id, today)
         memory_answer = resolve_group_memory_question(prompt, group_memories)
-        if memory_answer is not None:
+        if memory_answer is not None and not active_possession:
             await send_group_message(
                 group_id,
                 format_group_memory_answer(memory_answer, prompt),
@@ -1564,7 +1574,7 @@ async def onebot_webhook(
         memory_enabled = await request.app.state.db.memory_enabled(group_id, user_id)
         long_memories = await request.app.state.db.long_term_memories(group_id, user_id)
         style_hint = await request.app.state.db.group_style_hint(group_id)
-        possession = await request.app.state.db.daily_possession(group_id, today)
+        possession = active_possession
         persona_context: list[str] = []
         possession_name = ""
         imitate_current_possession = False
@@ -1766,6 +1776,8 @@ async def onebot_webhook(
                 await request.app.state.db.append_possession_exchange(
                     group_id, today, speaker_prompt, answer
                 )
+            else:
+                answer = ensure_default_murasame_voice(answer)
             request.app.state.memory.append(group_id, user_id, prompt, answer, memory_enabled)
             await send_group_message(group_id, answer[:2000])
             if imitate_current_possession and possession:

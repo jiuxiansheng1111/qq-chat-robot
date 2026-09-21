@@ -78,6 +78,7 @@ def test_natural_memory_answer_contains_fact_and_extra_wording():
     assert len(reply) > len("人是d")
     assert "群记忆" not in reply
     assert "数据库" not in reply
+    assert any(marker in reply for marker in ("吾辈", "苟修金", "汝"))
     assert not reply.startswith(("嗯", "记得", "按之前"))
 
 
