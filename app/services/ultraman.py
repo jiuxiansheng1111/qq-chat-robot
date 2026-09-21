@@ -1,4 +1,7 @@
 import base64
+import math
+import re
+import unicodedata
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from io import BytesIO
@@ -70,6 +73,117 @@ ULTRAMAN_ROSTER = (
     Ultraman("提欧奥特曼", "ultraman-teo"),
 )
 ULTRAMAN_BY_NAME = {hero.name: hero for hero in ULTRAMAN_ROSTER}
+
+_ULTRAMAN_ALIASES = {
+    "奥特曼": "初代奥特曼",
+    "初代": "初代奥特曼",
+    "奥父": "奥特之父",
+    "奥母": "奥特之母",
+    "赛兔子": "赛罗奥特曼",
+    "老贝": "贝利亚奥特曼",
+    "贝老黑": "贝利亚奥特曼",
+    "贝利亚": "贝利亚奥特曼",
+    "诺亚": "诺亚奥特曼",
+    "雷杰多": "雷杰多奥特曼",
+    "赛迦": "赛迦奥特曼",
+    "佐菲": "佐菲奥特曼",
+    "阿斯特拉": "阿斯特拉奥特曼",
+    "阿古茹": "阿古茹奥特曼",
+    "杰斯提斯": "杰斯提斯奥特曼",
+    "希卡利": "希卡利奥特曼",
+    "托雷基亚": "托雷基亚奥特曼",
+}
+
+
+def _normalize_ultraman_name(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).casefold().strip()
+    normalized = re.sub(r"(?:的)?(?:图片|照片|资料|简介|介绍)$", "", normalized)
+    return re.sub(r"[\s·・•._—–\-:：/]+", "", normalized)
+
+
+def _build_ultraman_alias_index() -> dict[str, Ultraman]:
+    index: dict[str, Ultraman] = {}
+    for hero in ULTRAMAN_ROSTER:
+        full_name = _normalize_ultraman_name(hero.name)
+        index[full_name] = hero
+        without_title = _normalize_ultraman_name(hero.name.replace("奥特曼", ""))
+        if without_title:
+            index.setdefault(without_title, hero)
+    for alias, canonical_name in _ULTRAMAN_ALIASES.items():
+        index[_normalize_ultraman_name(alias)] = ULTRAMAN_BY_NAME[canonical_name]
+    return index
+
+
+ULTRAMAN_ALIAS_INDEX: dict[str, Ultraman] = {}
+
+
+def resolve_ultraman_query(query: str) -> Ultraman | None:
+    """Resolve an exact official name or common nickname without fuzzy chat matches."""
+    key = _normalize_ultraman_name(query)
+    return ULTRAMAN_ALIAS_INDEX.get(key) if key else None
+
+
+def ultraman_catalog_text_pages(max_chars: int = 1700) -> list[str]:
+    """Return complete plain-text fallback pages that stay below QQ message limits."""
+    pages: list[str] = []
+    current = f"✦ 奥特曼图鉴 · 共 {len(ULTRAMAN_ROSTER)} 位/形态 ✦\n"
+    for index, hero in enumerate(ULTRAMAN_ROSTER, start=1):
+        line = f"{index:03d}. {hero.name}\n"
+        if len(current) + len(line) > max_chars:
+            pages.append(current.rstrip())
+            current = "✦ 奥特曼图鉴 · 续 ✦\n" + line
+        else:
+            current += line
+    if current.strip():
+        pages.append(current.rstrip())
+    return pages
+
+
+def render_ultraman_catalog() -> str:
+    """Render the full roster as one readable, QQ-sendable JPEG catalog."""
+    columns = 3
+    rows = math.ceil(len(ULTRAMAN_ROSTER) / columns)
+    width = 1800
+    header_height = 190
+    row_height = 47
+    footer_height = 90
+    height = header_height + rows * row_height + footer_height
+    canvas = Image.new("RGB", (width, height), (4, 9, 24))
+    draw = ImageDraw.Draw(canvas)
+    for y in range(height):
+        ratio = y / max(height - 1, 1)
+        draw.line(
+            (0, y, width, y),
+            fill=(4 + int(10 * ratio), 9 + int(17 * ratio), 24 + int(34 * ratio)),
+        )
+
+    title_font = _load_font(64)
+    subtitle_font = _load_font(30)
+    item_font = _load_font(29)
+    footer_font = _load_font(26)
+    draw.text((70, 42), "小丛雨 · 奥特曼图鉴", font=title_font, fill=(242, 247, 255))
+    draw.text(
+        (74, 122),
+        f"共收录 {len(ULTRAMAN_ROSTER)} 位角色与独立形态 · @机器人 + 名称 可查看详情",
+        font=subtitle_font,
+        fill=(157, 199, 255),
+    )
+
+    column_width = width // columns
+    for index, hero in enumerate(ULTRAMAN_ROSTER):
+        column = index // rows
+        row = index % rows
+        x = 62 + column * column_width
+        y = header_height + row * row_height
+        number = f"{index + 1:03d}"
+        draw.text((x, y), number, font=item_font, fill=(90, 164, 255))
+        draw.text((x + 70, y), hero.name, font=item_font, fill=(235, 240, 250))
+
+    footer = "查看图鉴不会增加收藏次数；只有“今日奥特曼”会写入我的奥特曼。"
+    draw.text((70, height - 62), footer, font=footer_font, fill=(160, 176, 204))
+    output = BytesIO()
+    canvas.save(output, format="JPEG", quality=91, optimize=True)
+    return "base64://" + base64.b64encode(output.getvalue()).decode()
 ULTRAMAN_PROFILES = {
     "初代奥特曼": UltramanProfile(
         "守护地球，也要相信人类自己的力量。",
@@ -396,6 +510,7 @@ for _name, _slug, _year, _description, _background in _FORM_VARIANTS:
     )
 
 ULTRAMAN_BY_NAME = {hero.name: hero for hero in ULTRAMAN_ROSTER}
+ULTRAMAN_ALIAS_INDEX = _build_ultraman_alias_index()
 
 
 class _OpenGraphImageParser(HTMLParser):
@@ -489,7 +604,9 @@ async def official_ultraman_image(hero: Ultraman, settings: Settings) -> str:
     raise RuntimeError("圆谷官方角色图片下载失败：" + "; ".join(errors))
 
 
-def render_ultraman_card(hero: Ultraman, image_file: str) -> str:
+def render_ultraman_card(
+    hero: Ultraman, image_file: str, heading: str = "今日奥特曼"
+) -> str:
     raw = base64.b64decode(image_file.removeprefix("base64://"))
     with Image.open(BytesIO(raw)) as source:
         source = source.convert("RGB")
@@ -521,7 +638,7 @@ def render_ultraman_card(hero: Ultraman, image_file: str) -> str:
         name_font = _load_font(34)
     year_font = _load_font(34)
     draw.rounded_rectangle((44, 42, 334, 108), radius=22, fill=(0, 0, 0, 145))
-    draw.text((68, 53), "今日奥特曼", font=title_font, fill="white")
+    draw.text((68, 53), heading, font=title_font, fill="white")
     draw.text(
         (56, 1000),
         hero.name,

@@ -13,6 +13,9 @@ from app.services.ultraman import (
     ULTRAMAN_ROSTER,
     official_ultraman_image,
     render_ultraman_card,
+    render_ultraman_catalog,
+    resolve_ultraman_query,
+    ultraman_catalog_text_pages,
     ultraman_profile_text,
 )
 
@@ -98,3 +101,29 @@ def test_long_form_name_renders_inside_collection_card(monkeypatch):
     )
     rendered = Image.open(BytesIO(base64.b64decode(result.removeprefix("base64://"))))
     assert rendered.size == (900, 1200)
+
+
+def test_catalog_aliases_resolve_without_fuzzy_chat_matches():
+    assert resolve_ultraman_query("奥特之父").name == "奥特之父"
+    assert resolve_ultraman_query("贝利亚").name == "贝利亚奥特曼"
+    assert resolve_ultraman_query("老贝").name == "贝利亚奥特曼"
+    assert resolve_ultraman_query("闪耀赛罗").name == "闪耀赛罗"
+    assert resolve_ultraman_query("泽塔 德尔塔天爪").name == "泽塔奥特曼·德尔塔天爪"
+    assert resolve_ultraman_query("你知道贝利亚是谁吗") is None
+
+
+def test_full_catalog_image_and_text_fallback_include_every_entry(monkeypatch):
+    monkeypatch.setattr(
+        ultraman_module,
+        "FONT_CANDIDATES",
+        ("/font-that-does-not-exist.ttc", "DejaVuSans.ttf"),
+    )
+    result = render_ultraman_catalog()
+    rendered = Image.open(BytesIO(base64.b64decode(result.removeprefix("base64://"))))
+    assert rendered.width == 1800
+    assert rendered.height > 2000
+
+    pages = ultraman_catalog_text_pages(max_chars=600)
+    combined = "\n".join(pages)
+    assert all(hero.name in combined for hero in ULTRAMAN_ROSTER)
+    assert all(len(page) <= 600 for page in pages)

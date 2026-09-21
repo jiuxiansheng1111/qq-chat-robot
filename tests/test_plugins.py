@@ -13,6 +13,8 @@ def test_plugin_registry_help():
     assert "@我 点歌" in text
     assert "@我 今日奥特曼" in text
     assert "@我 我的奥特曼" in text
+    assert "@我 奥特曼图鉴" in text
+    assert "@我 贝利亚" in text
     assert "/hello" not in text
 
 

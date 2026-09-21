@@ -53,6 +53,9 @@ from app.services.ultraman import (
     ULTRAMAN_ROSTER,
     official_ultraman_image,
     render_ultraman_card,
+    render_ultraman_catalog,
+    resolve_ultraman_query,
+    ultraman_catalog_text_pages,
     ultraman_profile_text,
 )
 from app.services.web_search import SearchResult, search_web
@@ -66,6 +69,7 @@ PIG_IMAGE_COMMANDS = frozenset({"/小猪", "/pig", "猪图", "随机猪", "随�
 NAILONG_IMAGE_COMMANDS = frozenset({"/奶龙", "奶龙", "随机奶龙", "来只奶龙", "龙来"})
 DAILY_ULTRAMAN_COMMANDS = frozenset({"/今日奥特曼", "今日奥特曼", "抽奥特曼"})
 MY_ULTRAMAN_COMMANDS = frozenset({"/我的奥特曼", "我的奥特曼", "奥特曼收藏"})
+ULTRAMAN_CATALOG_COMMANDS = frozenset({"/奥特曼图鉴", "奥特曼图鉴", "全部奥特曼"})
 RANDOM_POSSESSION_COMMANDS = frozenset(
     {"/随机夺舍", "随机夺舍", "/今日夺舍", "今日夺舍", "今天夺舍谁", "今日附身"}
 )
@@ -1045,6 +1049,32 @@ async def onebot_webhook(
                 f"已收集：{unique_count}/{len(ULTRAMAN_ROSTER)} 种\n"
                 f"本命奥特曼：{favorite}（出现 {favorite_count} 次）",
             )
+    elif bot_mentioned(event) and text in ULTRAMAN_CATALOG_COMMANDS:
+        try:
+            catalog = render_ultraman_catalog()
+            await send_group_image(
+                group_id,
+                catalog,
+                f"✦ 小丛雨的奥特曼图鉴 ✦\n共收录 {len(ULTRAMAN_ROSTER)} 位角色与独立形态。",
+            )
+        except (RuntimeError, OSError, httpx.HTTPError) as exc:
+            logger.warning("Ultraman catalog image failed: %s", exc)
+            for page in ultraman_catalog_text_pages():
+                await send_group_message(group_id, page)
+    elif bot_mentioned(event) and (catalog_hero := resolve_ultraman_query(text)):
+        caption = (
+            "✦ 奥特曼图鉴 · 角色资料 ✦\n"
+            f"【{catalog_hero.name}】\n"
+            f"{ultraman_profile_text(catalog_hero)}\n\n"
+            "本次仅查看图鉴，不会加入“我的奥特曼”。"
+        )
+        try:
+            image = await official_ultraman_image(catalog_hero, settings)
+            card = render_ultraman_card(catalog_hero, image, heading="奥特曼图鉴")
+            await send_group_image(group_id, card, caption)
+        except (RuntimeError, httpx.HTTPError) as exc:
+            logger.warning("Ultraman encyclopedia image failed: %s", exc)
+            await send_group_message(group_id, caption + "\n图片暂时加载失败，稍后再查看吧。")
     elif text in CAT_IMAGE_COMMANDS or mentioned_image_command(event, CAT_IMAGE_COMMANDS):
         try:
             image = await random_cat_gif(settings)
