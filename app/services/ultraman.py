@@ -97,6 +97,7 @@ _ULTRAMAN_ALIASES = {
 
 def _normalize_ultraman_name(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value).casefold().strip()
+    normalized = re.sub(r"^[!?！？。，,.~～、;；:：]+|[!?！？。，,.~～、;；:：]+$", "", normalized)
     normalized = re.sub(r"(?:的)?(?:图片|照片|资料|简介|介绍)$", "", normalized)
     return re.sub(r"[\s·・•._—–\-:：/]+", "", normalized)
 
@@ -120,7 +121,19 @@ ULTRAMAN_ALIAS_INDEX: dict[str, Ultraman] = {}
 def resolve_ultraman_query(query: str) -> Ultraman | None:
     """Resolve an exact official name or common nickname without fuzzy chat matches."""
     key = _normalize_ultraman_name(query)
-    return ULTRAMAN_ALIAS_INDEX.get(key) if key else None
+    if not key:
+        return None
+    direct = ULTRAMAN_ALIAS_INDEX.get(key)
+    if direct:
+        return direct
+
+    conversational = re.sub(
+        r"^(?:请|麻烦)?(?:介绍一下|介绍|查看|看看|查询|给我看看|我想看|来一个|来个)",
+        "",
+        key,
+    )
+    conversational = re.sub(r"(?:是谁|是什么|怎么样|厉害吗)$", "", conversational)
+    return ULTRAMAN_ALIAS_INDEX.get(conversational)
 
 
 def ultraman_catalog_text_pages(max_chars: int = 1700) -> list[str]:

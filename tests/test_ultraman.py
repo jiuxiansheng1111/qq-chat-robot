@@ -109,6 +109,9 @@ def test_catalog_aliases_resolve_without_fuzzy_chat_matches():
     assert resolve_ultraman_query("老贝").name == "贝利亚奥特曼"
     assert resolve_ultraman_query("闪耀赛罗").name == "闪耀赛罗"
     assert resolve_ultraman_query("泽塔 德尔塔天爪").name == "泽塔奥特曼·德尔塔天爪"
+    assert resolve_ultraman_query("泽塔德尔塔天爪？").name == "泽塔奥特曼·德尔塔天爪"
+    assert resolve_ultraman_query("介绍一下贝利亚").name == "贝利亚奥特曼"
+    assert resolve_ultraman_query("看看奥特之父").name == "奥特之父"
     assert resolve_ultraman_query("你知道贝利亚是谁吗") is None
 
 
