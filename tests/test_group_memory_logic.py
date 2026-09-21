@@ -1,0 +1,88 @@
+from app.services.group_memory_logic import (
+    format_group_memory_answer,
+    group_memory_reasoning_hints,
+    parse_memory_relation,
+    resolve_group_memory_question,
+)
+
+
+def test_simple_is_relation_is_reversible():
+    relation = parse_memory_relation("d 是 人")
+    assert relation is not None
+    assert relation.subject == "d"
+    assert relation.object == "人"
+    assert relation.kind == "identity"
+
+    answer = resolve_group_memory_question("人是谁", ["d 是 人"])
+    assert answer is not None
+    assert answer.answers == ("d",)
+
+    answer = resolve_group_memory_question("谁是人", ["d 是 人"])
+    assert answer is not None
+    assert answer.answers == ("d",)
+
+    answer = resolve_group_memory_question("d是谁", ["d 是 人"])
+    assert answer is not None
+    assert answer.answers == ("人",)
+
+    answer = resolve_group_memory_question("人指的是谁", ["d 是 人"])
+    assert answer is not None
+    assert answer.answers == ("d",)
+
+
+def test_identity_relations_can_follow_short_alias_chains():
+    memories = ["d 是 人", "人 就是 hzh"]
+    answer = resolve_group_memory_question("hzh是谁", memories)
+    assert answer is not None
+    assert answer.answers == ("人", "d")
+
+
+def test_directional_verbs_reverse_subject_and_object_safely():
+    memories = ["d 喜欢 猫", "小明讨厌香菜"]
+
+    inverse = resolve_group_memory_question("谁喜欢猫", memories)
+    assert inverse is not None
+    assert inverse.answers == ("d",)
+
+    forward = resolve_group_memory_question("d喜欢什么", memories)
+    assert forward is not None
+    assert forward.answers == ("猫",)
+
+    dislike = resolve_group_memory_question("谁讨厌香菜", memories)
+    assert dislike is not None
+    assert dislike.answers == ("小明",)
+
+
+def test_role_relations_keep_direction_instead_of_becoming_aliases():
+    memories = ["hzh 是 小明的儿子"]
+    relation = parse_memory_relation(memories[0])
+    assert relation is not None
+    assert relation.kind == "role"
+    assert relation.subject == "hzh"
+    assert relation.object == "小明"
+    assert relation.predicate == "儿子"
+
+    answer = resolve_group_memory_question("小明的儿子是谁", memories)
+    assert answer is not None
+    assert answer.answers == ("hzh",)
+    assert resolve_group_memory_question("儿子是谁", memories) is None
+
+
+def test_natural_memory_answer_contains_fact_and_extra_wording():
+    answer = resolve_group_memory_question("人是谁", ["d是人"])
+    assert answer is not None
+    reply = format_group_memory_answer(answer, "人是谁")
+    assert "d" in reply
+    assert "人" in reply
+    assert reply != "d"
+    assert len(reply) > len("人是d")
+
+
+def test_reasoning_hints_explain_inverse_lookup_without_reversing_roles():
+    hints = group_memory_reasoning_hints(
+        ["d是人", "小明喜欢猫", "hzh是小明的儿子"]
+    )
+    assert "d ↔ 人" in hints
+    assert "谁喜欢猫" in hints
+    assert "小明的儿子是谁" in hints
+    assert "不要颠倒亲属/关系方向" in hints
