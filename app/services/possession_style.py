@@ -349,7 +349,10 @@ def member_style_image_refs(payload: dict, user_id: str, limit: int = 5) -> list
 
 
 async def fetch_member_style_history(
-    settings: Settings, group_id: str, user_id: str
+    settings: Settings,
+    group_id: str,
+    user_id: str,
+    count: int | None = None,
 ) -> dict:
     if not settings.onebot_api_base:
         raise RuntimeError("OneBot API is not configured")
@@ -358,9 +361,10 @@ async def fetch_member_style_history(
         if settings.onebot_access_token
         else {}
     )
+    history_count = settings.possession_style_history_count if count is None else count
     body = {
         "group_id": group_id,
-        "count": max(20, min(settings.possession_style_history_count, 500)),
+        "count": max(20, min(history_count, 500)),
         "reverseOrder": False,
     }
     async with httpx.AsyncClient(timeout=12) as client:
@@ -383,6 +387,23 @@ async def fetch_member_style_samples(
     samples = member_style_samples(payload, user_id, settings.possession_style_sample_limit)
     media_marker = member_media_style_marker(payload, user_id)
     return samples + ([media_marker] if media_marker else [])
+
+
+async def fetch_member_recall_samples(
+    settings: Settings, group_id: str, user_id: str
+) -> list[str]:
+    """Fetch a deeper pool of the target member's own recent messages for question-time recall."""
+    payload = await fetch_member_style_history(
+        settings,
+        group_id,
+        user_id,
+        count=settings.possession_recall_history_count,
+    )
+    return member_style_samples(
+        payload,
+        user_id,
+        settings.possession_recall_history_count,
+    )
 
 
 async def fetch_member_style_image_refs(
