@@ -13,6 +13,13 @@ OFFICIAL_HERO_BASE_URL = "https://tsuburaya-prod.com/heroes"
 OFFICIAL_USER_AGENT = (
     "qq-chatrobot/0.1 (https://github.com/jiuxiansheng1111/qq-chat-robot)"
 )
+FONT_CANDIDATES = (
+    "C:/Windows/Fonts/msyh.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "DejaVuSans.ttf",
+)
 
 
 @dataclass(frozen=True)
@@ -503,17 +510,16 @@ def render_ultraman_card(hero: Ultraman, image_file: str) -> str:
         gradient.line((0, y, target_width, y), fill=(3, 8, 20, alpha))
     card = Image.alpha_composite(card.convert("RGBA"), overlay)
     draw = ImageDraw.Draw(card)
-    font_path = "C:/Windows/Fonts/msyh.ttc"
-    title_font = ImageFont.truetype(font_path, 42)
+    title_font = _load_font(42)
     name_font_size = 70
     while name_font_size > 34:
-        name_font = ImageFont.truetype(font_path, name_font_size)
+        name_font = _load_font(name_font_size)
         if draw.textbbox((0, 0), hero.name, font=name_font, stroke_width=3)[2] <= 790:
             break
         name_font_size -= 2
     else:
-        name_font = ImageFont.truetype(font_path, 34)
-    year_font = ImageFont.truetype(font_path, 34)
+        name_font = _load_font(34)
+    year_font = _load_font(34)
     draw.rounded_rectangle((44, 42, 334, 108), radius=22, fill=(0, 0, 0, 145))
     draw.text((68, 53), "今日奥特曼", font=title_font, fill="white")
     draw.text(
@@ -535,6 +541,16 @@ def render_ultraman_card(hero: Ultraman, image_file: str) -> str:
     output = BytesIO()
     card.convert("RGB").save(output, format="JPEG", quality=90, optimize=True)
     return "base64://" + base64.b64encode(output.getvalue()).decode()
+
+
+def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Load a CJK-capable font on Windows/Linux, with a portable final fallback."""
+    for candidate in FONT_CANDIDATES:
+        try:
+            return ImageFont.truetype(candidate, size)
+        except OSError:
+            continue
+    return ImageFont.load_default(size=size)
 
 
 def ultraman_profile_text(hero: Ultraman) -> str:

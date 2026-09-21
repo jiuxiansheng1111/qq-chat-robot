@@ -82,7 +82,12 @@ async def test_official_image_bypasses_broken_legacy_host_redirect(monkeypatch):
     assert base64.b64decode(result.removeprefix("base64://")) == b"official-ultraman-image"
 
 
-def test_long_form_name_renders_inside_collection_card():
+def test_long_form_name_renders_inside_collection_card(monkeypatch):
+    monkeypatch.setattr(
+        ultraman_module,
+        "FONT_CANDIDATES",
+        ("/font-that-does-not-exist.ttc", "DejaVuSans.ttf"),
+    )
     source = BytesIO()
     Image.new("RGB", (1200, 900), "navy").save(source, format="JPEG")
     hero = next(
