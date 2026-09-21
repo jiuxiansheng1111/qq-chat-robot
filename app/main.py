@@ -249,6 +249,29 @@ app.include_router(auth_router)
 app.include_router(admin_router)
 
 
+@app.middleware("http")
+async def onebot_webhook_exception_guard(request: Request, call_next):
+    """Never make NapCat retry a delivered event because reply handling failed."""
+    try:
+        return await call_next(request)
+    except Exception as exc:
+        if request.url.path != "/onebot/webhook":
+            raise
+        logger.exception(
+            "OneBot webhook handler failed; callback acknowledged to avoid retry loop: %s",
+            exc,
+        )
+        return JSONResponse(
+            {
+                "ok": False,
+                "handled": True,
+                "reason": "webhook_internal_error",
+                "error_type": type(exc).__name__,
+            },
+            status_code=200,
+        )
+
+
 @app.get("/health/live")
 async def live():
     return {"status": "ok"}
@@ -713,10 +736,15 @@ async def send_group_message(group_id: str, message: str) -> None:
         response.raise_for_status()
         payload = response.json()
     if payload.get("status") != "ok":
-        raise RuntimeError(
+        detail = (
             payload.get("wording")
             or payload.get("message")
-            or f"OneBot send_group_msg failed: retcode={payload.get('retcode')}"
+            or "unknown OneBot error"
+        )
+        raise RuntimeError(
+            "OneBot send_group_msg failed: "
+            f"retcode={payload.get('retcode')}, status={payload.get('status')}, "
+            f"detail={detail}"
         )
 
 
