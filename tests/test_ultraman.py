@@ -242,6 +242,26 @@ def test_orb_official_chinese_aliases_are_not_cross_wired():
     assert resolve_ultraman_query("闪电攻击者").name == "欧布奥特曼·煌闪形态"
 
 
+def test_related_special_forms_also_require_specific_artwork():
+    expected = {
+        "帝纳斯奥特曼",
+        "诺亚奥特曼",
+        "雷杰多奥特曼",
+        "贝利亚早期形态",
+        "托雷基亚早期形态",
+    }
+    assert ultraman_module._RELATED_VARIANT_NAMES == expected
+    for name in expected:
+        hero = ultraman_module.ULTRAMAN_BY_NAME[name]
+        assert is_ultraman_form_variant(hero)
+
+    for canonical_name, aliases in ultraman_module._RELATED_ALT_NAMES.items():
+        for alias in aliases:
+            resolved = resolve_ultraman_query(alias)
+            assert resolved is not None
+            assert resolved.name == canonical_name
+
+
 def test_form_image_search_is_specific_for_every_form():
     for form_name, *_ in ultraman_module._FORM_VARIANTS:
         hero = ultraman_module.ULTRAMAN_BY_NAME[form_name]
