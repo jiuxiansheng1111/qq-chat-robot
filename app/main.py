@@ -41,6 +41,11 @@ from app.services.music import (
     parse_music_identity,
     search_netease_music,
 )
+from app.services.group_memory_logic import (
+    format_group_memory_answer,
+    group_memory_reasoning_hints,
+    resolve_group_memory_question,
+)
 from app.services.possession_style import (
     fetch_member_recall_samples,
     fetch_member_style_image_refs,
@@ -367,6 +372,9 @@ def group_memory_prompt(memories: list[str], current_identity: str) -> str:
     ]
     if reliable:
         sections.append("明确事实：\n" + "\n".join(f"- {item}" for item in reliable))
+        reasoning_hints = group_memory_reasoning_hints(reliable)
+        if reasoning_hints:
+            sections.append(reasoning_hints)
     if ambiguous:
         sections.append(
             "旧版主语不明确的记忆（不能自动套到当前夺舍对象）：\n"
@@ -1047,6 +1055,15 @@ async def onebot_webhook(
                 group_id,
                 f"我现在是机器人“{settings.persona_name}”，没有在夺舍。",
             )
+    elif bot_mentioned(event) and text:
+        group_memories = await request.app.state.db.group_memories(group_id)
+        memory_answer = resolve_group_memory_question(text, group_memories)
+        if memory_answer is not None:
+            await send_group_message(
+                group_id,
+                format_group_memory_answer(memory_answer, text),
+            )
+            return {"ok": True, "source": "group_memory_relation"}
     elif is_targeted_possession_command(event, text):
         targets = mentioned_user_ids(event)
         if len(targets) != 1:
