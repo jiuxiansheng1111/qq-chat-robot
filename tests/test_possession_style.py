@@ -8,6 +8,9 @@ from app.services.possession_style import (
     member_media_style_marker,
     member_style_image_refs,
     member_style_samples,
+    possession_recall_prompt,
+    possession_recall_terms,
+    select_possession_recall_evidence,
     style_catchphrases,
     style_reference_examples,
 )
@@ -151,3 +154,69 @@ async def test_style_learning_falls_back_to_messages_observed_by_webhook(monkeyp
 
     assert samples == ["压根不行", "怎么这样", "发不出来了"]
     assert database.saved is not None
+
+
+def test_possession_recall_terms_extract_people_objects_and_intents():
+    subjects, intents = possession_recall_terms("你们认识山乃乃吗")
+    assert subjects == ["山乃乃"]
+    assert "认识" in intents
+    assert "朋友" in intents
+
+    subjects, intents = possession_recall_terms("你觉得苹果手机怎么样")
+    assert subjects == ["苹果手机"]
+    assert "感觉" in intents
+
+    subjects, intents = possession_recall_terms("你最喜欢哪个角色")
+    assert subjects == []
+    assert "喜欢" in intents
+    assert "本命" in intents
+
+
+def test_possession_recall_evidence_prioritizes_subject_and_keeps_nearby_context():
+    samples = [
+        "今天好困",
+        "山乃乃又来了",
+        "我最喜欢干山乃乃",
+        "一拳打的山乃乃",
+        "晚饭吃啥",
+        "我最近在玩原神",
+    ]
+    evidence = select_possession_recall_evidence(
+        "你们认识山乃乃吗",
+        samples,
+        limit=6,
+    )
+    assert "山乃乃又来了" in evidence
+    assert "我最喜欢干山乃乃" in evidence
+    assert "一拳打的山乃乃" in evidence
+    assert "我最近在玩原神" not in evidence
+
+
+def test_possession_recall_excludes_current_question_from_evidence():
+    question = "你认识山乃乃吗"
+    evidence = select_possession_recall_evidence(
+        question,
+        [question, "山乃乃老是艾特我", "不知道"],
+    )
+    assert question not in evidence
+    assert "山乃乃老是艾特我" in evidence
+
+
+def test_possession_recall_can_answer_generic_preference_question():
+    evidence = select_possession_recall_evidence(
+        "你最喜欢哪个角色",
+        ["随便", "我本命是初音未来", "最近天气不错"],
+    )
+    assert evidence == ["我本命是初音未来"]
+
+
+def test_possession_recall_prompt_marks_history_as_personal_evidence_not_objective_fact():
+    prompt = possession_recall_prompt(
+        "羽入",
+        "你觉得山乃乃怎么样",
+        ["山乃乃怎么又来了", "我最喜欢干山乃乃"],
+    )
+    assert "羽入本人历史群聊" in prompt
+    assert "山乃乃" in prompt
+    assert "不自动证明现实世界事实" in prompt
+    assert "不要升级成现实中的朋友" in prompt
