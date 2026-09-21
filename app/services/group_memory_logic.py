@@ -4,12 +4,12 @@ from dataclasses import dataclass
 
 
 IDENTITY_QUERY_SUFFIXES = (
-    "是谁",
-    "是什么",
     "指的是谁",
-    "指谁",
-    "是哪位",
+    "是什么",
     "叫什么",
+    "是哪位",
+    "是谁",
+    "指谁",
 )
 DIRECTIONAL_VERBS = (
     "喜欢",
