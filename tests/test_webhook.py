@@ -13,6 +13,7 @@ from app.main import (
     TARGETED_POSSESSION_COMMANDS,
     app,
     asks_for_sender_name,
+    asks_for_ultraman_image_followup,
     asks_to_imitate_current_possession,
     automatic_web_search_query,
     bot_mentioned,
@@ -279,6 +280,13 @@ def test_plain_possession_alias_with_target_is_a_targeted_command():
         assert is_targeted_possession_command(tight, message_text(tight))
     finally:
         settings.onebot_self_id = previous
+
+
+def test_ultraman_image_followup_phrases_are_detected():
+    assert asks_for_ultraman_image_followup("对的我要看图片")
+    assert asks_for_ultraman_image_followup("图片呢")
+    assert asks_for_ultraman_image_followup("给我看看图")
+    assert not asks_for_ultraman_image_followup("给我看看猫图")
 
 
 def test_identity_questions_are_detected_without_llm_guessing():
@@ -736,3 +744,57 @@ async def test_onebot_http_client_bypasses_system_proxy(monkeypatch):
         settings.onebot_api_base = previous_api_base
 
     assert captured["trust_env"] is False
+
+
+def test_ultraman_followup_reuses_last_resolved_form(monkeypatch, tmp_path):
+    previous_database_path = settings.database_path
+    previous_onebot_api_base = settings.onebot_api_base
+    previous_self_id = settings.onebot_self_id
+    settings.database_path = str(tmp_path / "ultraman-followup.db")
+    settings.onebot_api_base = ""
+    settings.onebot_self_id = "bot-1"
+    sent: list[tuple[str, str]] = []
+
+    async def fake_resolve_image(hero):
+        return "base64://ZmFrZQ=="
+
+    def fake_render_card(hero, image, heading="今日奥特曼"):
+        return f"card://{hero.name}"
+
+    async def fake_send_image(group_id, image_file, caption=""):
+        sent.append((image_file, caption))
+
+    monkeypatch.setattr("app.main.resolve_ultraman_card_image", fake_resolve_image)
+    monkeypatch.setattr("app.main.render_ultraman_card", fake_render_card)
+    monkeypatch.setattr("app.main.send_group_image", fake_send_image)
+
+    def at_event(text: str, message_id: str):
+        payload = event(text, user_id="orb-user")
+        payload["message_id"] = message_id
+        payload["message"] = [
+            {"type": "at", "data": {"qq": "bot-1"}},
+            {"type": "text", "data": {"text": text}},
+        ]
+        return payload
+
+    try:
+        with TestClient(app) as client:
+            first = post_event(
+                client,
+                at_event("欧布奥特曼 暗耀形态", "orb-dark-1"),
+            )
+            second = post_event(
+                client,
+                at_event("对的我要看图片", "orb-dark-2"),
+            )
+
+            assert first.status_code == 200
+            assert second.status_code == 200
+            assert len(sent) == 2
+            assert all("欧布奥特曼·雷霆肩章" in caption for _, caption in sent)
+            assert sent[-1][0] == "card://欧布奥特曼·雷霆肩章"
+            assert "吾辈把【欧布奥特曼·雷霆肩章】的图找来了" in sent[-1][1]
+    finally:
+        settings.database_path = previous_database_path
+        settings.onebot_api_base = previous_onebot_api_base
+        settings.onebot_self_id = previous_self_id

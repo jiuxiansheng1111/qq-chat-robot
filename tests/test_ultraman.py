@@ -17,6 +17,7 @@ from app.services.ultraman import (
     render_ultraman_catalog,
     resolve_ultraman_query,
     ultraman_catalog_text_pages,
+    ultraman_image_search_query,
     ultraman_profile_text,
 )
 
@@ -192,8 +193,18 @@ def test_tv_forms_and_true_fusion_forms_only():
     assert forbidden.isdisjoint(names)
 
 
+def test_orb_dark_form_image_search_uses_common_chinese_alias():
+    hero = ultraman_module.ULTRAMAN_BY_NAME["欧布奥特曼·雷霆肩章"]
+    query = ultraman_image_search_query(hero)
+    assert "欧布奥特曼" in query
+    assert "暗耀形态" in query
+
+
 def test_tv_form_aliases_resolve_to_canonical_entries():
     assert resolve_ultraman_query("欧布原生").name == "欧布奥特曼·原生形态"
+    assert resolve_ultraman_query("欧布奥特曼 暗耀形态").name == "欧布奥特曼·雷霆肩章"
+    assert resolve_ultraman_query("欧布暗耀").name == "欧布奥特曼·雷霆肩章"
+    assert resolve_ultraman_query("暗耀形态").name == "欧布奥特曼·雷霆肩章"
     assert resolve_ultraman_query("闪电攻击者").name == "欧布奥特曼·闪电攻击者"
     assert resolve_ultraman_query("格罗布").name == "格罗布奥特曼"
     assert resolve_ultraman_query("雷基尼斯装甲").name == "欧米伽奥特曼·雷基尼斯装甲"
