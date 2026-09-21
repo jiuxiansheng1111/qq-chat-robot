@@ -24,6 +24,7 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+addopts = ["--basetemp=.test-tmp/pytest"]
 testpaths = ["tests"]
 markers = [
   "live: calls configured external services and may consume API quota",
