@@ -313,11 +313,12 @@ def test_group_memory_binds_you_to_identity_active_when_saved():
 
 def test_group_memory_prompt_separates_legacy_ambiguous_facts():
     prompt = group_memory_prompt(
-        ["hzh是群里所有人的儿子", "你是一只猫娘"], "羽入"
+        ["d是人", "hzh是群里所有人的儿子", "你是一只猫娘"], "羽入"
     )
     assert "明确事实" in prompt
     assert "答案已在事实中时禁止回答不知道" in prompt
     assert "第一人称也继承该别名的已知关系" in prompt
+    assert "可逆对应：d ↔ 人" in prompt
     assert "旧版主语不明确" in prompt
 
 
