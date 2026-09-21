@@ -258,8 +258,7 @@ async def onebot_webhook_exception_guard(request: Request, call_next):
         if request.url.path != "/onebot/webhook":
             raise
         logger.exception(
-            "OneBot webhook handler failed; callback acknowledged to avoid retry loop: %s",
-            exc,
+            "OneBot webhook handler failed; callback acknowledged to avoid retry loop"
         )
         return JSONResponse(
             {
