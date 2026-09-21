@@ -668,9 +668,42 @@ async def send_group_message(group_id: str, message: str) -> None:
     if not settings.onebot_api_base:
         logger.info("[dry-run] group=%s message=%s", group_id, message)
         return
-    headers = {"Authorization": f"Bearer {settings.onebot_access_token}"} if settings.onebot_access_token else {}
+    headers = (
+        {"Authorization": f"Bearer {settings.onebot_access_token}"}
+        if settings.onebot_access_token
+        else {}
+    )
     async with httpx.AsyncClient(timeout=10) as client:
-        await client.post(f"{settings.onebot_api_base.rstrip('/')}/send_group_msg", headers=headers, json={"group_id": group_id, "message": message})
+        response = await client.post(
+            f"{settings.onebot_api_base.rstrip('/')}/send_group_msg",
+            headers=headers,
+            json={"group_id": group_id, "message": message},
+        )
+        response.raise_for_status()
+        payload = response.json()
+    if payload.get("status") != "ok":
+        raise RuntimeError(
+            payload.get("wording")
+            or payload.get("message")
+            or f"OneBot send_group_msg failed: retcode={payload.get('retcode')}"
+        )
+
+
+async def notify_rate_limited(
+    request: Request,
+    group_id: str,
+    user_id: str,
+    *,
+    scope: str,
+    message: str,
+) -> None:
+    notice_key = f"{scope}:{group_id}:{user_id}"
+    if not await request.app.state.rate_limit_notice_limiter.allow(notice_key):
+        return
+    try:
+        await send_group_message(group_id, message)
+    except (RuntimeError, ValueError, httpx.HTTPError) as exc:
+        logger.warning("rate-limit notice send failed: %s", exc)
 
 
 async def group_member_name(group_id: str, user_id: str) -> str:
