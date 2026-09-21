@@ -214,11 +214,13 @@ def select_possession_recall_evidence(
 
     cleaned_samples: list[str] = []
     seen: set[str] = set()
+    question_key = re.sub(r"\s+", " ", str(prompt)).strip().casefold()
     for sample in samples:
         text = re.sub(r"\s+", " ", str(sample)).strip()
         key = text.casefold()
         if (
             not text
+            or key == question_key
             or text.startswith(STYLE_MEDIA_MARKER_PREFIX)
             or key in seen
             or text.startswith(("http://", "https://"))
