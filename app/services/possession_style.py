@@ -215,9 +215,10 @@ def select_possession_recall_evidence(
         if (
             not text
             or key == question_key
-            or text.startswith(STYLE_MEDIA_MARKER_PREFIX)
+            or text.startswith(
+                (STYLE_MEDIA_MARKER_PREFIX, "http://", "https://")
+            )
             or key in seen
-            or text.startswith(("http://", "https://"))
         ):
             continue
         seen.add(key)
