@@ -640,3 +640,64 @@ def test_persona_uses_苟修金_with_light_japanese_flavor():
     assert "不要整句或整段切成日语" in persona
     assert "お主" not in persona
     assert "ご主人" not in persona
+
+
+def test_webhook_internal_error_returns_200_to_napcat(monkeypatch, tmp_path):
+    previous_database_path = settings.database_path
+    previous_onebot_api_base = settings.onebot_api_base
+    settings.database_path = str(tmp_path / "webhook-500-guard.db")
+    settings.onebot_api_base = "http://onebot.test"
+
+    async def broken_send(group_id: str, message: str) -> None:
+        raise RuntimeError("simulated OneBot send failure")
+
+    monkeypatch.setattr("app.main.send_group_message", broken_send)
+    try:
+        with TestClient(app) as client:
+            payload = event("/help", user_id="guard-user")
+            payload["message_id"] = "guard-message-1"
+            response = post_event(client, payload)
+
+            assert response.status_code == 200
+            assert response.json()["reason"] == "webhook_internal_error"
+            assert response.json()["handled"] is True
+            assert response.json()["error_type"] == "RuntimeError"
+    finally:
+        settings.database_path = previous_database_path
+        settings.onebot_api_base = previous_onebot_api_base
+
+
+def test_text_send_error_contains_onebot_retcode(monkeypatch):
+    previous_api_base = settings.onebot_api_base
+    settings.onebot_api_base = "http://onebot.test"
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {
+                "status": "failed",
+                "retcode": 1200,
+                "wording": "message rejected",
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr("app.main.httpx.AsyncClient", FakeClient)
+    try:
+        with pytest.raises(RuntimeError, match=r"retcode=1200.*message rejected"):
+            __import__("asyncio").run(send_group_message("group-1", "hello"))
+    finally:
+        settings.onebot_api_base = previous_api_base
