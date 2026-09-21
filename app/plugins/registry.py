@@ -3,6 +3,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from app.services.ultraman import ULTRAMAN_ROSTER
+
 PluginHandler = Callable[[Any], Awaitable[str | None]]
 
 
@@ -54,6 +56,7 @@ class PluginRegistry:
         return self._plugins.get(name) if name else None
 
     def help_text(self) -> str:
+        roster_count = len(ULTRAMAN_ROSTER)
         return (
             "┏ 小丛雨 · 功能菜单 ┓\n"
             "│\n"
@@ -65,7 +68,7 @@ class PluginRegistry:
             "│  @我 随机猪猪\n"
             "│  @我 随机奶龙\n"
             "│\n"
-            "│  ✨ 奥特曼收藏（129 位/形态）\n"
+            f"│  ✨ 奥特曼收藏（{roster_count} 位/形态）\n"
             "│  @我 今日奥特曼\n"
             "│  @我 我的奥特曼\n"
             "│  @我 奥特曼图鉴\n"
