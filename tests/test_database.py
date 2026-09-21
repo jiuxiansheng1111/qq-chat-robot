@@ -224,20 +224,47 @@ async def test_daily_ultraman_collection_is_persistent_and_counted_once_per_day(
     )
 
 
-async def test_database_migrates_legacy_orb_dark_form_name(tmp_path):
-    settings = Settings(database_path=str(tmp_path / "legacy-orb.db"), _env_file=None)
+async def test_database_migrates_audited_ultraman_form_names(tmp_path):
+    settings = Settings(database_path=str(tmp_path / "legacy-forms.db"), _env_file=None)
     db = Database(settings)
     await db.init()
-    await db.execute(
-        "INSERT INTO daily_ultraman(user_id, draw_date, group_id, ultraman_name) "
-        "VALUES (?, ?, ?, ?)",
-        ("user", "2026-09-20", "group", "欧布奥特曼·雷霆肩章"),
-    )
+    migrations = {
+        "欧布奥特曼·雷霆肩章": "欧布奥特曼·暗耀形态",
+        "梦比优斯无限形态": "梦比优斯奥特曼·无限形态",
+        "强壮日冕赛罗": "赛罗奥特曼·强壮日冕型",
+        "月神奇迹赛罗": "赛罗奥特曼·月神奇迹型",
+        "闪耀赛罗": "赛罗奥特曼·闪耀型",
+        "赛罗奥特曼·超越形态": "赛罗奥特曼·无限形态",
+        "银河斯特利姆": "银河奥特曼·斯特利姆形态",
+        "银河维克特利": "银河维克特利奥特曼",
+        "艾克斯奥特曼·超越型": "艾克斯奥特曼·超越形态",
+        "欧布奥特曼·斯佩修姆哉佩利敖": "欧布奥特曼·重光形态",
+        "欧布奥特曼·燃烧炸弹": "欧布奥特曼·暴炎形态",
+        "欧布奥特曼·闪电攻击者": "欧布奥特曼·煌闪形态",
+        "欧布奥特曼·艾梅利姆头镖": "欧布奥特曼·智勇形态",
+        "泰迦奥特曼·三重斯特利姆": "泰迦奥特曼·三重斯特利姆形态",
+        "特利迦真理形态": "真理特利迦",
+        "布莱泽奥特曼·法德兰装甲": "布莱泽奥特曼·法多兰盔甲",
+        "亚刻奥特曼·太阳装甲": "亚刻奥特曼·索利斯装甲",
+        "亚刻奥特曼·月亮装甲": "亚刻奥特曼·露娜装甲",
+        "欧米伽奥特曼·雷基尼斯装甲": "欧米伽奥特曼·雷金斯装甲",
+        "欧米伽奥特曼·瓦尔格尼斯装甲": "欧米伽奥特曼·瓦尔根斯装甲",
+        "欧米伽奥特曼·盖梅顿装甲": "欧米伽奥特曼·加梅顿装甲",
+    }
+
+    for index, old_name in enumerate(migrations):
+        await db.execute(
+            "INSERT INTO daily_ultraman(user_id, draw_date, group_id, ultraman_name) "
+            "VALUES (?, ?, ?, ?)",
+            (f"user-{index}", "2026-09-20", "group", old_name),
+        )
 
     await db.init()
 
-    row = await db.fetchone(
-        "SELECT ultraman_name FROM daily_ultraman WHERE user_id = ? AND draw_date = ?",
-        ("user", "2026-09-20"),
+    rows = await db.fetchall(
+        "SELECT user_id, ultraman_name FROM daily_ultraman ORDER BY user_id"
     )
-    assert row[0] == "欧布奥特曼·暗耀形态"
+    migrated = {name for _, name in rows}
+    assert migrated == set(migrations.values())
+
+
