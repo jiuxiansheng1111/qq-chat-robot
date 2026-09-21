@@ -12,8 +12,13 @@ class Settings(BaseSettings):
     database_path: str = "./data/qqchat.db"
     redis_url: str = ""
     event_dedupe_ttl_seconds: int = 300
-    user_rate_limit_per_minute: int = 5
-    group_rate_limit_per_minute: int = 60
+    # High-ceiling ingress protection for all group events.
+    ingress_user_rate_limit_per_minute: int = 60
+    ingress_group_rate_limit_per_minute: int = 300
+    # Stricter limit applies only to generic LLM chat after local commands/memory lookup.
+    user_rate_limit_per_minute: int = 20
+    group_rate_limit_per_minute: int = 120
+    rate_limit_notice_cooldown_seconds: int = 10
     plugin_modules: str = "app.plugins.hello"
 
     jwt_secret_key: str = Field(default="change-me", repr=False)
