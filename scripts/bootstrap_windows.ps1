@@ -55,8 +55,17 @@ $coreCheck = "import fastapi, uvicorn, httpx, aiosqlite, redis, jwt, PIL, pydant
 $devCheck = "import pytest, pytest_asyncio, ruff"
 $check = if ($IncludeDev) { "$coreCheck; $devCheck" } else { $coreCheck }
 
-& $venvPython -c $check 2>$null
-if ($LASTEXITCODE -ne 0) {
+$previousErrorActionPreference = $ErrorActionPreference
+try {
+    $ErrorActionPreference = "Continue"
+    & $venvPython -c $check 2>$null
+    $dependencyCheckExitCode = $LASTEXITCODE
+}
+finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+}
+
+if ($dependencyCheckExitCode -ne 0) {
     Write-Host "[SETUP] Installing project dependencies..." -ForegroundColor Yellow
     & $venvPython -m pip install --upgrade pip
     if ($LASTEXITCODE -ne 0) {
@@ -69,8 +78,16 @@ if ($LASTEXITCODE -ne 0) {
         throw "Failed to install project dependencies. Check network access to PyPI."
     }
 
-    & $venvPython -c $check
-    if ($LASTEXITCODE -ne 0) {
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $venvPython -c $check
+        $dependencyVerifyExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($dependencyVerifyExitCode -ne 0) {
         throw "Dependencies were installed but import verification still failed."
     }
 }
