@@ -9,12 +9,23 @@ $outputLog = Join-Path $logRoot "bot.out.log"
 $errorLog = Join-Path $logRoot "bot.error.log"
 $watchdogLog = Join-Path $logRoot "watchdog.log"
 
-if (-not (Test-Path -LiteralPath $pythonPath)) {
-    throw "Python environment not found: $pythonPath"
-}
-
 New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
 Set-Location -LiteralPath $projectRoot
+
+if (-not (Test-Path -LiteralPath $bootstrapScript)) {
+    throw "Windows bootstrap script not found: $bootstrapScript"
+}
+
+try {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrapScript *>> $watchdogLog
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $pythonPath)) {
+        throw "Python environment setup returned exit code $LASTEXITCODE"
+    }
+}
+catch {
+    Add-Content -LiteralPath $watchdogLog -Value "$(Get-Date -Format o) Bootstrap failed: $($_.Exception.Message)"
+    throw
+}
 
 while ($true) {
     $listener = @(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue)
