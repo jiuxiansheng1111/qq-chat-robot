@@ -17,6 +17,7 @@ from app.main import (
     automatic_web_search_query,
     bot_mentioned,
     enforce_possession_identity,
+    ensure_default_murasame_voice,
     extract_bilibili_video_query,
     extract_group_memory,
     extract_group_memory_deletion,
@@ -621,3 +622,18 @@ async def test_share_card_uses_onebot_share_segment(monkeypatch):
     assert segment["data"]["title"] == "测试视频"
     assert segment["data"]["image"].startswith("https://")
     assert "BV1xx411c7mD" in segment["data"]["url"]
+
+
+def test_default_murasame_voice_uses_chinese_markers():
+    assert ensure_default_murasame_voice("这题答案是 42") == "苟修金，这题答案是 42"
+    assert ensure_default_murasame_voice("吾辈已经看过了") == "吾辈已经看过了"
+    assert ensure_default_murasame_voice("苟修金，这个没问题") == "苟修金，这个没问题"
+
+
+def test_persona_uses_苟修金_and_forbids_japanese_catchphrases():
+    persona = settings.persona_prompt()
+    assert "称提问者为「苟修金」" in persona
+    assert "吾辈" in persona
+    assert "不要加入日语语气词或日语称呼" in persona
+    for token in ("お主", "じゃ", "のう", "ご主人", "Ciallo"):
+        assert token not in persona
