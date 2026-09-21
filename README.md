@@ -426,6 +426,12 @@ qq-chatrobot/
 
 ## 常见问题
 
+### NapCat 3000 正常，但机器人调用 send_group_msg / get_group_msg_history 返回 502
+
+如果 PowerShell 直接访问 `http://127.0.0.1:3000/get_login_info` 正常，而机器人日志中的 Python/httpx 请求却对 `send_group_msg` 或 `get_group_msg_history` 返回 502，常见原因是 Clash、系统代理或环境代理把本机 OneBot 请求也接管了。
+
+机器人现在对所有 OneBot/NapCat HTTP 请求强制使用 `trust_env=False`，即这些 `127.0.0.1:3000` 请求不会读取 `HTTP_PROXY/HTTPS_PROXY/ALL_PROXY` 等代理环境，也不会经过代理；B站、联网搜索等外网请求不受这个改动影响。
+
 ### 没有报错，但机器人突然不回复
 
 新版将限流拆成两层：所有入站消息只受高额度的防刷保护；真正进入通用 LLM 聊天时才使用较严格的 AI 限流。像 `/help`、群记忆关系直答等本地操作不会消耗 AI 聊天额度。触发任何限流时，机器人会在冷却周期内至少提示一次，而不是静默丢弃。
