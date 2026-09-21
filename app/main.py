@@ -34,6 +34,7 @@ from app.plugins.registry import registry
 from app.services.bilibili import (
     bilibili_card_content,
     choose_bilibili_video,
+    download_bilibili_cover,
     search_bilibili_videos,
 )
 from app.services.group_memory_logic import (
@@ -70,6 +71,7 @@ from app.services.translation import (
 from app.services.ultraman import (
     ULTRAMAN_BY_NAME,
     ULTRAMAN_ROSTER,
+    is_ultraman_form_variant,
     official_ultraman_image,
     render_ultraman_card,
     render_ultraman_catalog,
@@ -863,6 +865,24 @@ def schedule_possession_style_learning(
     task.add_done_callback(remember_examples)
 
 
+async def resolve_ultraman_card_image(hero) -> str:
+    try:
+        return await official_ultraman_image(hero, settings)
+    except (RuntimeError, httpx.HTTPError) as exc:
+        if not is_ultraman_form_variant(hero):
+            raise
+        logger.info(
+            "dedicated Ultraman form image unavailable for %s, trying Bilibili cover: %s",
+            hero.name,
+            exc,
+        )
+        videos = await search_bilibili_videos(hero.name, settings)
+        video = choose_bilibili_video(hero.name, videos)
+        if video is None:
+            raise RuntimeError(f"没有找到“{hero.name}”的可靠形态图片") from exc
+        return await download_bilibili_cover(video, settings)
+
+
 async def send_group_image(group_id: str, image_file: str, caption: str = "") -> None:
     if not settings.onebot_api_base:
         logger.info("[dry-run] group=%s image=%s", group_id, image_file[:80])
@@ -1255,7 +1275,7 @@ async def onebot_webhook(
             f"{status}，已收入你的奥特曼收藏！"
         )
         try:
-            image = await official_ultraman_image(hero, settings)
+            image = await resolve_ultraman_card_image(hero)
             card = render_ultraman_card(hero, image)
             await send_group_image(group_id, card, caption)
         except (RuntimeError, httpx.HTTPError) as exc:
@@ -1298,7 +1318,7 @@ async def onebot_webhook(
             "本次仅查看图鉴，不会加入“我的奥特曼”。"
         )
         try:
-            image = await official_ultraman_image(catalog_hero, settings)
+            image = await resolve_ultraman_card_image(catalog_hero)
             card = render_ultraman_card(catalog_hero, image, heading="奥特曼图鉴")
             await send_group_image(group_id, card, caption)
         except (RuntimeError, httpx.HTTPError) as exc:
