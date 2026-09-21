@@ -1545,8 +1545,9 @@ async def onebot_webhook(
     elif text.startswith(("/ai ", "/AI ")) or (bot_mentioned(event) and text):
         prompt = text.split(" ", 1)[1].strip() if text.startswith(("/ai ", "/AI ")) else text
         group_memories = await request.app.state.db.group_memories(group_id)
+        active_possession = await request.app.state.db.daily_possession(group_id, today)
         memory_answer = resolve_group_memory_question(prompt, group_memories)
-        if memory_answer is not None:
+        if memory_answer is not None and not active_possession:
             await send_group_message(
                 group_id,
                 format_group_memory_answer(memory_answer, prompt),
@@ -1573,7 +1574,7 @@ async def onebot_webhook(
         memory_enabled = await request.app.state.db.memory_enabled(group_id, user_id)
         long_memories = await request.app.state.db.long_term_memories(group_id, user_id)
         style_hint = await request.app.state.db.group_style_hint(group_id)
-        possession = await request.app.state.db.daily_possession(group_id, today)
+        possession = active_possession
         persona_context: list[str] = []
         possession_name = ""
         imitate_current_possession = False
@@ -1775,6 +1776,8 @@ async def onebot_webhook(
                 await request.app.state.db.append_possession_exchange(
                     group_id, today, speaker_prompt, answer
                 )
+            else:
+                answer = ensure_default_murasame_voice(answer)
             request.app.state.memory.append(group_id, user_id, prompt, answer, memory_enabled)
             await send_group_message(group_id, answer[:2000])
             if imitate_current_possession and possession:
