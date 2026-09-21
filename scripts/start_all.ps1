@@ -99,8 +99,14 @@ try {
     if (-not (Test-Path -LiteralPath $envPath)) {
         throw "Project config was not found: $envPath"
     }
-    if (-not (Test-Path -LiteralPath $pythonPath)) {
-        throw "Project Python environment was not found: $pythonPath"
+    if (-not (Test-Path -LiteralPath $bootstrapScript)) {
+        throw "Windows bootstrap script was not found: $bootstrapScript"
+    }
+
+    Write-Host "[CHECK] Python environment..." -ForegroundColor Cyan
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrapScript
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $pythonPath)) {
+        throw "Python environment setup failed. Run scripts\bootstrap_windows.ps1 for details."
     }
     $useNapCatDesktop = Test-Path -LiteralPath $napCatDesktop
     if (-not $useNapCatDesktop) {
