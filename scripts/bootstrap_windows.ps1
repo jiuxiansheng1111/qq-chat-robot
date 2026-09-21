@@ -21,7 +21,8 @@ function Find-CompatiblePython {
         }
 
         try {
-            & $candidate.File @($candidate.Prefix) -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" 2>$null
+            $probeArgs = @($candidate.Prefix) + @("-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)")
+            & $candidate.File @probeArgs 2>$null
             if ($LASTEXITCODE -eq 0) {
                 return $candidate
             }
@@ -43,7 +44,8 @@ if (-not (Test-Path -LiteralPath $venvPython)) {
     }
 
     Write-Host "[SETUP] Creating .venv with Python 3.11+..." -ForegroundColor Yellow
-    & $python.File @($python.Prefix) -m venv $venvRoot
+    $venvArgs = @($python.Prefix) + @("-m", "venv", $venvRoot)
+    & $python.File @venvArgs
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $venvPython)) {
         throw "Failed to create Python virtual environment at $venvRoot"
     }
