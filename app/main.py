@@ -157,33 +157,70 @@ async def lifespan(app: FastAPI):
     app.state.translation_cache = {}
     app.state.deduplicator = EventDeduplicator(settings.event_dedupe_ttl_seconds)
     registry.load_modules(settings.plugin_modules)
-    app.state.limiter = LocalRateLimiter(
-        limit=settings.user_rate_limit_per_minute, window_seconds=60
+    app.state.ingress_limiter = LocalRateLimiter(
+        limit=settings.ingress_user_rate_limit_per_minute,
+        window_seconds=60,
     )
-    app.state.group_limiter = LocalRateLimiter(
-        limit=settings.group_rate_limit_per_minute, window_seconds=60
+    app.state.ingress_group_limiter = LocalRateLimiter(
+        limit=settings.ingress_group_rate_limit_per_minute,
+        window_seconds=60,
+    )
+    app.state.llm_limiter = LocalRateLimiter(
+        limit=settings.llm_user_rate_limit_per_minute,
+        window_seconds=60,
+    )
+    app.state.llm_group_limiter = LocalRateLimiter(
+        limit=settings.llm_group_rate_limit_per_minute,
+        window_seconds=60,
+    )
+    app.state.rate_limit_notice_limiter = LocalRateLimiter(
+        limit=1,
+        window_seconds=max(1, settings.rate_limit_notice_cooldown_seconds),
     )
     app.state.cat_cache_task = asyncio.create_task(maintain_cat_gif_cache(settings))
     if settings.redis_url:
         try:
-            redis_limiter = RedisRateLimiter(
-                settings.redis_url, limit=settings.user_rate_limit_per_minute, window_seconds=60
+            redis_ingress_limiter = RedisRateLimiter(
+                settings.redis_url,
+                limit=settings.ingress_user_rate_limit_per_minute,
+                window_seconds=60,
             )
-            await redis_limiter.connect()
-            app.state.limiter = redis_limiter
-            redis_group_limiter = RedisRateLimiter(
-                settings.redis_url, limit=settings.group_rate_limit_per_minute, window_seconds=60
+            await redis_ingress_limiter.connect()
+            app.state.ingress_limiter = redis_ingress_limiter
+
+            redis_ingress_group_limiter = RedisRateLimiter(
+                settings.redis_url,
+                limit=settings.ingress_group_rate_limit_per_minute,
+                window_seconds=60,
             )
-            await redis_group_limiter.connect()
-            app.state.group_limiter = redis_group_limiter
+            await redis_ingress_group_limiter.connect()
+            app.state.ingress_group_limiter = redis_ingress_group_limiter
+
+            redis_llm_limiter = RedisRateLimiter(
+                settings.redis_url,
+                limit=settings.llm_user_rate_limit_per_minute,
+                window_seconds=60,
+            )
+            await redis_llm_limiter.connect()
+            app.state.llm_limiter = redis_llm_limiter
+
+            redis_llm_group_limiter = RedisRateLimiter(
+                settings.redis_url,
+                limit=settings.llm_group_rate_limit_per_minute,
+                window_seconds=60,
+            )
+            await redis_llm_group_limiter.connect()
+            app.state.llm_group_limiter = redis_llm_group_limiter
+
             redis_deduplicator = RedisEventDeduplicator(
-                settings.redis_url, settings.event_dedupe_ttl_seconds
+                settings.redis_url,
+                settings.event_dedupe_ttl_seconds,
             )
             await redis_deduplicator.connect()
             app.state.deduplicator = redis_deduplicator
-            logger.info("Redis rate limiter enabled")
+            logger.info("Redis rate limiters enabled")
         except (ImportError, OSError, RuntimeError, RedisError) as exc:
-            logger.warning("Redis unavailable, using local limiter: %s", exc)
+            logger.warning("Redis unavailable, using local limiters: %s", exc)
     try:
         yield
     finally:
@@ -631,9 +668,42 @@ async def send_group_message(group_id: str, message: str) -> None:
     if not settings.onebot_api_base:
         logger.info("[dry-run] group=%s message=%s", group_id, message)
         return
-    headers = {"Authorization": f"Bearer {settings.onebot_access_token}"} if settings.onebot_access_token else {}
+    headers = (
+        {"Authorization": f"Bearer {settings.onebot_access_token}"}
+        if settings.onebot_access_token
+        else {}
+    )
     async with httpx.AsyncClient(timeout=10) as client:
-        await client.post(f"{settings.onebot_api_base.rstrip('/')}/send_group_msg", headers=headers, json={"group_id": group_id, "message": message})
+        response = await client.post(
+            f"{settings.onebot_api_base.rstrip('/')}/send_group_msg",
+            headers=headers,
+            json={"group_id": group_id, "message": message},
+        )
+        response.raise_for_status()
+        payload = response.json()
+    if payload.get("status") != "ok":
+        raise RuntimeError(
+            payload.get("wording")
+            or payload.get("message")
+            or f"OneBot send_group_msg failed: retcode={payload.get('retcode')}"
+        )
+
+
+async def notify_rate_limited(
+    request: Request,
+    group_id: str,
+    user_id: str,
+    *,
+    scope: str,
+    message: str,
+) -> None:
+    notice_key = f"{scope}:{group_id}:{user_id}"
+    if not await request.app.state.rate_limit_notice_limiter.allow(notice_key):
+        return
+    try:
+        await send_group_message(group_id, message)
+    except (RuntimeError, ValueError, httpx.HTTPError) as exc:
+        logger.warning("rate-limit notice send failed: %s", exc)
 
 
 async def group_member_name(group_id: str, user_id: str) -> str:
@@ -884,10 +954,24 @@ async def onebot_webhook(
             has_image=bool(image_refs),
             max_messages=max(100, min(settings.possession_recall_history_count, 1000)),
         )
-    if not await request.app.state.limiter.allow(f"user:{user_id}"):
-        return {"ok": True, "ignored": True, "reason": "user_rate_limited"}
-    if not await request.app.state.group_limiter.allow(f"group:{group_id}"):
-        return {"ok": True, "ignored": True, "reason": "group_rate_limited"}
+    if not await request.app.state.ingress_limiter.allow(f"user:{user_id}"):
+        await notify_rate_limited(
+            request,
+            group_id,
+            user_id,
+            scope="ingress-user",
+            message="消息太快啦，先等几秒再发吧～",
+        )
+        return {"ok": True, "ignored": True, "reason": "user_ingress_rate_limited"}
+    if not await request.app.state.ingress_group_limiter.allow(f"group:{group_id}"):
+        await notify_rate_limited(
+            request,
+            group_id,
+            user_id,
+            scope="ingress-group",
+            message="这个群刚才消息有点多，等几秒再试一下吧～",
+        )
+        return {"ok": True, "ignored": True, "reason": "group_ingress_rate_limited"}
 
     plugin_spec, _ = registry.resolve(text)
     if plugin_spec and plugin_spec.name != "group_admin" and not await request.app.state.db.plugin_enabled(group_id, plugin_spec.name):
@@ -1343,6 +1427,24 @@ async def onebot_webhook(
                 format_group_memory_answer(memory_answer, prompt),
             )
             return {"ok": True, "source": "group_memory_relation"}
+        if not await request.app.state.llm_limiter.allow(f"llm-user:{user_id}"):
+            await notify_rate_limited(
+                request,
+                group_id,
+                user_id,
+                scope="llm-user",
+                message="刚才聊得有点快，给我几秒整理一下再问吧～",
+            )
+            return {"ok": True, "ignored": True, "reason": "user_llm_rate_limited"}
+        if not await request.app.state.llm_group_limiter.allow(f"llm-group:{group_id}"):
+            await notify_rate_limited(
+                request,
+                group_id,
+                user_id,
+                scope="llm-group",
+                message="群里同时问我的人有点多，稍等几秒再叫我吧～",
+            )
+            return {"ok": True, "ignored": True, "reason": "group_llm_rate_limited"}
         memory_enabled = await request.app.state.db.memory_enabled(group_id, user_id)
         long_memories = await request.app.state.db.long_term_memories(group_id, user_id)
         style_hint = await request.app.state.db.group_style_hint(group_id)

@@ -1,8 +1,11 @@
 import hashlib
 import hmac
+from unittest.mock import AsyncMock
 
+import pytest
 from fastapi.testclient import TestClient
 
+from app.core.rate_limit import LocalRateLimiter
 from app.main import (
     CAT_IMAGE_COMMANDS,
     NAILONG_IMAGE_COMMANDS,
@@ -27,9 +30,11 @@ from app.main import (
     mentioned_image_command,
     mentioned_user_ids,
     message_text,
+    notify_rate_limited,
     polish_chat_reply,
     possession_recent_messages_prompt,
     qualify_group_memory,
+    send_group_message,
     sender_display_name,
     settings,
     webhook_token_valid,
@@ -391,3 +396,147 @@ def test_group_lifecycle_and_blacklist(tmp_path):
         finally:
             settings.database_path = previous_database_path
             settings.onebot_api_base = previous_onebot_api_base
+
+
+def test_generic_ai_chat_rate_limit_is_explicit_not_silent(tmp_path):
+    previous_database_path = settings.database_path
+    previous_onebot_api_base = settings.onebot_api_base
+    previous_user_limit = settings.llm_user_rate_limit_per_minute
+    previous_group_limit = settings.llm_group_rate_limit_per_minute
+    previous_ingress_user = settings.ingress_user_rate_limit_per_minute
+    previous_ingress_group = settings.ingress_group_rate_limit_per_minute
+    settings.database_path = str(tmp_path / "rate-limit-webhook.db")
+    settings.onebot_api_base = ""
+    settings.llm_user_rate_limit_per_minute = 1
+    settings.llm_group_rate_limit_per_minute = 10
+    settings.ingress_user_rate_limit_per_minute = 100
+    settings.ingress_group_rate_limit_per_minute = 100
+    try:
+        with TestClient(app) as client:
+            client.app.state.llm.ask = AsyncMock(return_value="收到")
+            first = post_event(client, event("/ai 第一条", user_id="fast-user")).json()
+            second = post_event(client, event("/ai 第二条", user_id="fast-user")).json()
+
+            assert first["ok"] is True
+            assert second == {
+                "ok": True,
+                "ignored": True,
+                "reason": "user_llm_rate_limited",
+            }
+            assert client.app.state.llm.ask.await_count == 1
+    finally:
+        settings.database_path = previous_database_path
+        settings.onebot_api_base = previous_onebot_api_base
+        settings.llm_user_rate_limit_per_minute = previous_user_limit
+        settings.llm_group_rate_limit_per_minute = previous_group_limit
+        settings.ingress_user_rate_limit_per_minute = previous_ingress_user
+        settings.ingress_group_rate_limit_per_minute = previous_ingress_group
+
+
+def test_local_plugin_commands_do_not_consume_llm_chat_quota(tmp_path):
+    previous_database_path = settings.database_path
+    previous_onebot_api_base = settings.onebot_api_base
+    previous_user_limit = settings.llm_user_rate_limit_per_minute
+    previous_group_limit = settings.llm_group_rate_limit_per_minute
+    previous_ingress_user = settings.ingress_user_rate_limit_per_minute
+    previous_ingress_group = settings.ingress_group_rate_limit_per_minute
+    settings.database_path = str(tmp_path / "rate-limit-local-command.db")
+    settings.onebot_api_base = ""
+    settings.llm_user_rate_limit_per_minute = 1
+    settings.llm_group_rate_limit_per_minute = 10
+    settings.ingress_user_rate_limit_per_minute = 100
+    settings.ingress_group_rate_limit_per_minute = 100
+    try:
+        with TestClient(app) as client:
+            client.app.state.llm.ask = AsyncMock(return_value="AI回答")
+            for number in range(6):
+                payload = event("/help", user_id="local-user")
+                payload["message_id"] = f"local-help-{number}"
+                result = post_event(client, payload).json()
+                assert result["ok"] is True
+
+            first_ai = post_event(
+                client, event("/ai 现在轮到AI", user_id="local-user")
+            ).json()
+            second_ai = post_event(
+                client, event("/ai 再问一次", user_id="local-user")
+            ).json()
+
+            assert first_ai["ok"] is True
+            assert second_ai["reason"] == "user_llm_rate_limited"
+            assert client.app.state.llm.ask.await_count == 1
+    finally:
+        settings.database_path = previous_database_path
+        settings.onebot_api_base = previous_onebot_api_base
+        settings.llm_user_rate_limit_per_minute = previous_user_limit
+        settings.llm_group_rate_limit_per_minute = previous_group_limit
+        settings.ingress_user_rate_limit_per_minute = previous_ingress_user
+        settings.ingress_group_rate_limit_per_minute = previous_ingress_group
+
+
+async def test_rate_limit_notice_has_cooldown(monkeypatch):
+    sent: list[tuple[str, str]] = []
+
+    async def fake_send_group_message(group_id: str, message: str) -> None:
+        sent.append((group_id, message))
+
+    monkeypatch.setattr("app.main.send_group_message", fake_send_group_message)
+
+    class State:
+        rate_limit_notice_limiter = LocalRateLimiter(limit=1, window_seconds=60)
+
+    class DummyApp:
+        state = State()
+
+    class DummyRequest:
+        app = DummyApp()
+
+    request = DummyRequest()
+    await notify_rate_limited(
+        request,
+        "group-1",
+        "user-1",
+        scope="llm-user",
+        message="消息有点快",
+    )
+    await notify_rate_limited(
+        request,
+        "group-1",
+        "user-1",
+        scope="llm-user",
+        message="消息有点快",
+    )
+
+    assert sent == [("group-1", "消息有点快")]
+
+
+async def test_text_send_raises_when_onebot_reports_failure(monkeypatch):
+    previous_api_base = settings.onebot_api_base
+    settings.onebot_api_base = "http://onebot.test"
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {"status": "failed", "retcode": 1404, "wording": "send failed"}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr("app.main.httpx.AsyncClient", FakeClient)
+    try:
+        with pytest.raises(RuntimeError, match="send failed"):
+            await send_group_message("group-1", "hello")
+    finally:
+        settings.onebot_api_base = previous_api_base
