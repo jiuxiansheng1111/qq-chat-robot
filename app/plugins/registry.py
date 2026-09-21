@@ -74,6 +74,9 @@ class PluginRegistry:
             "│  @我 奥特曼图鉴\n"
             "│  @我 贝利亚 / 奥特之父（查看资料）\n"
             "│\n"
+            "│  🌐 翻译\n"
+            "│  @我 翻译 外语内容\n"
+            "│\n"
             "│  🔎 联网搜索\n"
             "│  @我 搜索 关键词\n"
             "│\n"
@@ -95,6 +98,13 @@ class PluginRegistry:
 registry = PluginRegistry()
 registry.register(PluginSpec("help", ("/help", "/帮助", "help", "帮助"), "/help —— 查看帮助"))
 registry.register(PluginSpec("ai", ("/ai", "/AI"), "/ai <问题> —— AI 对话"))
+registry.register(
+    PluginSpec(
+        "translation",
+        ("/翻译", "/translate"),
+        "/翻译 <内容> —— 翻译成简体中文并给出转写/搜索别名",
+    )
+)
 registry.register(
     PluginSpec(
         "music",

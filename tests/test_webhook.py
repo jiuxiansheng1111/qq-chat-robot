@@ -20,6 +20,7 @@ from app.main import (
     extract_music_query,
     extract_possession_alias,
     extract_search_query,
+    extract_translation_query,
     group_memory_prompt,
     is_identity_question,
     is_targeted_possession_command,
@@ -116,6 +117,26 @@ def test_mention_extracts_search_and_explicit_long_memory():
         assert extract_search_query(payload, message_text(payload)) == "Python 新版本"
         payload["message"][1]["data"]["text"] = "记住：我喜欢科幻"
         assert extract_long_memory(payload, message_text(payload)) == "我喜欢科幻"
+    finally:
+        settings.onebot_self_id = previous
+
+
+def test_translation_query_requires_slash_or_real_bot_mention():
+    previous = settings.onebot_self_id
+    settings.onebot_self_id = "bot-1"
+    try:
+        payload = event("翻译 星街すいせい")
+        assert extract_translation_query(payload, message_text(payload)) is None
+        payload["message"] = [
+            {"type": "at", "data": {"qq": "bot-1"}},
+            {"type": "text", "data": {"text": " 翻译 星街すいせい"}},
+        ]
+        assert extract_translation_query(payload, message_text(payload)) == "星街すいせい"
+        payload["message"][1]["data"]["text"] = "帮我翻译안녕하세요"
+        assert extract_translation_query(payload, message_text(payload)) == "안녕하세요"
+        assert extract_translation_query(
+            event("/translate Привет"), "/translate Привет"
+        ) == "Привет"
     finally:
         settings.onebot_self_id = previous
 
