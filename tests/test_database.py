@@ -224,7 +224,6 @@ async def test_daily_ultraman_collection_is_persistent_and_counted_once_per_day(
     )
 
 
-@pytest.mark.asyncio
 async def test_database_migrates_legacy_orb_dark_form_name(tmp_path):
     settings = Settings(database_path=str(tmp_path / "legacy-orb.db"), _env_file=None)
     db = Database(settings)
