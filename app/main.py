@@ -31,6 +31,11 @@ from app.plugins.media import (
     random_real_pig_image,
 )
 from app.plugins.registry import registry
+from app.services.group_memory_logic import (
+    format_group_memory_answer,
+    group_memory_reasoning_hints,
+    resolve_group_memory_question,
+)
 from app.services.music import (
     MusicIdentity,
     MusicTrack,
@@ -40,11 +45,6 @@ from app.services.music import (
     netease_track_matches_query,
     parse_music_identity,
     search_netease_music,
-)
-from app.services.group_memory_logic import (
-    format_group_memory_answer,
-    group_memory_reasoning_hints,
-    resolve_group_memory_question,
 )
 from app.services.possession_style import (
     fetch_member_recall_samples,
