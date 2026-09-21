@@ -25,6 +25,10 @@ def test_simple_is_relation_is_reversible():
     assert answer is not None
     assert answer.answers == ("人",)
 
+    answer = resolve_group_memory_question("人指的是谁", ["d 是 人"])
+    assert answer is not None
+    assert answer.answers == ("d",)
+
 
 def test_identity_relations_can_follow_short_alias_chains():
     memories = ["d 是 人", "人 就是 hzh"]
