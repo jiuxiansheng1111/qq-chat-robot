@@ -118,7 +118,7 @@ async def _next_nailong_path() -> str:
         return _nailong_path_pool.pop()
 
 
-async def _download_cat_gif(settings: Settings) -> str:
+async def _download_cat_gif_once(settings: Settings) -> str:
     url = httpx.URL(settings.cat_api_url).copy_merge_params(
         {"width": "480", "height": "480", "_": str(time.time_ns())}
     )
@@ -146,6 +146,19 @@ async def _download_cat_gif(settings: Settings) -> str:
     return "base64://" + base64.b64encode(content).decode()
 
 
+async def _download_cat_gif(settings: Settings) -> str:
+    attempts = max(1, min(int(getattr(settings, "media_retry_attempts", 2)), 4))
+    last_error: RuntimeError | httpx.HTTPError | None = None
+    for attempt in range(attempts):
+        try:
+            return await _download_cat_gif_once(settings)
+        except (RuntimeError, httpx.HTTPError) as exc:
+            last_error = exc
+            if attempt + 1 < attempts:
+                await asyncio.sleep(0.4 * (attempt + 1))
+    raise last_error or RuntimeError("猫图下载失败")
+
+
 async def warm_cat_gif_cache(settings: Settings) -> None:
     target = max(1, min(int(getattr(settings, "cat_cache_size", 2)), 5))
     async with _cat_fill_lock:
@@ -159,6 +172,16 @@ async def warm_cat_gif_cache(settings: Settings) -> None:
                 return
             async with _cat_cache_lock:
                 _cat_gif_cache.append(image)
+
+
+async def maintain_cat_gif_cache(settings: Settings) -> None:
+    """Keep refilling the cat cache after transient upstream failures."""
+    target = max(1, min(int(getattr(settings, "cat_cache_size", 2)), 5))
+    while True:
+        await warm_cat_gif_cache(settings)
+        async with _cat_cache_lock:
+            ready = len(_cat_gif_cache) >= target
+        await asyncio.sleep(20 if ready else 3)
 
 
 async def random_cat_gif(settings: Settings) -> str:

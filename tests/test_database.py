@@ -122,6 +122,18 @@ async def test_possession_style_profile_is_persistent(tmp_path):
     )
 
 
+async def test_possession_style_messages_persist_and_can_be_deleted(tmp_path):
+    path = tmp_path / "possession-style-messages.db"
+    db = Database(Settings(_env_file=None, database_path=str(path)))
+    await db.init()
+    await db.add_possession_style_message("100", "300", "小红", "我最喜欢干山乃乃")
+    await db.save_possession_style_profile("100", "300", "小红", "短句", 1)
+    assert await db.possession_style_messages("100", "300") == ["我最喜欢干山乃乃"]
+    await db.clear_possession_style("100", "300")
+    assert await db.possession_style_messages("100", "300") == []
+    assert await db.possession_style_profile("100", "300") == ""
+
+
 async def test_possession_context_is_shared_persistent_and_bounded(tmp_path):
     path = tmp_path / "possession-context.db"
     db = Database(Settings(_env_file=None, database_path=str(path)))
@@ -163,3 +175,28 @@ async def test_group_memory_can_be_deleted_by_exact_substring(tmp_path):
     assert await db.group_memories("100") == ["首阳喜欢唱歌"]
     assert await db.possession_context_messages("100", "2026-09-18") == []
     assert await db.delete_group_memories_matching("100", "HZH") == 0
+
+
+async def test_daily_ultraman_collection_is_persistent_and_counted_once_per_day(tmp_path):
+    db = Database(Settings(_env_file=None, database_path=str(tmp_path / "ultraman.db")))
+    await db.init()
+    first = await db.get_or_create_daily_ultraman(
+        "100", "200", "2026-09-19", "迪迦奥特曼"
+    )
+    repeated = await db.get_or_create_daily_ultraman(
+        "999", "200", "2026-09-19", "赛罗奥特曼"
+    )
+    await db.get_or_create_daily_ultraman(
+        "100", "200", "2026-09-20", "迪迦奥特曼"
+    )
+    await db.get_or_create_daily_ultraman(
+        "100", "200", "2026-09-21", "泽塔奥特曼"
+    )
+    assert first == ("迪迦奥特曼", True)
+    assert repeated == ("迪迦奥特曼", False)
+    assert await db.ultraman_collection_stats("200") == (
+        3,
+        2,
+        "迪迦奥特曼",
+        2,
+    )

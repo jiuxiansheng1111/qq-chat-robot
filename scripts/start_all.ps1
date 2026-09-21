@@ -10,8 +10,18 @@ $pythonPath = Join-Path $projectRoot ".venv\Scripts\python.exe"
 $logRoot = Join-Path $projectRoot "logs"
 $botOutputLog = Join-Path $logRoot "bot.out.log"
 $botErrorLog = Join-Path $logRoot "bot.error.log"
+$napCatDesktop = "C:\Program Files\NapCatQQ Desktop\NapCatQQ-Desktop.exe"
 $napCatRoot = Join-Path $desktopRoot "NapCat.Shell"
-$napCatLauncher = Join-Path $napCatRoot "launcher.bat"
+$napCatBoot = Join-Path $napCatRoot "NapCatWinBootMain.exe"
+$napCatHook = Join-Path $napCatRoot "NapCatWinBootHook.dll"
+$qqExecutableCandidates = @(
+    "C:\Program Files\Tencent\QQNT\QQ.exe",
+    "C:\Program Files\Tencent\QQ\QQ.exe",
+    "C:\Program Files (x86)\Tencent\QQ\QQ.exe"
+)
+$qqExecutable = $qqExecutableCandidates |
+    Where-Object { Test-Path -LiteralPath $_ } |
+    Select-Object -First 1
 
 function Test-LocalPort {
     param(
@@ -92,8 +102,17 @@ try {
     if (-not (Test-Path -LiteralPath $pythonPath)) {
         throw "Project Python environment was not found: $pythonPath"
     }
-    if (-not (Test-Path -LiteralPath $napCatLauncher)) {
-        throw "NapCat launcher was not found: $napCatLauncher"
+    $useNapCatDesktop = Test-Path -LiteralPath $napCatDesktop
+    if (-not $useNapCatDesktop) {
+        if (-not (Test-Path -LiteralPath $napCatBoot)) {
+            throw "Neither NapCatQQ Desktop nor the legacy NapCat boot program was found."
+        }
+        if (-not (Test-Path -LiteralPath $napCatHook)) {
+            throw "NapCat hook was not found: $napCatHook"
+        }
+        if (-not $qqExecutable) {
+            throw "QQ executable was not found. Install QQNT or NapCatQQ Desktop first."
+        }
     }
 
     $settings = Get-DotEnvValues -Path $envPath
@@ -103,42 +122,54 @@ try {
     }
 
     $napCatWebReady = Test-LocalPort -Port 6099
+    $oneBotReady = Test-LocalPort -Port 3000
     $botReady = Test-LocalPort -Port 8000
 
-    if (-not $napCatWebReady -and -not (Test-IsAdministrator)) {
+    if (-not $useNapCatDesktop -and -not $napCatWebReady -and -not (Test-IsAdministrator)) {
         Write-Host "Administrator access is required. Requesting UAC confirmation..." -ForegroundColor Yellow
         Request-Elevation
         exit 0
     }
 
-    if ($napCatWebReady) {
-        Write-Host "[RUNNING] NapCat WebUI: 6099" -ForegroundColor Green
+    if ($oneBotReady) {
+        Write-Host "[RUNNING] OneBot HTTP: 3000" -ForegroundColor Green
+    }
+    elseif ($useNapCatDesktop) {
+        $desktopProcess = @(Get-Process -Name "NapCatQQ-Desktop" -ErrorAction SilentlyContinue)
+        if ($desktopProcess.Count -eq 0) {
+            Write-Host "[STARTING] NapCatQQ Desktop..." -ForegroundColor Yellow
+            Start-Process -FilePath $napCatDesktop -WindowStyle Minimized
+        }
+        else {
+            Write-Host "[RUNNING] NapCatQQ Desktop" -ForegroundColor Green
+        }
+        Write-Host "[ACCOUNT] Expected bot QQ: $qqId" -ForegroundColor Cyan
     }
     else {
-        $existingNapCat = @(Get-Process -Name "NapCatWinBootMain" -ErrorAction SilentlyContinue)
-        if ($existingNapCat.Count -gt 0) {
-            throw "A stale NapCat process exists while port 6099 is unavailable. Stop stale NapCat/QQ processes and retry."
+        if ($napCatWebReady) {
+            Write-Host "[RUNNING] Legacy NapCat WebUI: 6099" -ForegroundColor Green
         }
+        else {
+            $existingNapCat = @(Get-Process -Name "NapCatWinBootMain" -ErrorAction SilentlyContinue)
+            if ($existingNapCat.Count -gt 0) {
+                throw "A stale NapCat process exists while port 6099 is unavailable. Stop stale NapCat/QQ processes and retry."
+            }
 
-        Write-Host "[STARTING] NapCat with QQ quick login..." -ForegroundColor Yellow
-        $napCatCommand = 'call "{0}" {1}' -f $napCatLauncher, $qqId
-        Start-Process `
-            -FilePath "cmd.exe" `
-            -ArgumentList @("/k", $napCatCommand) `
-            -WorkingDirectory $napCatRoot `
-            -WindowStyle Minimized
-
-        if (-not (Wait-LocalPort -Port 6099 -TimeoutSeconds 60)) {
-            throw "NapCat WebUI did not start within 60 seconds. Check the minimized NapCat window."
+            Write-Host "[STARTING] Legacy NapCat with QQ quick login..." -ForegroundColor Yellow
+            $napCatArguments = ('"{0}" "{1}" {2}' -f $qqExecutable, $napCatHook, $qqId)
+            Start-Process `
+                -FilePath $napCatBoot `
+                -ArgumentList $napCatArguments `
+                -WorkingDirectory $napCatRoot `
+                -WindowStyle Hidden
         }
-        Write-Host "[STARTED] NapCat WebUI: 6099" -ForegroundColor Green
     }
 
-    if (Wait-LocalPort -Port 3000 -TimeoutSeconds 60) {
+    if ($oneBotReady -or (Wait-LocalPort -Port 3000 -TimeoutSeconds 90)) {
         Write-Host "[READY] OneBot HTTP: 3000" -ForegroundColor Green
     }
     else {
-        Write-Host "[LOGIN REQUIRED] OneBot 3000 is not ready. Open http://127.0.0.1:6099 if QQ confirmation is required." -ForegroundColor Yellow
+        Write-Host "[SETUP REQUIRED] OneBot 3000 is not ready. Add/login QQ $qqId in NapCatQQ Desktop and enable HTTP Server port 3000." -ForegroundColor Yellow
     }
 
     if ($botReady -or (Test-LocalPort -Port 8000)) {
@@ -176,7 +207,12 @@ try {
 
     Write-Host ""
     Write-Host "Startup complete. Re-running this script will not duplicate NapCat." -ForegroundColor Cyan
-    Write-Host "NapCat WebUI: http://127.0.0.1:6099"
+    if (Test-LocalPort -Port 6099) {
+        Write-Host "NapCat WebUI: http://127.0.0.1:6099"
+    }
+    elseif ($useNapCatDesktop) {
+        Write-Host "NapCat management: NapCatQQ Desktop"
+    }
     Write-Host "Bot health check: http://127.0.0.1:8000/health/ready"
     Start-Sleep -Seconds 4
 }

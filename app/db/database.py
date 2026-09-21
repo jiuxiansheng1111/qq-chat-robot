@@ -108,6 +108,17 @@ class Database:
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (group_id, user_id)
                 );
+                CREATE TABLE IF NOT EXISTS possession_style_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    group_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    has_image INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_possession_style_messages_member
+                    ON possession_style_messages(group_id, user_id, id);
                 CREATE TABLE IF NOT EXISTS group_memories (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     group_id TEXT NOT NULL,
@@ -131,6 +142,16 @@ class Database:
                     use_count INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (group_id, term)
                 );
+                CREATE TABLE IF NOT EXISTS daily_ultraman (
+                    user_id TEXT NOT NULL,
+                    draw_date TEXT NOT NULL,
+                    group_id TEXT NOT NULL,
+                    ultraman_name TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, draw_date)
+                );
+                CREATE INDEX IF NOT EXISTS idx_daily_ultraman_user
+                    ON daily_ultraman(user_id, draw_date);
                 """
             )
             columns = await db.execute_fetchall("PRAGMA table_info(daily_possession)")
@@ -471,6 +492,94 @@ class Database:
             "sample_count = excluded.sample_count, updated_at = CURRENT_TIMESTAMP",
             (group_id, user_id, display_name, style_summary[:800], sample_count),
         )
+
+    async def add_possession_style_message(
+        self,
+        group_id: str,
+        user_id: str,
+        display_name: str,
+        content: str,
+        has_image: bool = False,
+        max_messages: int = 100,
+    ) -> None:
+        content = content.strip()[:500]
+        if not content:
+            return
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT INTO possession_style_messages "
+                "(group_id, user_id, display_name, content, has_image) VALUES (?, ?, ?, ?, ?)",
+                (group_id, user_id, display_name[:80], content, int(has_image)),
+            )
+            await db.execute(
+                "DELETE FROM possession_style_messages WHERE group_id = ? AND user_id = ? "
+                "AND id NOT IN (SELECT id FROM possession_style_messages "
+                "WHERE group_id = ? AND user_id = ? ORDER BY id DESC LIMIT ?)",
+                (group_id, user_id, group_id, user_id, max(10, max_messages)),
+            )
+            await db.commit()
+
+    async def possession_style_messages(
+        self, group_id: str, user_id: str, limit: int = 12
+    ) -> list[str]:
+        rows = await self.fetchall(
+            "SELECT content FROM (SELECT id, content FROM possession_style_messages "
+            "WHERE group_id = ? AND user_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id",
+            (group_id, user_id, max(1, min(limit, 30))),
+        )
+        return [str(row[0]) for row in rows]
+
+    async def clear_possession_style(self, group_id: str, user_id: str) -> None:
+        await self.execute(
+            "DELETE FROM possession_style_profiles WHERE group_id = ? AND user_id = ?",
+            (group_id, user_id),
+        )
+        await self.execute(
+            "DELETE FROM possession_style_messages WHERE group_id = ? AND user_id = ?",
+            (group_id, user_id),
+        )
+
+    async def get_or_create_daily_ultraman(
+        self,
+        group_id: str,
+        user_id: str,
+        draw_date: str,
+        candidate_name: str,
+    ) -> tuple[str, bool]:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                "INSERT OR IGNORE INTO daily_ultraman"
+                "(user_id, draw_date, group_id, ultraman_name) VALUES (?, ?, ?, ?)",
+                (user_id, draw_date, group_id, candidate_name),
+            )
+            created = cursor.rowcount > 0
+            row = await (
+                await db.execute(
+                    "SELECT ultraman_name FROM daily_ultraman "
+                    "WHERE user_id = ? AND draw_date = ?",
+                    (user_id, draw_date),
+                )
+            ).fetchone()
+            await db.commit()
+        return str(row[0]), created
+
+    async def ultraman_collection_stats(
+        self, user_id: str
+    ) -> tuple[int, int, str, int] | None:
+        totals = await self.fetchone(
+            "SELECT COUNT(*), COUNT(DISTINCT ultraman_name) "
+            "FROM daily_ultraman WHERE user_id = ?",
+            (user_id,),
+        )
+        if not totals or not totals[0]:
+            return None
+        favorite = await self.fetchone(
+            "SELECT ultraman_name, COUNT(*) AS appearances "
+            "FROM daily_ultraman WHERE user_id = ? "
+            "GROUP BY ultraman_name ORDER BY appearances DESC, ultraman_name LIMIT 1",
+            (user_id,),
+        )
+        return int(totals[0]), int(totals[1]), str(favorite[0]), int(favorite[1])
 
     async def add_group_memory(
         self, group_id: str, content: str, max_items: int = 50

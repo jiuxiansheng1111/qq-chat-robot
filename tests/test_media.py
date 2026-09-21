@@ -56,6 +56,41 @@ async def test_cat_gif_uses_warmed_cache(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cat_gif_retries_transient_server_error(monkeypatch):
+    calls = 0
+
+    async def handler(request):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(500, headers={"content-type": "text/plain"})
+        return httpx.Response(
+            200,
+            headers={"content-type": "image/gif"},
+            content=b"GIF89a-retried-cat",
+        )
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mocked_client(**kwargs):
+        kwargs["transport"] = transport
+        return original_client(**kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mocked_client)
+    result = await media_module._download_cat_gif(
+        SimpleNamespace(
+            cat_api_url="https://cataas.com/cat/gif",
+            cat_timeout_seconds=5,
+            media_max_bytes=1024,
+            media_retry_attempts=2,
+        )
+    )
+    assert calls == 2
+    assert base64.b64decode(result.removeprefix("base64://")) == b"GIF89a-retried-cat"
+
+
+@pytest.mark.asyncio
 async def test_random_nailong_image_downloads_curated_asset(monkeypatch):
     async def fixed_path():
         return "gif/example.gif"

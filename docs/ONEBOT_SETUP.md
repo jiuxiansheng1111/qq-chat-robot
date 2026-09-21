@@ -166,11 +166,13 @@ Invoke-RestMethod http://127.0.0.1:8000/health/live
 
 ### Windows 提示 provided QQ path is invalid
 
-这表示 NapCat Shell 没有找到可用的新版 NTQQ。旧版 QQ（例如安装在 `C:\Program Files (x86)\Tencent\QQ\Bin\QQ.exe` 的 9.7 系列）不能作为 NapCat Shell 所需的 QQ 路径。
+这通常来自旧版 NapCat Shell：它没有找到可用的新版 NTQQ。旧版 QQ（例如安装在 `C:\Program Files (x86)\Tencent\QQ\Bin\QQ.exe` 的 9.7 系列）不能作为其启动路径。
 
-可选择以下一种方式：
+推荐改用 NapCatQQ Desktop：
 
-1. 从腾讯官方渠道安装最新 Windows QQ，确认安装的是新版 NTQQ，然后重新运行 NapCat Shell 的 `launcher.bat`；Windows 10 使用 `launcher-win10.bat`。
-2. 从 NapCat 官方 Releases 下载 `NapCat.Shell.Windows.OneKey.zip`，解压后运行 `NapCatInstaller.exe`，再进入生成的 Shell 目录运行 `napcat.bat`。OneKey 包已内置 QQ 和 NapCat，不依赖现有 QQ 注册表路径。
+1. 从腾讯官方渠道安装最新版 Windows QQ。
+2. 从 NapCat 官方 Releases 安装最新版 NapCatQQ Desktop。
+3. 在 Desktop 客户端添加机器人账号，并确认该账号的 HTTP Server、HTTP Client 与自动启动配置已启用。
+4. 默认程序路径为 `C:\Program Files\NapCatQQ Desktop\NapCatQQ-Desktop.exe`，项目一键脚本会自动启动它。
 
-不要把旧版 `C:\Program Files (x86)\Tencent\QQ\Bin\QQ.exe` 强行填给启动器，它仍会被判定为无效。
+不要把旧版 QQ 可执行文件强行填给 Shell；旧的桌面 `NapCat.Shell` 目录也不再是本项目的必要组件。
