@@ -529,6 +529,16 @@ class Database:
         )
         return [str(row[0]) for row in rows]
 
+    async def possession_recall_messages(
+        self, group_id: str, user_id: str, limit: int = 500
+    ) -> list[str]:
+        rows = await self.fetchall(
+            "SELECT content FROM (SELECT id, content FROM possession_style_messages "
+            "WHERE group_id = ? AND user_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id",
+            (group_id, user_id, max(1, min(limit, 1000))),
+        )
+        return [str(row[0]) for row in rows]
+
     async def clear_possession_style(self, group_id: str, user_id: str) -> None:
         await self.execute(
             "DELETE FROM possession_style_profiles WHERE group_id = ? AND user_id = ?",
