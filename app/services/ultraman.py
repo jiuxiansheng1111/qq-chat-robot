@@ -536,7 +536,15 @@ _FORM_IMAGE_PAGE_URLS = {
     # Tsuburaya's official store page has a dedicated Glitter Tiga product image.
     "闪耀迪迦": "https://store.m-78.jp/collections/tdg/products/4582769901454",
 }
+_FORM_IMAGE_SEARCH_QUERIES = {
+    # "暗耀形态" is the common Chinese name users are much more likely to search.
+    "欧布奥特曼·雷霆肩章": "欧布奥特曼 暗耀形态 雷霆肩章",
+}
 _FORM_VARIANT_NAMES = {item[0] for item in _FORM_VARIANTS}
+
+
+def ultraman_image_search_query(hero: Ultraman) -> str:
+    return _FORM_IMAGE_SEARCH_QUERIES.get(hero.name, hero.name)
 
 
 def is_ultraman_form_variant(hero: Ultraman) -> bool:
