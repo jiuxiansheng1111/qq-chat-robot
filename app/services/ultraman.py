@@ -752,6 +752,7 @@ _RELATED_ALT_NAMES = {
     "帝纳斯奥特曼": ("ウルトラマンディナス", "Ultraman Dinas"),
     "诺亚奥特曼": ("ウルトラマンノア", "Ultraman Noa"),
     "雷杰多奥特曼": ("ウルトラマンレジェンド", "Ultraman Legend"),
+    "赛迦奥特曼": ("ウルトラマンサーガ", "Ultraman Saga"),
     "贝利亚早期形态": ("ウルトラマンベリアル アーリースタイル", "Ultraman Belial Early Style"),
     "托雷基亚早期形态": ("ウルトラマントレギア アーリースタイル", "Ultraman Tregear Early Style"),
 }
@@ -766,23 +767,32 @@ _ENCYCLOPEDIA_IMAGE_ALIASES = {
 
 
 def ultraman_image_search_query(hero: Ultraman) -> str:
-    return _FORM_IMAGE_SEARCH_QUERIES.get(hero.name, hero.name)
+    """Return the strongest single search term for this exact character/form."""
+    explicit = _FORM_IMAGE_SEARCH_QUERIES.get(hero.name)
+    if explicit:
+        return explicit
+    formal = _FORM_ALT_NAMES.get(hero.name) or _RELATED_ALT_NAMES.get(hero.name) or ()
+    english = next((value for value in formal if re.search(r"[A-Za-z]", value)), "")
+    return english or hero.name
 
 
 def ultraman_image_aliases(hero: Ultraman) -> tuple[str, ...]:
+    """Aliases allowed to validate an image as the requested character/form.
+
+    Independent forms deliberately exclude conversational nicknames such as
+    "强力型" / "暗耀形态" on their own. Those short aliases are useful for chat
+    parsing but are too weak to prove that an image belongs to the correct hero.
+    """
     values: list[str] = [hero.name]
     values.extend(_FORM_ALT_NAMES.get(hero.name, ()))
     values.extend(_RELATED_ALT_NAMES.get(hero.name, ()))
     values.extend(_ENCYCLOPEDIA_IMAGE_ALIASES.get(hero.name, ()))
-    values.extend(
-        alias
-        for alias, canonical_name in _ULTRAMAN_ALIASES.items()
-        if canonical_name == hero.name
-    )
-    # Base/standalone characters may safely use a stable English alias derived
-    # from their official slug. Forms that share a parent slug must never inherit
-    # that parent alias, otherwise "Ultraman Zero" could validate a Zero form.
     if not is_ultraman_form_variant(hero):
+        values.extend(
+            alias
+            for alias, canonical_name in _ULTRAMAN_ALIASES.items()
+            if canonical_name == hero.name
+        )
         slug_alias = hero.slug.replace("-", " ").strip()
         if slug_alias:
             values.append(slug_alias)
@@ -846,9 +856,9 @@ def _normalize_image_descriptor(value: str) -> str:
 
 
 def _official_form_terms(hero: Ultraman) -> tuple[str, ...]:
+    # Only full canonical/formal aliases are accepted. Never auto-add the bare
+    # suffix after "·": labels like "强力型" or "空中型" can belong to multiple heroes.
     values = list(ultraman_image_aliases(hero))
-    if "·" in hero.name:
-        values.append(hero.name.split("·", 1)[1])
     generic = {
         _normalize_image_descriptor(value)
         for value in ("奥特曼", "Ultraman", "ウルトラマン", "Ultra")
@@ -907,10 +917,20 @@ async def official_ultraman_search_image(hero: Ultraman, settings: Settings) -> 
         raise RuntimeError("官方站内精确图片搜索仅用于独立形态")
 
     timeout = max(5.0, min(float(settings.media_timeout_seconds), 15.0))
-    query = ultraman_image_search_query(hero)
-    search_queries = (
-        f'site:tsuburaya-prod.com "{query}"',
-        f'site:store.m-78.jp "{query}"',
+    search_terms = [
+        hero.name,
+        *_FORM_ALT_NAMES.get(hero.name, ()),
+        *_RELATED_ALT_NAMES.get(hero.name, ()),
+        ultraman_image_search_query(hero),
+    ]
+    search_terms = list(dict.fromkeys(term for term in search_terms if term))[:5]
+    search_queries = tuple(
+        query
+        for term in search_terms
+        for query in (
+            f'site:tsuburaya-prod.com "{term}"',
+            f'site:store.m-78.jp "{term}"',
+        )
     )
     allowed_hosts = {"tsuburaya-prod.com", "www.tsuburaya-prod.com", "store.m-78.jp"}
     pages: list[str] = []
@@ -1145,5 +1165,6 @@ def ultraman_profile_text(hero: Ultraman) -> str:
         "真正令人铭记的并不只是必杀技，而是身处绝境仍愿意向前一步、"
         "把自己留在所有人身前的决心。\n\n"
         f"🌌 光之背景\n{profile.background}{era}\n\n"
-        "图片：圆谷官方角色图（非 AI 生成）"
+        "图片：优先使用圆谷官方精确角色/形态图；官方缺图时仅使用名称精确匹配的"
+        " Wikimedia/Wikipedia/百科图片（非 AI 生成）"
     )
