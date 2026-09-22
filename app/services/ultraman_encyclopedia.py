@@ -18,6 +18,15 @@ BAIDU_BAIKE_HOSTS = {
     "bkso.baidu.com",
     "wapbaike.baidu.com",
 }
+BAIDU_IMAGE_TRUSTED_HOSTS = BAIDU_BAIKE_HOSTS | {
+    "zh.wikipedia.org",
+    "en.wikipedia.org",
+    "ja.wikipedia.org",
+    "commons.wikimedia.org",
+    "tsuburaya-prod.com",
+    "www.tsuburaya-prod.com",
+    "store.m-78.jp",
+}
 BAIDU_DIRECT_PAGES = {
     "帝纳斯奥特曼": "https://bkso.baidu.com/item/帝纳斯奥特曼/62373572",
     "闪耀迪迦": "https://bkso.baidu.com/item/闪耀迪迦/1023751",
@@ -916,6 +925,114 @@ def encyclopedia_reference_matches(
     return bool(terms) and _matches_specific(label, terms)
 
 
+async def baidu_image_search_ultraman_image(
+    name: str,
+    aliases: tuple[str, ...],
+    settings: Settings,
+) -> EncyclopediaImage | None:
+    """Use Baidu Images only for exact-form results backed by trusted source sites."""
+    terms = _specific_terms(name, aliases)
+    if not terms:
+        return None
+
+    searches = [name]
+    searches.extend(
+        alias
+        for alias in aliases
+        if alias and (re.search(r"[A-Za-z]", alias) or re.search(r"[\u3400-\u9fff]", alias))
+    )
+    searches = list(dict.fromkeys(searches))[:5]
+    timeout = max(4.0, min(float(settings.media_timeout_seconds), 10.0))
+    headers = {
+        "User-Agent": ENCYCLOPEDIA_USER_AGENT,
+        "Referer": "https://image.baidu.com/",
+    }
+
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        headers=headers,
+    ) as client:
+        for query in searches:
+            try:
+                response = await client.get(
+                    "https://image.baidu.com/search/acjson",
+                    params={
+                        "tn": "resultjson_com",
+                        "ipn": "rj",
+                        "ct": "201326592",
+                        "fp": "result",
+                        "queryWord": query,
+                        "word": query,
+                        "ie": "utf-8",
+                        "oe": "utf-8",
+                        "pn": "0",
+                        "rn": "30",
+                        "newReq": "1",
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+            except (ValueError, httpx.HTTPError):
+                continue
+
+            data = payload.get("data", [])
+            if not isinstance(data, list):
+                continue
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                source_host = str(item.get("fromURLHost") or "").casefold().strip()
+                if source_host not in BAIDU_IMAGE_TRUSTED_HOSTS:
+                    continue
+
+                title = html.unescape(
+                    str(
+                        item.get("fromPageTitleEnc")
+                        or item.get("fromPageTitle")
+                        or item.get("title")
+                        or ""
+                    )
+                )
+                image_name = html.unescape(
+                    str(item.get("picInfo") or item.get("bdImgNewsInfo") or "")
+                )
+                descriptor = f"{title} {image_name}"
+                if not _matches_specific(descriptor, terms):
+                    continue
+
+                image_url = str(
+                    item.get("middleURL")
+                    or item.get("thumbURL")
+                    or item.get("hoverURL")
+                    or ""
+                )
+                if image_url.startswith("http://"):
+                    image_url = "https://" + image_url.removeprefix("http://")
+                if not image_url.startswith("https://"):
+                    continue
+
+                page_url = str(item.get("fromURL") or "")
+                if not page_url.startswith(("http://", "https://")):
+                    page_url = f"https://{source_host}/"
+                try:
+                    data_b64 = await _download_verified_image(
+                        client,
+                        image_url,
+                        page_url,
+                        settings,
+                    )
+                except (RuntimeError, httpx.HTTPError):
+                    continue
+                return EncyclopediaImage(
+                    data=data_b64,
+                    source="百度图片（可信百科/官方来源）",
+                    page_url=page_url,
+                    label=title or query,
+                )
+    return None
+
+
 async def encyclopedia_ultraman_image(
     name: str,
     aliases: tuple[str, ...],
@@ -929,4 +1046,7 @@ async def encyclopedia_ultraman_image(
     wikipedia = await wikipedia_ultraman_image(name, aliases, settings)
     if wikipedia is not None:
         return wikipedia
+    baidu_image = await baidu_image_search_ultraman_image(name, aliases, settings)
+    if baidu_image is not None:
+        return baidu_image
     raise RuntimeError(f"没有找到“{name}”的可靠百科代表图")
