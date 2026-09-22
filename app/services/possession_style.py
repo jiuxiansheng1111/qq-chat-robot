@@ -554,7 +554,7 @@ async def fetch_member_style_history(
     history_count = settings.possession_style_history_count if count is None else count
     body = {
         "group_id": group_id,
-        "count": max(20, min(history_count, 500)),
+        "count": max(20, min(history_count, 3000)),
         "reverseOrder": False,
     }
     async with httpx.AsyncClient(timeout=12, trust_env=False) as client:
