@@ -52,6 +52,7 @@ from app.services.music import (
     search_netease_music,
 )
 from app.services.possession_style import (
+    fetch_group_context,
     fetch_member_recall_samples,
     fetch_member_style_image_refs,
     image_references_from_message,
@@ -303,18 +304,24 @@ def message_text(event: dict) -> str:
     return "".join(parts).strip()
 
 
+def event_bot_self_id(event: dict) -> str:
+    """Prefer the self_id carried by NapCat so changing QQ accounts is painless."""
+    return str(event.get("self_id") or settings.onebot_self_id or "").strip()
+
+
 def bot_mentioned(event: dict) -> bool:
-    if not settings.onebot_self_id:
+    self_id = event_bot_self_id(event)
+    if not self_id:
         return False
     message = event.get("message")
     if isinstance(message, str):
-        pattern = rf"\[CQ:at,qq={re.escape(settings.onebot_self_id)}\]"
+        pattern = rf"\[CQ:at,qq={re.escape(self_id)}\]"
         return re.search(pattern, message) is not None
     if not isinstance(message, list):
         return False
     return any(
         segment.get("type") == "at"
-        and str(segment.get("data", {}).get("qq", "")) == settings.onebot_self_id
+        and str(segment.get("data", {}).get("qq", "")) == self_id
         for segment in message
     )
 
@@ -344,7 +351,7 @@ def mentioned_user_ids(event: dict) -> list[str]:
         values = []
     return list(
         dict.fromkeys(
-            value for value in values if value and value not in {settings.onebot_self_id, "all"}
+            value for value in values if value and value not in {event_bot_self_id(event), "all"}
         )
     )
 
@@ -1815,6 +1822,13 @@ async def onebot_webhook(
         messages = request.app.state.memory.messages(
             group_id, user_id, persona, prompt, memory_enabled
         )
+        try:
+            recent_group_context = await fetch_group_context(settings, group_id)
+        except (RuntimeError, ValueError, httpx.HTTPError) as exc:
+            recent_group_context = ""
+            logger.info("recent group context unavailable: %s", exc)
+        if recent_group_context:
+            messages[1:1] = [{"role": "system", "content": recent_group_context}]
         if possession:
             shared_context = await request.app.state.db.possession_context_messages(
                 group_id, today
@@ -1882,7 +1896,7 @@ async def onebot_webhook(
             else:
                 answer = ensure_default_murasame_voice(answer)
             request.app.state.memory.append(group_id, user_id, prompt, answer, memory_enabled)
-            await send_group_message(group_id, answer[:2000])
+            await send_group_long_message(group_id, answer)
             if imitate_current_possession and possession:
                 target_id = possession[0]
                 image_pool = request.app.state.possession_style_images.get(
