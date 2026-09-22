@@ -364,7 +364,7 @@ async def baidu_baike_ultraman_image(
 
         # Only pay the search-engine cost when direct Baidu lemmas did not work.
         discovered: list[SearchResult] = []
-        for query in searches[:6]:
+        for query in searches[:3]:
             try:
                 found = await search_web(
                     f'"{query}" 百度百科',
@@ -453,7 +453,7 @@ async def wikipedia_ultraman_image(
     timeout = max(5.0, min(float(settings.media_timeout_seconds), 20.0))
     headers = {"User-Agent": ENCYCLOPEDIA_USER_AGENT}
     terms = _specific_terms(name, aliases)
-    queries = list(_encyclopedia_search_terms(name, aliases))[:10]
+    queries = list(_encyclopedia_search_terms(name, aliases))[:6]
     async with httpx.AsyncClient(
         timeout=timeout,
         follow_redirects=True,
