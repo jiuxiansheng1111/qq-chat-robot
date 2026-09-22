@@ -19,12 +19,16 @@ BAIDU_BAIKE_HOSTS = {
     "wapbaike.baidu.com",
 }
 BAIDU_DIRECT_PAGES = {
+    "帝纳斯奥特曼": "https://bkso.baidu.com/item/帝纳斯奥特曼/62373572",
     "闪耀迪迦": "https://bkso.baidu.com/item/闪耀迪迦/1023751",
     "梦比优斯奥特曼·凤凰勇者": "https://bkso.baidu.com/item/梦比优斯凤凰形态/8865567",
     "梦比优斯奥特曼·无限形态": "https://bkso.baidu.com/item/梦比优斯无限形态/8944775",
     "赛罗奥特曼·无限形态": "https://bkso.baidu.com/item/超限赛罗/23742584",
     "银河奥特曼·斯特利姆形态": (
         "https://bkso.baidu.com/item/银河斯特利姆·奥特曼/19250392"
+    ),
+    "银河维克特利奥特曼": (
+        "https://bkso.baidu.com/item/银河维克特利奥特曼/18857816"
     ),
     "艾克斯奥特曼·超越形态": "https://bkso.baidu.com/item/艾克斯超越型/66335709",
     "欧布奥特曼·重光形态": "https://bkso.baidu.com/item/斯佩修姆哉佩利敖/20203467",
@@ -58,8 +62,16 @@ BAIDU_PARENT_PAGES = {
     "梦比优斯奥特曼·勇者形态": ("https://bkso.baidu.com/item/梦比优斯奥特曼/2684129",),
     "梦比优斯奥特曼·燃烧勇者": ("https://bkso.baidu.com/item/梦比优斯奥特曼/2684129",),
     "超级奥特曼泰罗": ("https://bkso.baidu.com/item/宇宙奇迹光线/20864681",),
-    "维克特利骑士": ("https://bkso.baidu.com/item/维克特利奥特曼/53260527",),
+    "维克特利骑士": (
+        "https://bkso.baidu.com/item/新奥特曼列传/8010663",
+        "https://bkso.baidu.com/item/维克特利奥特曼/53260527",
+    ),
     "捷德奥特曼·原始形态": ("https://bkso.baidu.com/item/捷德奥特曼/20825718",),
+    "捷德奥特曼·刚燃形态": ("https://bkso.baidu.com/item/捷德奥特曼/20825718",),
+    "捷德奥特曼·机敏形态": ("https://bkso.baidu.com/item/捷德奥特曼/20825718",),
+    "捷德奥特曼·豪勇形态": ("https://bkso.baidu.com/item/捷德奥特曼/20825718",),
+    "捷德奥特曼·尊皇形态": ("https://bkso.baidu.com/item/捷德奥特曼/20825718",),
+    "捷德奥特曼·银河初升": ("https://bkso.baidu.com/item/捷德奥特曼/20825718",),
     "泰迦奥特曼·光子地球": ("https://bkso.baidu.com/item/托雷基亚奥特曼/23366789",),
     "泰迦奥特曼·三重斯特利姆形态": ("https://bkso.baidu.com/item/托雷基亚奥特曼/23366789",),
     "闪耀特利迦永恒": ("https://bkso.baidu.com/item/特利迦奥特曼/56750285",),
