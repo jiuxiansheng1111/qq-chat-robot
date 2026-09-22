@@ -11,6 +11,7 @@ import httpx
 from PIL import Image, ImageDraw, ImageFont
 
 from app.config import Settings
+from app.services.web_search import search_web
 
 OFFICIAL_HERO_BASE_URL = "https://tsuburaya-prod.com/heroes"
 OFFICIAL_USER_AGENT = (
@@ -657,6 +658,58 @@ _FORM_IMAGE_HINTS = {
     "特利迦奥特曼·空中型": "SkyType",
 }
 
+_FORM_IMAGE_DIRECT_URLS = {
+    # Manually verified against Tsuburaya's own page placement / rendered image.
+    "格罗布奥特曼": (
+        "https://tsuburaya-prod.com/wp-content/uploads/2018/12/"
+        "%E3%82%A6%E3%83%AB%E3%83%88%E3%83%A9%E3%83%9E%E3%83%B3"
+        "%E3%82%B0%E3%83%AB%E3%83%BC%E3%83%96-277x300.jpg"
+    ),
+    "泽塔奥特曼·德尔塔天爪": (
+        "https://tsuburaya-prod.com/wp-content/uploads/2020/08/"
+        "post-5598-ultramanz-1.jpg"
+    ),
+    "德凯奥特曼·强壮型": (
+        "https://tsuburaya-prod.com/wp-content/uploads/2022/03/"
+        "%E3%83%87%E3%83%83%E3%82%AB%E3%83%BC_%E3%82%B9%E3%83%88"
+        "%E3%83%AD%E3%83%B3%E3%82%B0_50-1-200x300.png"
+    ),
+    "德凯奥特曼·奇迹型": (
+        "https://tsuburaya-prod.com/wp-content/uploads/2022/03/"
+        "%E3%83%87%E3%83%83%E3%82%AB%E3%83%BC_%E3%83%9F%E3%83%A9"
+        "%E3%82%AF%E3%83%AB_50-1-200x300.png"
+    ),
+    "亚刻奥特曼·索利斯装甲": (
+        "https://tsuburaya-prod.com/wp-content/uploads/2024/04/"
+        "ALT4_st303_0577_%E3%82%BD%E3%83%AA%E3%82%B9_3000-4000-1-768x1024.jpg"
+    ),
+    "亚刻奥特曼·露娜装甲": (
+        "https://tsuburaya-prod.com/wp-content/uploads/2024/04/"
+        "ALT4_st305_0013_%E3%83%AB%E3%83%BC%E3%83%8A_3000-4000-768x1024.jpg"
+    ),
+    "欧米伽奥特曼·雷金斯装甲": (
+        "https://tsuburaya-prod.com/wp-content/uploads/2025/06/"
+        "%E3%82%AA%E3%83%A1%E3%82%AC_%E3%83%AC%E3%82%AD%E3%83%8D"
+        "%E3%82%B9%E3%82%A2%E3%83%BC%E3%83%9E%E3%83%BC-683x1024.png"
+    ),
+    "欧米伽奥特曼·特里加隆装甲": (
+        "https://tsuburaya-prod.com/wp-content/uploads/2025/06/"
+        "%E3%82%AA%E3%83%A1%E3%82%AC_%E3%83%88%E3%83%A9%E3%82%A4"
+        "%E3%82%AC%E3%83%AD%E3%83%B3%E3%82%A2%E3%83%BC%E3%83%9E"
+        "%E3%83%BC-683x1024.png"
+    ),
+    "欧米伽奥特曼·瓦尔根斯装甲": (
+        "https://tsuburaya-prod.com/wp-content/uploads/2025/09/"
+        "UltramanOmega_ValgenessArmor_12_for_confirmation-683x1024.png"
+    ),
+    "欧米伽奥特曼·加梅顿装甲": (
+        "https://tsuburaya-prod.com/wp-content/uploads/2025/12/"
+        "%E3%82%A6%E3%83%AB%E3%83%88%E3%83%A9%E3%83%9E%E3%83%B3"
+        "%E3%82%AA%E3%83%A1%E3%82%AC-%E3%82%AC%E3%83%A1%E3%83%89"
+        "%E3%83%B3%E3%82%A2%E3%83%BC%E3%83%9E%E3%83%BC_UNS2026-683x1024.jpg"
+    ),
+}
+
 _FORM_IMAGE_PAGE_URLS = {
     # Tsuburaya's official store page has a dedicated Glitter Tiga product image.
     "闪耀迪迦": "https://store.m-78.jp/collections/tdg/products/4582769901454",
@@ -691,6 +744,7 @@ _RELATED_VARIANT_NAMES = {
     "帝纳斯奥特曼",
     "诺亚奥特曼",
     "雷杰多奥特曼",
+    "赛迦奥特曼",
     "贝利亚早期形态",
     "托雷基亚早期形态",
 }
@@ -725,6 +779,13 @@ def ultraman_image_aliases(hero: Ultraman) -> tuple[str, ...]:
         for alias, canonical_name in _ULTRAMAN_ALIASES.items()
         if canonical_name == hero.name
     )
+    # Base/standalone characters may safely use a stable English alias derived
+    # from their official slug. Forms that share a parent slug must never inherit
+    # that parent alias, otherwise "Ultraman Zero" could validate a Zero form.
+    if not is_ultraman_form_variant(hero):
+        slug_alias = hero.slug.replace("-", " ").strip()
+        if slug_alias:
+            values.append(slug_alias)
     return tuple(dict.fromkeys(value for value in values if value))
 
 
@@ -779,6 +840,137 @@ class _OpenGraphImageParser(HTMLParser):
             self.image_url = values.get("content", "")
 
 
+def _normalize_image_descriptor(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value or "").casefold()
+    return re.sub(r"[^0-9a-z\u3040-\u30ff\u3400-\u9fff]+", "", normalized)
+
+
+def _official_form_terms(hero: Ultraman) -> tuple[str, ...]:
+    values = list(ultraman_image_aliases(hero))
+    if "·" in hero.name:
+        values.append(hero.name.split("·", 1)[1])
+    generic = {
+        _normalize_image_descriptor(value)
+        for value in ("奥特曼", "Ultraman", "ウルトラマン", "Ultra")
+    }
+    terms: list[str] = []
+    for value in values:
+        normalized = _normalize_image_descriptor(value)
+        if len(normalized) >= 3 and normalized not in generic and normalized not in terms:
+            terms.append(normalized)
+    return tuple(terms)
+
+
+def _official_form_image_matches(hero: Ultraman, source: str, label: str = "") -> bool:
+    descriptor = _normalize_image_descriptor(f"{label} {source}")
+    return bool(descriptor) and any(
+        term in descriptor for term in _official_form_terms(hero)
+    )
+
+
+class _OfficialSearchImageParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.images: list[tuple[str, str]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.casefold() != "img":
+            return
+        values = {key.casefold(): value or "" for key, value in attrs}
+        source = (
+            values.get("src")
+            or values.get("data-src")
+            or values.get("data-original")
+            or ""
+        )
+        if not source or source.startswith("data:"):
+            return
+        label = " ".join(
+            part
+            for part in (
+                values.get("alt", ""),
+                values.get("title", ""),
+                values.get("aria-label", ""),
+            )
+            if part
+        )
+        self.images.append((source, label))
+
+
+async def official_ultraman_search_image(hero: Ultraman, settings: Settings) -> str:
+    """Find a form-specific image on official Tsuburaya/M78 pages.
+
+    This never accepts a page-level hero/banner image. The individual image
+    element's label or filename itself must name the requested form.
+    """
+    if not is_ultraman_form_variant(hero):
+        raise RuntimeError("官方站内精确图片搜索仅用于独立形态")
+
+    timeout = max(5.0, min(float(settings.media_timeout_seconds), 15.0))
+    query = ultraman_image_search_query(hero)
+    search_queries = (
+        f'site:tsuburaya-prod.com "{query}"',
+        f'site:store.m-78.jp "{query}"',
+    )
+    allowed_hosts = {"tsuburaya-prod.com", "www.tsuburaya-prod.com", "store.m-78.jp"}
+    pages: list[str] = []
+    for search_query in search_queries:
+        try:
+            results = await search_web(search_query, limit=8, timeout=timeout)
+        except (ValueError, httpx.HTTPError):
+            continue
+        for result in results:
+            host = (urlsplit(result.url).hostname or "").casefold()
+            if host in allowed_hosts and result.url not in pages:
+                pages.append(result.url)
+
+    if not pages:
+        raise RuntimeError("没有搜到包含该形态的圆谷官方页面")
+
+    headers = {"User-Agent": OFFICIAL_USER_AGENT}
+    errors: list[str] = []
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        headers=headers,
+    ) as client:
+        for page_url in pages[:12]:
+            try:
+                page = await client.get(page_url)
+                page.raise_for_status()
+            except httpx.HTTPError as exc:
+                errors.append(str(exc))
+                continue
+
+            parser = _OfficialSearchImageParser()
+            parser.feed(page.text)
+            for source, label in parser.images:
+                image_url = urljoin(str(page.url), source)
+                if not _official_form_image_matches(hero, image_url, label):
+                    continue
+                for candidate in _official_image_candidates(image_url):
+                    try:
+                        image = await client.get(candidate)
+                        image.raise_for_status()
+                        if not image.headers.get("content-type", "").startswith("image/"):
+                            raise RuntimeError("官方搜索结果图片响应格式无效")
+                        if len(image.content) > settings.media_max_bytes:
+                            raise RuntimeError("官方搜索结果图片超过大小限制")
+                        with Image.open(BytesIO(image.content)) as decoded:
+                            width, height = decoded.size
+                        if width < 160 or height < 160 or width * height < 40_000:
+                            raise RuntimeError("官方搜索结果图片尺寸过小")
+                        return "base64://" + base64.b64encode(image.content).decode()
+                    except (httpx.HTTPError, RuntimeError, OSError, ValueError) as exc:
+                        errors.append(str(exc))
+
+    suffix = "; ".join(errors[-4:])
+    raise RuntimeError(
+        "圆谷官方页面未找到文件名或标签明确对应该形态的图片"
+        + (f"：{suffix}" if suffix else "")
+    )
+
+
 def _official_image_candidates(image_url: str) -> tuple[str, ...]:
     """Keep the encoded path intact when the legacy official image host redirects."""
     if image_url.startswith("http://"):
@@ -803,6 +995,7 @@ def _official_image_candidates(image_url: str) -> tuple[str, ...]:
 
 async def official_ultraman_image(hero: Ultraman, settings: Settings) -> str:
     dedicated_page = _FORM_IMAGE_PAGE_URLS.get(hero.name, "")
+    direct_image = _FORM_IMAGE_DIRECT_URLS.get(hero.name, "")
     page_url = (
         dedicated_page
         or (
@@ -816,29 +1009,33 @@ async def official_ultraman_image(hero: Ultraman, settings: Settings) -> str:
     async with httpx.AsyncClient(
         timeout=timeout, follow_redirects=True, headers=headers
     ) as client:
-        page = await client.get(page_url)
-        page.raise_for_status()
-        parser = _OpenGraphImageParser()
-        parser.feed(page.text)
         candidate_urls: list[str] = []
-        if hero.image_hint:
-            hinted = next(
-                (
-                    source
-                    for source in parser.content_image_urls
-                    if hero.image_hint.casefold() in source.casefold()
-                ),
-                "",
-            )
-            if hinted:
-                candidate_urls.extend(
-                    _official_image_candidates(urljoin(page_url, hinted))
+        if direct_image:
+            candidate_urls.extend(_official_image_candidates(direct_image))
+        else:
+            page = await client.get(page_url)
+            page.raise_for_status()
+            parser = _OpenGraphImageParser()
+            parser.feed(page.text)
+            if hero.image_hint:
+                hinted = next(
+                    (
+                        source
+                        for source in parser.content_image_urls
+                        if hero.image_hint.casefold() in source.casefold()
+                    ),
+                    "",
                 )
+                if hinted:
+                    candidate_urls.extend(
+                        _official_image_candidates(urljoin(page_url, hinted))
+                    )
 
-        # Base characters may safely use the page's og:image. Independent forms
-        # must never silently fall back to the base character artwork.
-        if dedicated_page or not is_ultraman_form_variant(hero):
-            candidate_urls.extend(_official_image_candidates(parser.image_url))
+            # Base characters may safely use the page's og:image. Independent
+            # forms need a dedicated page, verified direct image, or exact match.
+            if dedicated_page or not is_ultraman_form_variant(hero):
+                candidate_urls.extend(_official_image_candidates(parser.image_url))
+
         candidates = tuple(dict.fromkeys(candidate_urls))
         if not candidates:
             raise RuntimeError("圆谷官方角色页没有返回可用图片")
@@ -852,7 +1049,7 @@ async def official_ultraman_image(hero: Ultraman, settings: Settings) -> str:
                 if len(image.content) > settings.media_max_bytes:
                     raise RuntimeError("图片超过大小限制")
                 return "base64://" + base64.b64encode(image.content).decode()
-            except (httpx.HTTPError, RuntimeError) as exc:
+            except (httpx.HTTPError, RuntimeError, OSError, ValueError) as exc:
                 errors.append(str(exc))
     raise RuntimeError("圆谷官方角色图片下载失败：" + "; ".join(errors))
 
