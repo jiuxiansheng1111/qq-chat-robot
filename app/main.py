@@ -41,6 +41,7 @@ from app.services.group_memory_logic import (
     group_memory_reasoning_hints,
     resolve_group_memory_question,
 )
+from app.services.onebot_routing import onebot_route, set_current_onebot_self_id
 from app.services.music import (
     MusicIdentity,
     MusicTrack,
@@ -765,17 +766,18 @@ def webhook_token_valid(
 
 
 async def send_group_message(group_id: str, message: str) -> None:
-    if not settings.onebot_api_base:
-        logger.info("[dry-run] group=%s message=%s", group_id, message)
+    route = onebot_route(settings)
+    if not route.api_base:
+        logger.info("[dry-run] bot=%s group=%s message=%s", route.self_id, group_id, message)
         return
     headers = (
-        {"Authorization": f"Bearer {settings.onebot_access_token}"}
-        if settings.onebot_access_token
+        {"Authorization": f"Bearer {route.access_token}"}
+        if route.access_token
         else {}
     )
     async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
         response = await client.post(
-            f"{settings.onebot_api_base.rstrip('/')}/send_group_msg",
+            f"{route.api_base.rstrip('/')}/send_group_msg",
             headers=headers,
             json={"group_id": group_id, "message": message},
         )
@@ -856,12 +858,13 @@ async def send_group_share_card(
     content: str = "",
     image: str = "",
 ) -> None:
-    if not settings.onebot_api_base:
-        logger.info("[dry-run] group=%s share=%s", group_id, url)
+    route = onebot_route(settings)
+    if not route.api_base:
+        logger.info("[dry-run] bot=%s group=%s share=%s", route.self_id, group_id, url)
         return
     headers = (
-        {"Authorization": f"Bearer {settings.onebot_access_token}"}
-        if settings.onebot_access_token
+        {"Authorization": f"Bearer {route.access_token}"}
+        if route.access_token
         else {}
     )
     data = {"url": url, "title": title[:120]}
@@ -871,7 +874,7 @@ async def send_group_share_card(
         data["image"] = image
     async with httpx.AsyncClient(timeout=12, trust_env=False) as client:
         response = await client.post(
-            f"{settings.onebot_api_base.rstrip('/')}/send_group_msg",
+            f"{route.api_base.rstrip('/')}/send_group_msg",
             headers=headers,
             json={
                 "group_id": group_id,
@@ -889,16 +892,17 @@ async def send_group_share_card(
 
 
 async def group_member_name(group_id: str, user_id: str) -> str:
-    if not settings.onebot_api_base:
+    route = onebot_route(settings)
+    if not route.api_base:
         raise RuntimeError("OneBot API is not configured")
     headers = (
-        {"Authorization": f"Bearer {settings.onebot_access_token}"}
-        if settings.onebot_access_token
+        {"Authorization": f"Bearer {route.access_token}"}
+        if route.access_token
         else {}
     )
     async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
         response = await client.post(
-            f"{settings.onebot_api_base.rstrip('/')}/get_group_member_info",
+            f"{route.api_base.rstrip('/')}/get_group_member_info",
             headers=headers,
             json={"group_id": group_id, "user_id": user_id, "no_cache": False},
         )
@@ -1027,10 +1031,11 @@ async def resolve_ultraman_card_image(hero) -> str:
 
 
 async def send_group_image(group_id: str, image_file: str, caption: str = "") -> None:
-    if not settings.onebot_api_base:
-        logger.info("[dry-run] group=%s image=%s", group_id, image_file[:80])
+    route = onebot_route(settings)
+    if not route.api_base:
+        logger.info("[dry-run] bot=%s group=%s image=%s", route.self_id, group_id, image_file[:80])
         return
-    headers = {"Authorization": f"Bearer {settings.onebot_access_token}"} if settings.onebot_access_token else {}
+    headers = {"Authorization": f"Bearer {route.access_token}"} if route.access_token else {}
     message = [{"type": "image", "data": {"file": image_file}}]
     if caption:
         message.append(
@@ -1052,12 +1057,13 @@ async def send_group_image(group_id: str, image_file: str, caption: str = "") ->
 
 
 async def send_group_music_card(group_id: str, track: MusicTrack) -> None:
-    if not settings.onebot_api_base:
-        logger.info("[dry-run] group=%s music=%s - %s", group_id, track.artist, track.title)
+    route = onebot_route(settings)
+    if not route.api_base:
+        logger.info("[dry-run] bot=%s group=%s music=%s - %s", route.self_id, group_id, track.artist, track.title)
         return
     headers = (
-        {"Authorization": f"Bearer {settings.onebot_access_token}"}
-        if settings.onebot_access_token
+        {"Authorization": f"Bearer {route.access_token}"}
+        if route.access_token
         else {}
     )
     data = {
@@ -1082,12 +1088,13 @@ async def send_group_music_card(group_id: str, track: MusicTrack) -> None:
 
 
 async def send_group_netease_card(group_id: str, track: NeteaseTrack) -> None:
-    if not settings.onebot_api_base:
-        logger.info("[dry-run] group=%s netease=%s", group_id, track.song_id)
+    route = onebot_route(settings)
+    if not route.api_base:
+        logger.info("[dry-run] bot=%s group=%s netease=%s", route.self_id, group_id, track.song_id)
         return
     headers = (
-        {"Authorization": f"Bearer {settings.onebot_access_token}"}
-        if settings.onebot_access_token
+        {"Authorization": f"Bearer {route.access_token}"}
+        if route.access_token
         else {}
     )
     async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
@@ -1115,16 +1122,20 @@ async def onebot_webhook(
     x_signature: str | None = Header(default=None),
 ):
     raw_body = await request.body()
+    event = await request.json()
+    incoming_self_id = str(event.get("self_id") or "").strip()
+    set_current_onebot_self_id(incoming_self_id)
+    route = onebot_route(settings, incoming_self_id)
     if not webhook_token_valid(
-        settings.onebot_webhook_token,
+        route.webhook_token,
         x_onebot_token,
         authorization,
         x_signature,
         raw_body,
     ):
         raise HTTPException(status_code=401, detail="invalid webhook token")
-    event = await request.json()
-    event_id = str(event.get("message_id") or event.get("event_id") or "")
+    raw_event_id = str(event.get("message_id") or event.get("event_id") or "")
+    event_id = f"{incoming_self_id}:{raw_event_id}" if raw_event_id else ""
     if event_id and not await request.app.state.deduplicator.first_seen(event_id):
         return {"ok": True, "ignored": True, "reason": "duplicate_event"}
     if event.get("post_type") != "message" or event.get("message_type") != "group":
