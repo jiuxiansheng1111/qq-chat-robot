@@ -7,6 +7,7 @@ import httpx
 from app.config import Settings
 from app.db.database import Database
 from app.llm.manager import LLMManager
+from app.services.onebot_routing import onebot_route
 from app.llm.providers import LLMError
 
 logger = logging.getLogger("qqchat.possession_style")
@@ -542,11 +543,12 @@ async def fetch_member_style_history(
     user_id: str,
     count: int | None = None,
 ) -> dict:
-    if not settings.onebot_api_base:
+    route = onebot_route(settings)
+    if not route.api_base:
         raise RuntimeError("OneBot API is not configured")
     headers = (
-        {"Authorization": f"Bearer {settings.onebot_access_token}"}
-        if settings.onebot_access_token
+        {"Authorization": f"Bearer {route.access_token}"}
+        if route.access_token
         else {}
     )
     history_count = settings.possession_style_history_count if count is None else count
@@ -557,7 +559,7 @@ async def fetch_member_style_history(
     }
     async with httpx.AsyncClient(timeout=12, trust_env=False) as client:
         response = await client.post(
-            f"{settings.onebot_api_base.rstrip('/')}/get_group_msg_history",
+            f"{route.api_base.rstrip('/')}/get_group_msg_history",
             headers=headers,
             json=body,
         )
