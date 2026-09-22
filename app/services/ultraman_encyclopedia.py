@@ -19,11 +19,11 @@ BAIDU_BAIKE_HOSTS = {
     "wapbaike.baidu.com",
 }
 BAIDU_DIRECT_PAGES = {
-    "闪耀迪迦": "https://baike.baidu.com/item/闪耀迪迦/1023751",
-    "捷德奥特曼·尊皇形态": "https://baike.baidu.com/item/捷德奥特曼/20825718",
-    "捷德奥特曼·银河初升": "https://baike.baidu.com/item/捷德奥特曼/20825718",
+    "闪耀迪迦": "https://bkso.baidu.com/item/闪耀迪迦/1023751",
+    "捷德奥特曼·尊皇形态": "https://bkso.baidu.com/item/捷德奥特曼/20825718",
+    "捷德奥特曼·银河初升": "https://bkso.baidu.com/item/捷德奥特曼/20825718",
     "梦比优斯奥特曼·无限形态": (
-        "https://baike.baidu.com/item/梦比优斯无限形态/8944775"
+        "https://bkso.baidu.com/item/梦比优斯无限形态/8944775"
     ),
 }
 WIKIPEDIA_API_HOSTS = (
@@ -314,7 +314,11 @@ async def baidu_baike_ultraman_image(
     ][:4]
     for query in baidu_lemma_terms:
         encoded = quote(query, safe="")
-        for base in ("https://baike.baidu.com/item/", "https://wapbaike.baidu.com/item/"):
+        for base in (
+            "https://bkso.baidu.com/item/",
+            "https://baike.baidu.com/item/",
+            "https://wapbaike.baidu.com/item/",
+        ):
             item_url = base + encoded
             if item_url not in seen_pages:
                 seen_pages.add(item_url)
