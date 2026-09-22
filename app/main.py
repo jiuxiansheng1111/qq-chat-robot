@@ -793,6 +793,43 @@ async def send_group_message(group_id: str, message: str) -> None:
         )
 
 
+def split_qq_text(message: str, chunk_chars: int | None = None) -> list[str]:
+    """Split long text into QQ-sized chunks without dropping content."""
+    limit = max(500, chunk_chars or settings.qq_send_chunk_chars)
+    text = str(message or "").strip()
+    if not text:
+        return []
+
+    chunks: list[str] = []
+    while len(text) > limit:
+        window = text[: limit + 1]
+        cut = max(
+            window.rfind("\n"),
+            window.rfind("。"),
+            window.rfind("！"),
+            window.rfind("？"),
+            window.rfind("；"),
+        )
+        if cut < limit // 2:
+            cut = limit
+        else:
+            cut += 1
+        chunk = text[:cut].strip()
+        if chunk:
+            chunks.append(chunk)
+        text = text[cut:].lstrip()
+    if text:
+        chunks.append(text)
+    return chunks
+
+
+async def send_group_long_message(group_id: str, message: str) -> None:
+    for index, chunk in enumerate(split_qq_text(message)):
+        if index:
+            await asyncio.sleep(0.12)
+        await send_group_message(group_id, chunk)
+
+
 async def notify_rate_limited(
     request: Request,
     group_id: str,
