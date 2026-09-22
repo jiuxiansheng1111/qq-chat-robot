@@ -390,3 +390,63 @@ def test_numeric_baidu_item_page_can_use_specific_og_image():
     )
     assert candidates
     assert candidates[0][1].endswith("saga.jpg")
+
+
+def test_parent_hero_page_can_validate_short_geed_form_label():
+    html = """
+    <html>
+      <head><meta property="og:title" content="捷德奥特曼_百度百科"></head>
+      <body>
+        <img src="https://bkimg.cdn.bcebos.com/pic/geed-primitive.jpg" alt="原始形态">
+      </body>
+    </html>
+    """
+    candidates = baidu_page_image_candidates(
+        html,
+        "https://bkso.baidu.com/item/捷德奥特曼/20825718",
+        ("捷德奥特曼·原始形态", "Geed Primitive"),
+    )
+    assert candidates
+    assert candidates[0][1].endswith("geed-primitive.jpg")
+
+
+def test_short_form_label_is_rejected_on_wrong_parent_page():
+    html = """
+    <html>
+      <head><meta property="og:title" content="欧布奥特曼_百度百科"></head>
+      <body>
+        <img src="https://bkimg.cdn.bcebos.com/pic/orb-something.jpg" alt="原始形态">
+      </body>
+    </html>
+    """
+    candidates = baidu_page_image_candidates(
+        html,
+        "https://bkso.baidu.com/item/欧布奥特曼/19876223",
+        ("捷德奥特曼·原始形态", "Geed Primitive"),
+    )
+    assert candidates == []
+
+
+def test_tiga_power_short_label_requires_tiga_parent_page():
+    tiga_html = """
+    <html>
+      <head><meta property="og:title" content="迪迦奥特曼_百度百科"></head>
+      <body>
+        <img src="https://bkimg.cdn.bcebos.com/pic/tiga-power.jpg" alt="强力型">
+      </body>
+    </html>
+    """
+    accepted = baidu_page_image_candidates(
+        tiga_html,
+        "https://bkso.baidu.com/item/迪迦奥特曼/21810",
+        ("迪迦奥特曼·强力型", "Tiga Power Type"),
+    )
+    assert accepted
+
+    dyna_html = tiga_html.replace("迪迦奥特曼", "戴拿奥特曼")
+    rejected = baidu_page_image_candidates(
+        dyna_html,
+        "https://bkso.baidu.com/item/戴拿奥特曼/24257648",
+        ("迪迦奥特曼·强力型", "Tiga Power Type"),
+    )
+    assert rejected == []
