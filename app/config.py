@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     max_context_messages: int = 100
     group_context_history_count: int = 300
     group_context_message_limit: int = 300
-    group_context_char_limit: int = 24000
+    group_context_char_limit: int = 60000
     qq_send_chunk_chars: int = 1800
     media_max_bytes: int = 5 * 1024 * 1024
     media_timeout_seconds: float = 60
