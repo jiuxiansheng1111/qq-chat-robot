@@ -353,3 +353,40 @@ def test_bare_shared_form_suffix_is_not_enough_to_validate_image():
         ("强力型", "Ultraman Tiga Power Type"),
         "强力型",
     ) is False
+
+
+def test_no_id_baidu_item_page_does_not_trust_generic_og_image():
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="赛迦奥特曼_百度百科">
+        <meta property="og:image" content="https://bkimg.cdn.bcebos.com/pic/shared-placeholder.jpg">
+      </head>
+      <body></body>
+    </html>
+    """
+    candidates = baidu_page_image_candidates(
+        html,
+        "https://bkso.baidu.com/item/赛迦奥特曼",
+        ("赛迦奥特曼", "Ultraman Saga"),
+    )
+    assert candidates == []
+
+
+def test_numeric_baidu_item_page_can_use_specific_og_image():
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="赛迦奥特曼_百度百科">
+        <meta property="og:image" content="https://bkimg.cdn.bcebos.com/pic/saga.jpg">
+      </head>
+      <body></body>
+    </html>
+    """
+    candidates = baidu_page_image_candidates(
+        html,
+        "https://bkso.baidu.com/item/赛迦奥特曼/3008291",
+        ("赛迦奥特曼", "Ultraman Saga"),
+    )
+    assert candidates
+    assert candidates[0][1].endswith("saga.jpg")
