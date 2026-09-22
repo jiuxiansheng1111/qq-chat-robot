@@ -450,3 +450,33 @@ def test_tiga_power_short_label_requires_tiga_parent_page():
         ("迪迦奥特曼·强力型", "Tiga Power Type"),
     )
     assert rejected == []
+
+
+def test_wikipedia_wikitext_candidate_uses_form_caption():
+    text = """
+    == Forms ==
+    [[File:Tiga costume red.jpg|thumb|Ultraman Tiga Power Type]]
+    [[File:Tiga costume purple.jpg|thumb|Ultraman Tiga Sky Type]]
+    """
+    candidates = encyclopedia_module._wikipedia_wikitext_image_candidates(
+        text,
+        "迪迦奥特曼·强力型",
+        ("ウルトラマンティガ パワータイプ", "Ultraman Tiga Power Type"),
+        "Ultraman Tiga (character)",
+    )
+    assert candidates == ["File:Tiga costume red.jpg"]
+
+
+def test_wikipedia_wikitext_candidate_rejects_other_form_on_same_parent():
+    text = """
+    == Forms ==
+    [[File:Tiga power.jpg|thumb|Ultraman Tiga Power Type]]
+    [[File:Tiga sky.jpg|thumb|Ultraman Tiga Sky Type]]
+    """
+    candidates = encyclopedia_module._wikipedia_wikitext_image_candidates(
+        text,
+        "迪迦奥特曼·空中型",
+        ("ウルトラマンティガ スカイタイプ", "Ultraman Tiga Sky Type"),
+        "Ultraman Tiga (character)",
+    )
+    assert candidates == ["File:Tiga sky.jpg"]
