@@ -41,7 +41,6 @@ from app.services.group_memory_logic import (
     group_memory_reasoning_hints,
     resolve_group_memory_question,
 )
-from app.services.onebot_routing import onebot_route, set_current_onebot_self_id
 from app.services.music import (
     MusicIdentity,
     MusicTrack,
@@ -52,6 +51,7 @@ from app.services.music import (
     parse_music_identity,
     search_netease_music,
 )
+from app.services.onebot_routing import onebot_route, set_current_onebot_self_id
 from app.services.possession_style import (
     fetch_group_context,
     fetch_member_recall_samples,
