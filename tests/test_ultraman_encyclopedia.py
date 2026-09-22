@@ -487,7 +487,7 @@ async def test_baidu_image_fallback_requires_trusted_exact_source(monkeypatch):
     image_data = png_bytes()
 
     async def handler(request: httpx.Request):
-        if request.url.host == "image.baidu.com":
+        if request.url.host == "image.baidu.com" and request.url.path == "/search/acjson":
             return httpx.Response(
                 200,
                 json={
