@@ -1015,6 +1015,8 @@ async def baidu_image_search_ultraman_image(
                 page_url = str(item.get("fromURL") or "")
                 if not page_url.startswith(("http://", "https://")):
                     page_url = f"https://{source_host}/"
+                else:
+                    page_url = quote(page_url, safe=":/?&=%#")
                 try:
                     data_b64 = await _download_verified_image(
                         client,
