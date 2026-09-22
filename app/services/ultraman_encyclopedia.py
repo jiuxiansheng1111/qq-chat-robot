@@ -18,6 +18,14 @@ BAIDU_BAIKE_HOSTS = {
     "bkso.baidu.com",
     "wapbaike.baidu.com",
 }
+BAIDU_DIRECT_PAGES = {
+    "闪耀迪迦": "https://baike.baidu.com/item/闪耀迪迦/1023751",
+    "捷德奥特曼·尊皇形态": "https://baike.baidu.com/item/捷德奥特曼/20825718",
+    "捷德奥特曼·银河初升": "https://baike.baidu.com/item/捷德奥特曼/20825718",
+    "梦比优斯奥特曼·无限形态": (
+        "https://baike.baidu.com/item/梦比优斯无限形态/8944775"
+    ),
+}
 WIKIPEDIA_API_HOSTS = (
     "zh.wikipedia.org",
     "en.wikipedia.org",
@@ -239,7 +247,19 @@ async def baidu_baike_ultraman_image(
     searches.extend(alias for alias in aliases if re.search(r"[\u3400-\u9fff]", alias))
     seen_pages: set[str] = set()
     results = []
-    for query in searches[:4]:
+
+    direct_url = BAIDU_DIRECT_PAGES.get(name)
+    if direct_url:
+        seen_pages.add(direct_url)
+        results.append(
+            type(
+                "_DirectBaikeResult",
+                (),
+                {"title": name, "url": direct_url, "snippet": "direct"},
+            )()
+        )
+
+    for query in searches[:3]:
         try:
             found = await search_web(f'"{query}" 百度百科', limit=6)
         except (ValueError, httpx.HTTPError):
