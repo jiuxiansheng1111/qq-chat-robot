@@ -480,3 +480,60 @@ def test_wikipedia_wikitext_candidate_rejects_other_form_on_same_parent():
         "Ultraman Tiga (character)",
     )
     assert candidates == ["File:Tiga sky.jpg"]
+
+
+@pytest.mark.asyncio
+async def test_baidu_image_fallback_requires_trusted_exact_source(monkeypatch):
+    image_data = png_bytes()
+
+    async def handler(request: httpx.Request):
+        if request.url.host == "image.baidu.com":
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "fromURLHost": "random-wallpaper.example",
+                            "fromPageTitleEnc": "迪迦奥特曼 强力型",
+                            "middleURL": "https://image.baidu.com/random.jpg",
+                        },
+                        {
+                            "fromURLHost": "bkso.baidu.com",
+                            "fromPageTitleEnc": "迪迦奥特曼 强力型",
+                            "middleURL": "https://image.baidu.com/tiga-power.jpg",
+                            "fromURL": "https://bkso.baidu.com/item/迪迦奥特曼",
+                        },
+                    ]
+                },
+            )
+        if request.url.host == "image.baidu.com" and request.url.path.endswith(".jpg"):
+            return httpx.Response(
+                200,
+                headers={"content-type": "image/png"},
+                content=image_data,
+            )
+        if request.url.path.endswith("tiga-power.jpg"):
+            return httpx.Response(
+                200,
+                headers={"content-type": "image/png"},
+                content=image_data,
+            )
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mocked_client(**kwargs):
+        kwargs["transport"] = transport
+        return original_client(**kwargs)
+
+    monkeypatch.setattr(encyclopedia_module.httpx, "AsyncClient", mocked_client)
+
+    result = await encyclopedia_module.baidu_image_search_ultraman_image(
+        "迪迦奥特曼·强力型",
+        ("迪迦强力型", "Ultraman Tiga Power Type"),
+        Settings(_env_file=None),
+    )
+    assert result is not None
+    assert result.source.startswith("百度图片")
+    assert "强力型" in result.label
