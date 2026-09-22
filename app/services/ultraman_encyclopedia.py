@@ -1,5 +1,6 @@
 import base64
 import html
+import json
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -338,6 +339,31 @@ def _clean_image_url(value: str, page_url: str) -> str:
     if any(hint in url.casefold() for hint in _BAD_IMAGE_HINTS):
         return ""
     return url
+
+
+class _BingImageResultParser(HTMLParser):
+    """Collect Bing image-tile metadata from <a class="iusc" m="...">."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.items: list[dict[str, object]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.casefold() != "a":
+            return
+        values = {key.casefold(): value or "" for key, value in attrs}
+        classes = {value.casefold() for value in values.get("class", "").split()}
+        if "iusc" not in classes:
+            return
+        metadata = values.get("m", "")
+        if not metadata:
+            return
+        try:
+            payload = json.loads(html.unescape(metadata))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return
+        if isinstance(payload, dict):
+            self.items.append(payload)
 
 
 class _EncyclopediaPageParser(HTMLParser):
@@ -1035,6 +1061,87 @@ async def baidu_image_search_ultraman_image(
     return None
 
 
+async def bing_image_search_ultraman_image(
+    name: str,
+    aliases: tuple[str, ...],
+    settings: Settings,
+) -> EncyclopediaImage | None:
+    """Fallback to Bing Images, but only accept metadata that names the exact form."""
+    terms = _specific_terms(name, aliases)
+    if not terms:
+        return None
+
+    searches = [name]
+    searches.extend(
+        alias
+        for alias in aliases
+        if alias and (
+            re.search(r"[A-Za-z]", alias)
+            or re.search(r"[\u3040-\u30ff\u3400-\u9fff]", alias)
+        )
+    )
+    searches = list(dict.fromkeys(searches))[:3]
+    timeout = max(4.0, min(float(settings.media_timeout_seconds), 8.0))
+    headers = {
+        "User-Agent": ENCYCLOPEDIA_USER_AGENT,
+        "Referer": "https://www.bing.com/images/",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7,ja;q=0.5",
+    }
+
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        headers=headers,
+    ) as client:
+        for query in searches:
+            try:
+                response = await client.get(
+                    "https://www.bing.com/images/async",
+                    params={
+                        "q": query,
+                        "first": "1",
+                        "count": "35",
+                        "adlt": "strict",
+                        "scenario": "ImageBasicHover",
+                    },
+                )
+                response.raise_for_status()
+            except httpx.HTTPError:
+                continue
+
+            parser = _BingImageResultParser()
+            parser.feed(response.text)
+            for item in parser.items[:35]:
+                title = html.unescape(str(item.get("t") or ""))
+                description = html.unescape(str(item.get("desc") or ""))
+                image_url = html.unescape(str(item.get("murl") or "")).strip()
+                page_url = html.unescape(str(item.get("purl") or "")).strip()
+                descriptor = f"{title} {description} {image_url} {page_url}"
+                if not _matches_specific(descriptor, terms):
+                    continue
+                if not image_url.startswith(("https://", "http://")):
+                    continue
+
+                referer = page_url if page_url.startswith(("https://", "http://")) else "https://www.bing.com/images/"
+                referer = quote(referer, safe=":/?&=%#")
+                try:
+                    data_b64 = await _download_verified_image(
+                        client,
+                        image_url,
+                        referer,
+                        settings,
+                    )
+                except (RuntimeError, httpx.HTTPError):
+                    continue
+                return EncyclopediaImage(
+                    data=data_b64,
+                    source="Bing 图片精确形态匹配",
+                    page_url=page_url or f"https://www.bing.com/images/search?q={quote(query)}",
+                    label=title or description or query,
+                )
+    return None
+
+
 async def encyclopedia_ultraman_image(
     name: str,
     aliases: tuple[str, ...],
@@ -1051,4 +1158,7 @@ async def encyclopedia_ultraman_image(
     baidu_image = await baidu_image_search_ultraman_image(name, aliases, settings)
     if baidu_image is not None:
         return baidu_image
-    raise RuntimeError(f"没有找到“{name}”的可靠百科代表图")
+    bing_image = await bing_image_search_ultraman_image(name, aliases, settings)
+    if bing_image is not None:
+        return bing_image
+    raise RuntimeError(f"没有找到“{name}”的可靠百科/图片搜索代表图")
