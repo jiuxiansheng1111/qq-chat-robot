@@ -1093,7 +1093,7 @@ async def onebot_webhook(
     if not group_id:
         return {"ok": True, "ignored": True}
     display_name = sender_display_name(event)
-    if text and not text.startswith(("http://", "https://")):
+    if text and not text.startswith(("/", "http://", "https://")):
         group_cache = request.app.state.recent_group_messages.setdefault(
             group_id,
             deque(maxlen=max(50, settings.group_context_history_count)),
@@ -1862,7 +1862,7 @@ async def onebot_webhook(
                 )
                 if body:
                     existing = set(group_cache)
-                    for row in body.splitlines():
+                    for row in reversed(body.splitlines()):
                         row = row.strip()
                         if row and row not in existing:
                             group_cache.appendleft(row)
