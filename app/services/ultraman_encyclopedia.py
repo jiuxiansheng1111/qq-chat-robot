@@ -66,12 +66,30 @@ BAIDU_PARENT_PAGES = {
         "https://bkso.baidu.com/item/新奥特曼列传/8010663",
         "https://bkso.baidu.com/item/维克特利奥特曼/53260527",
     ),
-    "捷德奥特曼·原始形态": ("https://bkso.baidu.com/item/捷德奥特曼/20825718",),
-    "捷德奥特曼·刚燃形态": ("https://bkso.baidu.com/item/捷德奥特曼/20825718",),
-    "捷德奥特曼·机敏形态": ("https://bkso.baidu.com/item/捷德奥特曼/20825718",),
-    "捷德奥特曼·豪勇形态": ("https://bkso.baidu.com/item/捷德奥特曼/20825718",),
-    "捷德奥特曼·尊皇形态": ("https://bkso.baidu.com/item/捷德奥特曼/20825718",),
-    "捷德奥特曼·银河初升": ("https://bkso.baidu.com/item/捷德奥特曼/20825718",),
+    "捷德奥特曼·原始形态": (
+        "https://bkso.baidu.com/item/捷德奥特曼/20825718",
+        "https://bkso.baidu.com/item/捷德奥特曼/20832863",
+    ),
+    "捷德奥特曼·刚燃形态": (
+        "https://bkso.baidu.com/item/捷德奥特曼/20825718",
+        "https://bkso.baidu.com/item/捷德奥特曼/20832863",
+    ),
+    "捷德奥特曼·机敏形态": (
+        "https://bkso.baidu.com/item/捷德奥特曼/20825718",
+        "https://bkso.baidu.com/item/捷德奥特曼/20832863",
+    ),
+    "捷德奥特曼·豪勇形态": (
+        "https://bkso.baidu.com/item/捷德奥特曼/20825718",
+        "https://bkso.baidu.com/item/捷德奥特曼/20832863",
+    ),
+    "捷德奥特曼·尊皇形态": (
+        "https://bkso.baidu.com/item/捷德奥特曼/20825718",
+        "https://bkso.baidu.com/item/捷德奥特曼/20832863",
+    ),
+    "捷德奥特曼·银河初升": (
+        "https://bkso.baidu.com/item/捷德奥特曼/20825718",
+        "https://bkso.baidu.com/item/捷德奥特曼/20832863",
+    ),
     "泰迦奥特曼·光子地球": ("https://bkso.baidu.com/item/托雷基亚奥特曼/23366789",),
     "泰迦奥特曼·三重斯特利姆形态": ("https://bkso.baidu.com/item/托雷基亚奥特曼/23366789",),
     "闪耀特利迦永恒": ("https://bkso.baidu.com/item/特利迦奥特曼/56750285",),
@@ -85,7 +103,10 @@ BAIDU_PARENT_PAGES = {
         "https://bkso.baidu.com/item/亚刻奥特曼/63972321",
         "https://bkso.baidu.com/item/亚刻魔方/64252054",
     ),
-    "贝利亚早期形态": ("https://bkso.baidu.com/item/贝利亚奥特曼/7743176",),
+    "贝利亚早期形态": (
+        "https://bkso.baidu.com/item/贝利亚奥特曼/7743176",
+        "https://bkso.baidu.com/item/奥特银河格斗：巨大阴谋/59853212",
+    ),
     "托雷基亚早期形态": ("https://bkso.baidu.com/item/托雷基亚奥特曼/23366789",),
 }
 
