@@ -94,14 +94,14 @@ def _specific_terms(name: str, aliases: tuple[str, ...]) -> tuple[str, ...]:
     candidates = [name, *aliases]
     terms: list[str] = []
     generic = {_normalize(value) for value in _GENERIC_IMAGE_TERMS}
+    generic_tokens = sorted((token for token in generic if token), key=len, reverse=True)
     bare_suffix = _normalize(name.split("·", 1)[1]) if "·" in name else ""
     for value in candidates:
         normalized = _normalize(value)
         variants = [normalized]
         stripped = normalized
-        for token in generic:
-            if token:
-                stripped = stripped.replace(token, "")
+        for token in generic_tokens:
+            stripped = stripped.replace(token, "")
         if stripped and stripped != normalized:
             variants.append(stripped)
         for variant in variants:
