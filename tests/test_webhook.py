@@ -37,6 +37,7 @@ from app.main import (
     polish_chat_reply,
     possession_recent_messages_prompt,
     qualify_group_memory,
+    resolve_ultraman_card_image,
     send_group_message,
     send_group_share_card,
     sender_display_name,
@@ -798,3 +799,16 @@ def test_ultraman_followup_reuses_last_resolved_form(monkeypatch, tmp_path):
         settings.database_path = previous_database_path
         settings.onebot_api_base = previous_onebot_api_base
         settings.onebot_self_id = previous_self_id
+
+
+@pytest.mark.asyncio
+async def test_ultraman_image_resolution_never_falls_back_to_bilibili(monkeypatch):
+    hero = type("Hero", (), {"name": "测试形态"})()
+
+    async def no_official_image(*args, **kwargs):
+        raise RuntimeError("no verified artwork")
+
+    monkeypatch.setattr("app.main.official_ultraman_image", no_official_image)
+
+    with pytest.raises(RuntimeError, match="no verified artwork"):
+        await resolve_ultraman_card_image(hero)
