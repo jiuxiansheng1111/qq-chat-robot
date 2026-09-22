@@ -941,8 +941,8 @@ async def baidu_image_search_ultraman_image(
         for alias in aliases
         if alias and (re.search(r"[A-Za-z]", alias) or re.search(r"[\u3400-\u9fff]", alias))
     )
-    searches = list(dict.fromkeys(searches))[:5]
-    timeout = max(4.0, min(float(settings.media_timeout_seconds), 10.0))
+    searches = list(dict.fromkeys(searches))[:3]
+    timeout = max(4.0, min(float(settings.media_timeout_seconds), 7.0))
     headers = {
         "User-Agent": ENCYCLOPEDIA_USER_AGENT,
         "Referer": "https://image.baidu.com/",
@@ -967,7 +967,7 @@ async def baidu_image_search_ultraman_image(
                         "ie": "utf-8",
                         "oe": "utf-8",
                         "pn": "0",
-                        "rn": "30",
+                        "rn": "20",
                         "newReq": "1",
                     },
                 )
