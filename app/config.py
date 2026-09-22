@@ -60,13 +60,14 @@ class Settings(BaseSettings):
     auto_web_search_enabled: bool = False
     auto_web_search_limit: int = 5
 
-    persona_name: str = "阿柚"
+    persona_name: str = "小丛雨"
     persona_prompt_file: str = "prompts/persona.txt"
     persona_examples_file: str = "prompts/examples.jsonl"
     max_context_messages: int = 100
-    group_context_history_count: int = 300
-    group_context_message_limit: int = 300
-    group_context_char_limit: int = 60000
+    repeat_echo_enabled: bool = True
+    group_context_history_count: int = 3000
+    group_context_message_limit: int = 3000
+    group_context_char_limit: int = 120000
     qq_send_chunk_chars: int = 1800
     media_max_bytes: int = 5 * 1024 * 1024
     media_timeout_seconds: float = 60
@@ -83,9 +84,9 @@ class Settings(BaseSettings):
     bilibili_timeout_seconds: float = 10
     bilibili_search_result_limit: int = 20
     possession_style_history_count: int = 200
-    possession_style_sample_limit: int = 30
+    possession_style_sample_limit: int = 200
     possession_style_refresh_hours: int = 24
-    possession_recall_history_count: int = 500
+    possession_recall_history_count: int = 200
     possession_recall_result_limit: int = 12
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
