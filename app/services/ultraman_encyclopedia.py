@@ -624,12 +624,12 @@ async def encyclopedia_ultraman_image(
     aliases: tuple[str, ...],
     settings: Settings,
 ) -> EncyclopediaImage:
-    # Prefer Wikipedia/Wikimedia first: file titles and page titles provide
-    # cleaner machine-checkable identity metadata than generic image search URLs.
-    wikipedia = await wikipedia_ultraman_image(name, aliases, settings)
-    if wikipedia is not None:
-        return wikipedia
+    # Baidu Baike usually has denser Chinese form galleries for the Ultra Series.
+    # Prefer it first, then use Wikipedia/Wikimedia as the secondary source.
     baidu = await baidu_baike_ultraman_image(name, aliases, settings)
     if baidu is not None:
         return baidu
+    wikipedia = await wikipedia_ultraman_image(name, aliases, settings)
+    if wikipedia is not None:
+        return wikipedia
     raise RuntimeError(f"没有找到“{name}”的可靠百科代表图")
