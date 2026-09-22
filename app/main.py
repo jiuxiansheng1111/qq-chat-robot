@@ -166,6 +166,7 @@ async def lifespan(app: FastAPI):
     app.state.recent_member_messages = {}
     app.state.recent_member_images = {}
     app.state.recent_group_messages = {}
+    app.state.repeat_echo_state = {}
     app.state.group_history_bootstrapped = set()
     app.state.recent_ultraman_queries = {}
     app.state.translation_cache = {}
@@ -667,14 +668,75 @@ def polish_chat_reply(answer: str) -> str:
     return answer
 
 
-def ensure_default_murasame_voice(answer: str) -> str:
+MURASAME_SERIOUS_HINTS = (
+    "死亡",
+    "去世",
+    "自杀",
+    "伤害",
+    "生病",
+    "医院",
+    "急救",
+    "报警",
+    "危险",
+    "紧急",
+    "故障",
+    "报错",
+    "错误",
+    "失败",
+    "无法连接",
+    "怎么办",
+)
+
+
+def should_add_murasame_tsundere(seed: str, prompt: str = "") -> bool:
+    """Use a stable low-frequency tsundere flourish only in light conversation."""
+    if not seed or any(hint in prompt for hint in MURASAME_SERIOUS_HINTS):
+        return False
+    return hashlib.sha256(seed.encode("utf-8")).digest()[0] % 8 == 0
+
+
+def ensure_default_murasame_voice(answer: str, *, seed: str = "", prompt: str = "") -> str:
     if not answer:
-        return answer
-    if any(marker in answer for marker in ("吾辈", "苟修金", "汝")):
         return answer
     if answer.startswith(("```", "<WEB_SEARCH>")):
         return answer
-    return "苟修金，" + answer
+    if not any(marker in answer for marker in ("吾辈", "苟修金", "汝")):
+        answer = "苟修金，吾辈来说：" + answer
+    if should_add_murasame_tsundere(seed, prompt) and "杂鱼~杂鱼~" not in answer:
+        tail = "哼，才不是特意告诉汝的呢 (｀へ´) 杂鱼~杂鱼~"
+        if "\n\n来源：" in answer:
+            body, sources = answer.split("\n\n来源：", 1)
+            answer = f"{body}\n{tail}\n\n来源：{sources}"
+        else:
+            answer = f"{answer}\n{tail}"
+    return answer
+
+
+def repeat_echo_candidate(
+    state: dict[str, dict[str, object]],
+    group_id: str,
+    text: str,
+) -> str | None:
+    """Return text once when the same eligible group message appears twice in a row."""
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    if (
+        not normalized
+        or len(normalized) > 500
+        or normalized.startswith(("/", "http://", "https://"))
+    ):
+        state.pop(group_id, None)
+        return None
+
+    current = state.get(group_id)
+    if not current or current.get("text") != normalized:
+        state[group_id] = {"text": normalized, "count": 1, "replied": False}
+        return None
+
+    current["count"] = int(current.get("count", 1)) + 1
+    if int(current["count"]) >= 2 and not bool(current.get("replied")):
+        current["replied"] = True
+        return normalized
+    return None
 
 def automatic_web_search_query(prompt: str, model_answer: str = "") -> str | None:
     """Return a bounded query for clearly current or model-deferred questions."""
@@ -1196,7 +1258,7 @@ async def onebot_webhook(
         sample_key = (group_id, user_id)
         samples = request.app.state.recent_member_messages.setdefault(
             sample_key,
-            deque(maxlen=max(8, min(settings.possession_style_sample_limit, 50))),
+            deque(maxlen=max(8, min(settings.possession_style_sample_limit, 200))),
         )
         samples.append(text)
     if (
@@ -1210,7 +1272,7 @@ async def onebot_webhook(
             display_name,
             text,
             has_image=bool(image_refs),
-            max_messages=max(100, min(settings.possession_recall_history_count, 1000)),
+            max_messages=max(100, min(settings.possession_recall_history_count, 200)),
         )
     if not await request.app.state.ingress_limiter.allow(f"user:{user_id}"):
         await notify_rate_limited(
@@ -1230,6 +1292,33 @@ async def onebot_webhook(
             message="这个群刚才消息有点多，等几秒再试一下吧～",
         )
         return {"ok": True, "ignored": True, "reason": "group_ingress_rate_limited"}
+
+    raw_message = event.get("message")
+    plain_repeat_message = (
+        isinstance(raw_message, str)
+        and "[CQ:" not in raw_message
+    ) or (
+        isinstance(raw_message, list)
+        and bool(raw_message)
+        and all(
+            isinstance(segment, dict) and segment.get("type") == "text"
+            for segment in raw_message
+        )
+    )
+    if (
+        settings.repeat_echo_enabled
+        and plain_repeat_message
+        and not bot_mentioned(event)
+        and user_id != event_bot_self_id(event)
+    ):
+        repeat_text = repeat_echo_candidate(
+            request.app.state.repeat_echo_state,
+            group_id,
+            text,
+        )
+        if repeat_text is not None:
+            await send_group_message(group_id, repeat_text)
+            return {"ok": True, "handled": True, "reason": "repeat_echo"}
 
     plugin_spec, _ = registry.resolve(text)
     if plugin_spec and plugin_spec.name != "group_admin" and not await request.app.state.db.plugin_enabled(group_id, plugin_spec.name):
@@ -1404,7 +1493,7 @@ async def onebot_webhook(
         else:
             await send_group_message(
                 group_id,
-                f"我现在是机器人“{settings.persona_name}”，没有在夺舍。",
+                "吾辈现在是“小丛雨”，没有在夺舍哟，苟修金。",
             )
     elif is_targeted_possession_command(event, text):
         targets = mentioned_user_ids(event)
@@ -1746,6 +1835,11 @@ async def onebot_webhook(
                         reply = f"{summary[:1300]}\n\n来源：\n{format_search_sources(results)}"
                     except (LLMError, httpx.HTTPError):
                         reply = "搜到这些结果：\n" + format_search_sources(results)
+                    reply = ensure_default_murasame_voice(
+                        reply,
+                        seed=f"search:{group_id}:{user_id}:{search_query}",
+                        prompt=search_query,
+                    )
                     await send_group_message(group_id, reply[:2000])
             except (ValueError, RuntimeError, httpx.HTTPError) as exc:
                 logger.warning("web search failed: %s", exc)
@@ -1756,10 +1850,12 @@ async def onebot_webhook(
         active_possession = await request.app.state.db.daily_possession(group_id, today)
         memory_answer = resolve_group_memory_question(prompt, group_memories)
         if memory_answer is not None and not active_possession:
-            await send_group_message(
-                group_id,
+            memory_reply = ensure_default_murasame_voice(
                 format_group_memory_answer(memory_answer, prompt),
+                seed=f"group-memory:{group_id}:{user_id}:{prompt}",
+                prompt=prompt,
             )
+            await send_group_message(group_id, memory_reply)
             return {"ok": True, "source": "group_memory_relation"}
         if not await request.app.state.llm_limiter.allow(f"llm-user:{user_id}"):
             await notify_rate_limited(
@@ -2017,7 +2113,11 @@ async def onebot_webhook(
                     group_id, today, speaker_prompt, answer
                 )
             else:
-                answer = ensure_default_murasame_voice(answer)
+                answer = ensure_default_murasame_voice(
+                    answer,
+                    seed=f"chat:{group_id}:{user_id}:{prompt}",
+                    prompt=prompt,
+                )
             request.app.state.memory.append(group_id, user_id, prompt, answer, memory_enabled)
             await send_group_long_message(group_id, answer)
             if imitate_current_possession and possession:
@@ -2033,5 +2133,5 @@ async def onebot_webhook(
         except (LLMError, httpx.HTTPError) as exc:
             reason = describe_llm_error(exc)
             logger.warning("LLM request failed (%s): %s", reason, exc)
-            await send_group_message(group_id, "我现在有点忙，稍后再试一下吧。")
+            await send_group_message(group_id, "苟修金，吾辈现在有点忙，稍后再试一下吧。")
     return {"ok": True}
