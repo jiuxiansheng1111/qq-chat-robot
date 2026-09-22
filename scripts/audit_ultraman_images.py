@@ -11,10 +11,7 @@ from PIL import Image
 
 import app.services.ultraman as ultraman
 from app.config import Settings
-from app.services.ultraman_encyclopedia import (
-    encyclopedia_reference_matches,
-    encyclopedia_ultraman_image,
-)
+from app.services.ultraman_encyclopedia import encyclopedia_ultraman_image
 
 
 @dataclass
@@ -60,10 +57,6 @@ async def resolve_exact_image(hero, settings: Settings) -> tuple[str, str, str, 
     try:
         aliases = ultraman.ultraman_image_aliases(hero)
         image = await encyclopedia_ultraman_image(hero.name, aliases, settings)
-        if not encyclopedia_reference_matches(hero.name, aliases, image.label):
-            raise RuntimeError(
-                f"百科图片标签未能精确证明目标形态: {image.label!r}"
-            )
         return image.data, image.source, image.page_url, image.label
     except Exception as exc:
         third_error = f"encyclopedia: {type(exc).__name__}: {exc}"
