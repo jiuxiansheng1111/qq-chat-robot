@@ -193,6 +193,64 @@ def _matches_specific(value: str, terms: tuple[str, ...]) -> bool:
     return bool(normalized) and any(term in normalized for term in terms)
 
 
+def _parent_page_form_terms(
+    name: str,
+    aliases: tuple[str, ...],
+    page_title: str,
+) -> tuple[str, ...]:
+    """Allow short form labels only after the page title proves the parent hero."""
+    parent_values: list[str] = []
+    if "·" in name:
+        parent_values.append(name.split("·", 1)[0])
+    parent_values.extend(_PARENT_DISCOVERY_TERMS.get(name, ()))
+
+    parent_norms: list[str] = []
+    ultra_cn = _normalize("奥特曼")
+    for parent in parent_values:
+        normalized = _normalize(parent)
+        if normalized and normalized not in parent_norms:
+            parent_norms.append(normalized)
+        without_ultra = normalized.replace(ultra_cn, "")
+        if len(without_ultra) >= 2 and without_ultra not in parent_norms:
+            parent_norms.append(without_ultra)
+
+    normalized_title = _normalize(page_title)
+    if not any(parent and parent in normalized_title for parent in parent_norms):
+        return ()
+
+    values: list[str] = []
+    if "·" in name:
+        values.append(name.split("·", 1)[1])
+    values.extend(aliases)
+
+    generic_tokens = sorted(
+        (_normalize(value) for value in _GENERIC_IMAGE_TERMS),
+        key=len,
+        reverse=True,
+    )
+    removable_suffixes = tuple(_normalize(value) for value in ("形态", "模式", "类型"))
+    terms: list[str] = []
+
+    for value in values:
+        normalized = _normalize(value)
+        for parent in parent_norms:
+            normalized = normalized.replace(parent, "")
+        for token in generic_tokens:
+            normalized = normalized.replace(token, "")
+        candidates = [normalized]
+        shortened = normalized
+        for suffix in removable_suffixes:
+            if shortened.endswith(suffix):
+                shortened = shortened[: -len(suffix)]
+                break
+        if shortened and shortened != normalized:
+            candidates.append(shortened)
+        for candidate in candidates:
+            if len(candidate) >= 2 and candidate not in terms:
+                terms.append(candidate)
+    return tuple(terms)
+
+
 def _clean_image_url(value: str, page_url: str) -> str:
     url = html.unescape(value or "").replace("\\/", "/").strip()
     url = url.replace("\\u002F", "/").replace("\\u002f", "/")
@@ -298,13 +356,19 @@ def baidu_page_image_candidates(
     parser.feed(payload)
     candidates: list[tuple[int, str, str]] = []
     page_is_specific = _matches_specific(parser.title, terms)
+    parent_form_terms = _parent_page_form_terms(
+        aliases[0],
+        aliases[1:],
+        parser.title,
+    )
+    image_terms = tuple(dict.fromkeys((*terms, *parent_form_terms)))
 
     for source, label in parser.images:
         image_url = _clean_image_url(source, page_url)
         if not image_url:
             continue
         score = 0
-        if _matches_specific(label, terms):
+        if _matches_specific(label, image_terms):
             score += 150
         if _matches_specific(image_url, terms):
             score += 30
@@ -314,7 +378,7 @@ def baidu_page_image_candidates(
     # Baidu/Wikipedia parent pages often contain a form gallery whose image URL
     # itself is generic. The local HTML/JSON context can still prove the exact
     # form as long as it contains a strong "character + form" term.
-    candidates.extend(_raw_image_candidates(payload, page_url, terms))
+    candidates.extend(_raw_image_candidates(payload, page_url, image_terms))
 
     # Baidu's no-ID /item/<name> route can return a generic 350x350 placeholder
     # while still echoing the requested title. Only trust an og:image when the
