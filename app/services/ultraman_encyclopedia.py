@@ -45,8 +45,16 @@ BAIDU_DIRECT_PAGES = {
 }
 
 BAIDU_PARENT_PAGES = {
-    "迪迦奥特曼·强力型": ("https://bkso.baidu.com/item/艾克斯奥特曼剧场版来了！我们的奥特曼/59156783",),
-    "迪迦奥特曼·空中型": ("https://bkso.baidu.com/item/艾克斯奥特曼剧场版来了！我们的奥特曼/59156783",),
+    "迪迦奥特曼·强力型": (
+        "https://bkso.baidu.com/item/艾克斯奥特曼剧场版来了！我们的奥特曼/59156783",
+        "https://bkso.baidu.com/item/手掌光箭/17972611",
+        "https://bkso.baidu.com/item/迪拉修姆光流/17836218",
+    ),
+    "迪迦奥特曼·空中型": (
+        "https://bkso.baidu.com/item/艾克斯奥特曼剧场版来了！我们的奥特曼/59156783",
+        "https://bkso.baidu.com/item/手掌光箭/17972611",
+        "https://bkso.baidu.com/item/兰帕尔特光弹/17836257",
+    ),
     "戴拿奥特曼·强壮型": ("https://bkso.baidu.com/item/戴拿奥特曼/24257648",),
     "戴拿奥特曼·奇迹型": ("https://bkso.baidu.com/item/戴拿奥特曼/24257648",),
     "盖亚奥特曼V2": ("https://bkso.baidu.com/item/盖亚奥特曼/5384276",),
@@ -58,10 +66,25 @@ BAIDU_PARENT_PAGES = {
         "https://bkso.baidu.com/item/高斯奥特曼VS杰斯提斯奥特曼：最终决战/55592251",
     ),
     "奈克瑟斯奥特曼·青年形态": ("https://bkso.baidu.com/item/姬矢准/3556866",),
-    "奈克瑟斯奥特曼·青年蓝色形态": ("https://bkso.baidu.com/item/孤门一辉/3556767",),
+    "奈克瑟斯奥特曼·青年蓝色形态": (
+        "https://bkso.baidu.com/item/孤门一辉/3556767",
+        "https://bkso.baidu.com/item/奥特次元卡牌/60698155",
+    ),
     "梦比优斯奥特曼·勇者形态": ("https://bkso.baidu.com/item/梦比优斯奥特曼/2684129",),
     "梦比优斯奥特曼·燃烧勇者": ("https://bkso.baidu.com/item/梦比优斯奥特曼/2684129",),
-    "超级奥特曼泰罗": ("https://bkso.baidu.com/item/宇宙奇迹光线/20864681",),
+    "超级奥特曼泰罗": (
+        "https://bkso.baidu.com/item/宇宙奇迹光线/20864681",
+        "https://bkso.baidu.com/item/究极奥特战士/19465516",
+    ),
+    "赛罗奥特曼·月神奇迹型": (
+        "https://bkso.baidu.com/item/奥特勋章/49862711",
+        "https://bkso.baidu.com/item/奥特融合卡牌/55316379",
+    ),
+    "赛罗奥特曼·闪耀型": (
+        "https://bkso.baidu.com/item/奥特勋章/49862711",
+        "https://bkso.baidu.com/item/究极奥特战士/19465516",
+        "https://bkso.baidu.com/item/艾梅利姆光线/9966205",
+    ),
     "维克特利骑士": (
         "https://bkso.baidu.com/item/新奥特曼列传/8010663",
         "https://bkso.baidu.com/item/维克特利奥特曼/53260527",
@@ -69,39 +92,59 @@ BAIDU_PARENT_PAGES = {
     "捷德奥特曼·原始形态": (
         "https://bkso.baidu.com/item/捷德奥特曼/20825718",
         "https://bkso.baidu.com/item/捷德奥特曼/20832863",
+        "https://bkso.baidu.com/item/奥特融合卡牌/55316379",
     ),
     "捷德奥特曼·刚燃形态": (
         "https://bkso.baidu.com/item/捷德奥特曼/20825718",
         "https://bkso.baidu.com/item/捷德奥特曼/20832863",
+        "https://bkso.baidu.com/item/奥特融合卡牌/55316379",
     ),
     "捷德奥特曼·机敏形态": (
         "https://bkso.baidu.com/item/捷德奥特曼/20825718",
         "https://bkso.baidu.com/item/捷德奥特曼/20832863",
+        "https://bkso.baidu.com/item/奥特融合卡牌/55316379",
     ),
     "捷德奥特曼·豪勇形态": (
         "https://bkso.baidu.com/item/捷德奥特曼/20825718",
         "https://bkso.baidu.com/item/捷德奥特曼/20832863",
+        "https://bkso.baidu.com/item/奥特融合卡牌/55316379",
     ),
     "捷德奥特曼·尊皇形态": (
         "https://bkso.baidu.com/item/捷德奥特曼/20825718",
         "https://bkso.baidu.com/item/捷德奥特曼/20832863",
+        "https://bkso.baidu.com/item/奥特勋章/49862711",
+        "https://bkso.baidu.com/item/奥特融合卡牌/55316379",
     ),
     "捷德奥特曼·银河初升": (
         "https://bkso.baidu.com/item/捷德奥特曼/20825718",
         "https://bkso.baidu.com/item/捷德奥特曼/20832863",
+        "https://bkso.baidu.com/item/奥特融合卡牌/55316379",
     ),
-    "泰迦奥特曼·光子地球": ("https://bkso.baidu.com/item/托雷基亚奥特曼/23366789",),
-    "泰迦奥特曼·三重斯特利姆形态": ("https://bkso.baidu.com/item/托雷基亚奥特曼/23366789",),
+    "泰迦奥特曼·光子地球": (
+        "https://bkso.baidu.com/item/托雷基亚奥特曼/23366789",
+        "https://bkso.baidu.com/item/奥特泰迦光饰/24232587",
+        "https://bkso.baidu.com/item/奥特次元卡牌/60698155",
+    ),
+    "泰迦奥特曼·三重斯特利姆形态": (
+        "https://bkso.baidu.com/item/托雷基亚奥特曼/23366789",
+        "https://bkso.baidu.com/item/奥特次元卡牌/60698155",
+        "https://bkso.baidu.com/item/奥特勋章/49862711",
+    ),
     "闪耀特利迦永恒": ("https://bkso.baidu.com/item/特利迦奥特曼/56750285",),
     "真理特利迦": ("https://bkso.baidu.com/item/特利迦奥特曼/56750285",),
-    "德凯奥特曼·强劲型": ("https://bkso.baidu.com/item/德凯奥特曼/59714231",),
+    "德凯奥特曼·强劲型": (
+        "https://bkso.baidu.com/item/德凯奥特曼/59714231",
+        "https://bkso.baidu.com/item/布莱泽辉石/62917896",
+    ),
     "布莱泽奥特曼·法多兰盔甲": (
         "https://bkso.baidu.com/item/法德兰辉石/65767412",
         "https://bkso.baidu.com/item/布莱泽奥特曼/62550634",
     ),
     "亚刻奥特曼·银河装甲": (
         "https://bkso.baidu.com/item/亚刻奥特曼/63972321",
+        "https://bkso.baidu.com/item/亚刻奥特曼/63972289",
         "https://bkso.baidu.com/item/亚刻魔方/64252054",
+        "https://bkso.baidu.com/item/亚刻银河刃/64905046",
     ),
     "贝利亚早期形态": (
         "https://bkso.baidu.com/item/贝利亚奥特曼/7743176",
