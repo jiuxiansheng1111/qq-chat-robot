@@ -318,3 +318,16 @@ async def test_encyclopedia_prefers_wikimedia_before_baidu(monkeypatch):
 
     assert result == expected
     assert calls == ["wikipedia"]
+
+
+def test_encyclopedia_reference_requires_exact_form_not_shared_suffix():
+    assert encyclopedia_reference_matches(
+        "迪迦奥特曼·强力型",
+        ("ウルトラマンティガ パワータイプ", "Ultraman Tiga Power Type"),
+        "戴拿奥特曼 强力型",
+    ) is False
+    assert encyclopedia_reference_matches(
+        "迪迦奥特曼·强力型",
+        ("ウルトラマンティガ パワータイプ", "Ultraman Tiga Power Type"),
+        "File:Ultraman Tiga Power Type.png",
+    ) is True
