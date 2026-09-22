@@ -292,6 +292,62 @@ async def baidu_baike_ultraman_image(
     return None
 
 
+async def _wikipedia_file_image(
+    client: httpx.AsyncClient,
+    endpoint: str,
+    file_title: str,
+    page_url: str,
+    source: str,
+    settings: Settings,
+) -> EncyclopediaImage | None:
+    try:
+        response = await client.get(
+            endpoint,
+            params={
+                "action": "query",
+                "titles": file_title,
+                "prop": "imageinfo",
+                "iiprop": "url|mime|size",
+                "iiurlwidth": 1200,
+                "format": "json",
+                "formatversion": 2,
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (ValueError, httpx.HTTPError):
+        return None
+    pages = payload.get("query", {}).get("pages", [])
+    if not isinstance(pages, list):
+        return None
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        infos = page.get("imageinfo", [])
+        if not isinstance(infos, list) or not infos:
+            continue
+        info = infos[0] if isinstance(infos[0], dict) else {}
+        image_url = str(info.get("thumburl") or info.get("url") or "")
+        if not image_url.startswith("https://"):
+            continue
+        try:
+            data = await _download_verified_image(
+                client,
+                image_url,
+                page_url,
+                settings,
+            )
+        except (RuntimeError, httpx.HTTPError):
+            continue
+        return EncyclopediaImage(
+            data=data,
+            source=source,
+            page_url=page_url,
+            label=file_title,
+        )
+    return None
+
+
 def _wikipedia_result_matches(page: dict, terms: tuple[str, ...]) -> bool:
     title = str(page.get("title") or "")
     if _matches_specific(title, terms):
@@ -327,10 +383,11 @@ async def wikipedia_ultraman_image(
                             "gsrsearch": query,
                             "gsrnamespace": 0,
                             "gsrlimit": 5,
-                            "prop": "pageimages",
+                            "prop": "pageimages|images",
                             "piprop": "thumbnail|original",
                             "pithumbsize": 1200,
                             "pilicense": "any",
+                            "imlimit": 100,
                             "format": "json",
                             "formatversion": 2,
                         },
@@ -343,9 +400,31 @@ async def wikipedia_ultraman_image(
                 if not isinstance(pages, list):
                     continue
                 for page in pages:
-                    if not isinstance(page, dict) or not _wikipedia_result_matches(
-                        page, terms
-                    ):
+                    if not isinstance(page, dict):
+                        continue
+                    page_title = str(page.get("title") or query)
+                    page_url = f"https://{host}/wiki/" + page_title.replace(" ", "_")
+
+                    images = page.get("images", [])
+                    if isinstance(images, list):
+                        for image_entry in images:
+                            if not isinstance(image_entry, dict):
+                                continue
+                            file_title = str(image_entry.get("title") or "")
+                            if not _matches_specific(file_title, terms):
+                                continue
+                            resolved = await _wikipedia_file_image(
+                                client,
+                                endpoint,
+                                file_title,
+                                page_url,
+                                f"{host} embedded image",
+                                settings,
+                            )
+                            if resolved is not None:
+                                return resolved
+
+                    if not _wikipedia_result_matches(page, terms):
                         continue
                     image = page.get("original") or page.get("thumbnail") or {}
                     if not isinstance(image, dict):
@@ -353,11 +432,6 @@ async def wikipedia_ultraman_image(
                     image_url = str(image.get("source") or "")
                     if not image_url.startswith("https://"):
                         continue
-                    page_title = str(page.get("title") or query)
-                    page_url = (
-                        f"https://{host}/wiki/"
-                        + page_title.replace(" ", "_")
-                    )
                     try:
                         data = await _download_verified_image(
                             client,
@@ -373,6 +447,64 @@ async def wikipedia_ultraman_image(
                         page_url=page_url,
                         label=page_title,
                     )
+
+        commons_endpoint = "https://commons.wikimedia.org/w/api.php"
+        for query in queries:
+            try:
+                response = await client.get(
+                    commons_endpoint,
+                    params={
+                        "action": "query",
+                        "generator": "search",
+                        "gsrsearch": query,
+                        "gsrnamespace": 6,
+                        "gsrlimit": 8,
+                        "prop": "imageinfo",
+                        "iiprop": "url|mime|size",
+                        "iiurlwidth": 1200,
+                        "format": "json",
+                        "formatversion": 2,
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+            except (ValueError, httpx.HTTPError):
+                continue
+            pages = payload.get("query", {}).get("pages", [])
+            if not isinstance(pages, list):
+                continue
+            for page in pages:
+                if not isinstance(page, dict):
+                    continue
+                file_title = str(page.get("title") or "")
+                if not _matches_specific(file_title, terms):
+                    continue
+                infos = page.get("imageinfo", [])
+                if not isinstance(infos, list) or not infos:
+                    continue
+                info = infos[0] if isinstance(infos[0], dict) else {}
+                image_url = str(info.get("thumburl") or info.get("url") or "")
+                if not image_url.startswith("https://"):
+                    continue
+                page_url = (
+                    "https://commons.wikimedia.org/wiki/"
+                    + file_title.replace(" ", "_")
+                )
+                try:
+                    data = await _download_verified_image(
+                        client,
+                        image_url,
+                        page_url,
+                        settings,
+                    )
+                except (RuntimeError, httpx.HTTPError):
+                    continue
+                return EncyclopediaImage(
+                    data=data,
+                    source="Wikimedia Commons",
+                    page_url=page_url,
+                    label=file_title,
+                )
     return None
 
 
