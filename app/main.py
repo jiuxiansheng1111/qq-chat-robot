@@ -54,8 +54,8 @@ from app.services.music import (
 from app.services.possession_style import (
     fetch_group_context,
     fetch_member_recall_samples,
-    group_context_from_lines,
     fetch_member_style_image_refs,
+    group_context_from_lines,
     image_references_from_message,
     learn_possession_style,
     style_catchphrases,
