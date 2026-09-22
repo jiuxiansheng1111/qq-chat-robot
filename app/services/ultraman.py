@@ -773,7 +773,7 @@ def ultraman_image_search_query(hero: Ultraman) -> str:
         return explicit
     formal = _FORM_ALT_NAMES.get(hero.name) or _RELATED_ALT_NAMES.get(hero.name) or ()
     english = next((value for value in formal if re.search(r"[A-Za-z]", value)), "")
-    return english or hero.name
+    return f"{hero.name} {english}".strip()
 
 
 def ultraman_image_aliases(hero: Ultraman) -> tuple[str, ...]:
