@@ -322,6 +322,7 @@ async def test_onebot_history_client_bypasses_system_proxy(monkeypatch):
             return False
 
         async def post(self, *args, **kwargs):
+            captured["request_json"] = kwargs.get("json")
             return FakeResponse()
 
     monkeypatch.setattr(possession_style_module.httpx, "AsyncClient", FakeClient)
@@ -335,7 +336,8 @@ async def test_onebot_history_client_bypasses_system_proxy(monkeypatch):
         },
     )()
 
-    payload = await fetch_member_style_history(fake_settings, "group", "member")
+    payload = await fetch_member_style_history(fake_settings, "group", "member", count=9999)
 
     assert payload["status"] == "ok"
     assert captured["trust_env"] is False
+    assert captured["request_json"]["count"] == 3000
