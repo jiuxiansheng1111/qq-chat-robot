@@ -39,6 +39,7 @@ from app.main import (
     qualify_group_memory,
     resolve_ultraman_card_image,
     send_group_message,
+    split_qq_text,
     send_group_share_card,
     sender_display_name,
     settings,
@@ -72,6 +73,30 @@ def post_event(client: TestClient, payload: dict):
     if settings.onebot_webhook_token:
         headers["X-OneBot-Token"] = settings.onebot_webhook_token
     return client.post("/onebot/webhook", json=payload, headers=headers)
+
+
+def test_event_self_id_overrides_configured_bot_id():
+    previous = settings.onebot_self_id
+    settings.onebot_self_id = "old-bot"
+    try:
+        payload = event("你好")
+        payload["self_id"] = 3503565007
+        payload["message"] = [
+            {"type": "at", "data": {"qq": "3503565007"}},
+            {"type": "text", "data": {"text": "你好"}},
+        ]
+        assert bot_mentioned(payload)
+        assert mentioned_user_ids(payload) == []
+    finally:
+        settings.onebot_self_id = previous
+
+
+def test_long_qq_text_is_split_without_losing_content():
+    source = ("第一段。" * 500) + "\n" + ("第二段。" * 500)
+    chunks = split_qq_text(source, chunk_chars=900)
+    assert len(chunks) > 1
+    assert all(len(chunk) <= 901 for chunk in chunks)
+    assert "".join(chunks).replace("\n", "") == source.replace("\n", "")
 
 
 def test_at_message_is_detected():
