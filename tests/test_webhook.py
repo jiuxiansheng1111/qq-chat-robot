@@ -39,10 +39,10 @@ from app.main import (
     qualify_group_memory,
     resolve_ultraman_card_image,
     send_group_message,
-    split_qq_text,
     send_group_share_card,
     sender_display_name,
     settings,
+    split_qq_text,
     webhook_token_valid,
 )
 from app.services.ultraman_encyclopedia import EncyclopediaImage
