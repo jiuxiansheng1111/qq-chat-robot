@@ -986,21 +986,12 @@ def schedule_possession_style_learning(
 
 
 async def resolve_ultraman_card_image(hero) -> str:
-    """Prefer official artwork, then an exact-match encyclopedia representative image."""
+    """Resolve a reliable image without silently falling back to another form."""
     try:
         return await official_ultraman_image(hero, settings)
     except (RuntimeError, httpx.HTTPError) as exc:
         logger.info(
-            "official Ultraman image unavailable for %s; trying encyclopedia: %s",
-            hero.name,
-            exc,
-        )
-
-    try:
-        return await official_ultraman_search_image(hero, settings)
-    except (RuntimeError, httpx.HTTPError, ValueError) as exc:
-        logger.info(
-            "exact official form image unavailable for %s; trying encyclopedia: %s",
+            "direct official Ultraman image unavailable for %s; trying encyclopedia: %s",
             hero.name,
             exc,
         )
@@ -1012,17 +1003,26 @@ async def resolve_ultraman_card_image(hero) -> str:
             settings,
         )
     except (RuntimeError, httpx.HTTPError, ValueError) as exc:
-        raise RuntimeError(
-            f"没有找到“{hero.name}”的可靠官方或百科代表图"
-        ) from exc
+        logger.info(
+            "encyclopedia Ultraman image unavailable for %s; trying official search: %s",
+            hero.name,
+            exc,
+        )
+    else:
+        logger.info(
+            "Ultraman image resolved from %s for %s (%s)",
+            encyclopedia.source,
+            hero.name,
+            encyclopedia.page_url,
+        )
+        return encyclopedia.data
 
-    logger.info(
-        "Ultraman image resolved from %s for %s (%s)",
-        encyclopedia.source,
-        hero.name,
-        encyclopedia.page_url,
-    )
-    return encyclopedia.data
+    try:
+        return await official_ultraman_search_image(hero, settings)
+    except (RuntimeError, httpx.HTTPError, ValueError) as exc:
+        raise RuntimeError(
+            f"没有找到“{hero.name}”的可靠官方、百度百科或 Wikipedia 对应图片"
+        ) from exc
 
 
 async def send_group_image(group_id: str, image_file: str, caption: str = "") -> None:
