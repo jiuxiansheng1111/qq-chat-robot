@@ -299,75 +299,87 @@ async def baidu_baike_ultraman_image(
 ) -> EncyclopediaImage | None:
     searches = _encyclopedia_search_terms(name, aliases)
     seen_pages: set[str] = set()
-    results = []
+    direct_results: list[SearchResult] = []
 
     direct_url = BAIDU_DIRECT_PAGES.get(name)
     if direct_url:
         seen_pages.add(direct_url)
-        results.append(SearchResult(name, direct_url, "direct"))
+        direct_results.append(SearchResult(name, direct_url, "direct"))
 
-    # Baidu Baike resolves /item/<lemma title> to the canonical lemma when it
-    # exists. Try those URLs directly instead of relying only on a search engine,
-    # which often does not surface Baike pages.
+    # Try direct lemma URLs first. Parent-character terms are included by
+    # _encyclopedia_search_terms, so forms hosted only in a parent gallery can
+    # still be found without waiting for a general web search.
     baidu_lemma_terms = [
         query for query in searches if re.search(r"[\u3400-\u9fff]", query)
-    ][:5]
+    ][:4]
     for query in baidu_lemma_terms:
         encoded = quote(query, safe="")
         for base in ("https://baike.baidu.com/item/", "https://wapbaike.baidu.com/item/"):
             item_url = base + encoded
             if item_url not in seen_pages:
                 seen_pages.add(item_url)
-                results.append(SearchResult(query, item_url, "baidu-item"))
+                direct_results.append(SearchResult(query, item_url, "baidu-item"))
 
-    for query in searches[:10]:
-        try:
-            found = await search_web(f'"{query}" 百度百科', limit=8)
-        except (ValueError, httpx.HTTPError):
-            continue
-        for result in found:
-            host = (urlparse(result.url).hostname or "").casefold()
-            if host in BAIDU_BAIKE_HOSTS and result.url not in seen_pages:
-                seen_pages.add(result.url)
-                results.append(result)
-
-    timeout = max(5.0, min(float(settings.media_timeout_seconds), 20.0))
+    timeout = max(4.0, min(float(settings.media_timeout_seconds), 8.0))
     headers = {"User-Agent": ENCYCLOPEDIA_USER_AGENT}
+
     async with httpx.AsyncClient(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,
     ) as client:
-        for result in results[:8]:
-            try:
-                page = await client.get(result.url)
-                page.raise_for_status()
-            except httpx.HTTPError:
-                continue
-            # Candidate labels/context perform the exact-form validation. Do not
-            # reject a page merely because the form name lives in an image alt/JSON field.
-            candidates = baidu_page_image_candidates(
-                page.text,
-                str(page.url),
-                (name, *aliases),
-            )
-            for _, image_url, label in candidates[:8]:
+        async def try_pages(page_results: list[SearchResult]) -> EncyclopediaImage | None:
+            for result in page_results[:8]:
                 try:
-                    data = await _download_verified_image(
-                        client,
-                        image_url,
-                        str(page.url),
-                        settings,
-                    )
-                except (RuntimeError, httpx.HTTPError):
+                    page = await client.get(result.url)
+                    page.raise_for_status()
+                except httpx.HTTPError:
                     continue
-                return EncyclopediaImage(
-                    data=data,
-                    source="百度百科",
-                    page_url=str(page.url),
-                    label=label or result.title,
+                candidates = baidu_page_image_candidates(
+                    page.text,
+                    str(page.url),
+                    (name, *aliases),
                 )
-    return None
+                for _, image_url, label in candidates[:10]:
+                    try:
+                        data = await _download_verified_image(
+                            client,
+                            image_url,
+                            str(page.url),
+                            settings,
+                        )
+                    except (RuntimeError, httpx.HTTPError):
+                        continue
+                    return EncyclopediaImage(
+                        data=data,
+                        source="百度百科",
+                        page_url=str(page.url),
+                        label=label or result.title,
+                    )
+            return None
+
+        direct_match = await try_pages(direct_results)
+        if direct_match is not None:
+            return direct_match
+
+        # Only pay the search-engine cost when direct Baidu lemmas did not work.
+        discovered: list[SearchResult] = []
+        for query in searches[:6]:
+            try:
+                found = await search_web(
+                    f'"{query}" 百度百科',
+                    limit=8,
+                    timeout=timeout,
+                )
+            except (ValueError, httpx.HTTPError):
+                continue
+            for result in found:
+                host = (urlparse(result.url).hostname or "").casefold()
+                if host in BAIDU_BAIKE_HOSTS and result.url not in seen_pages:
+                    seen_pages.add(result.url)
+                    discovered.append(result)
+
+        return await try_pages(discovered)
 
 
 async def _wikipedia_file_image(
