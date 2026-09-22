@@ -47,6 +47,14 @@ _BAD_IMAGE_HINTS = (
     "sprite",
 )
 
+_GENERIC_IMAGE_TERMS = {
+    "奥特曼",
+    "超人",
+    "ultraman",
+    "ultra",
+    "ウルトラマン",
+}
+
 
 @dataclass(frozen=True)
 class EncyclopediaImage:
@@ -67,9 +75,14 @@ def _specific_terms(name: str, aliases: tuple[str, ...]) -> tuple[str, ...]:
     if "·" in name:
         candidates.append(name.split("·", 1)[1])
     terms: list[str] = []
+    generic = {_normalize(value) for value in _GENERIC_IMAGE_TERMS}
     for value in candidates:
         normalized = _normalize(value)
-        if len(normalized) >= 3 and normalized not in terms:
+        if (
+            len(normalized) >= 3
+            and normalized not in generic
+            and normalized not in terms
+        ):
             terms.append(normalized)
     return tuple(terms)
 
@@ -197,7 +210,11 @@ def baidu_page_image_candidates(
         if score:
             candidates.append((score, image_url, label))
 
-    candidates.extend(_raw_image_candidates(payload, page_url, terms))
+    # Unlabelled JSON/HTML image URLs are only safe when the encyclopedia page
+    # itself is specifically about the requested form. On a parent character
+    # page they can sit beside unrelated form text and cause a wrong image match.
+    if page_is_specific:
+        candidates.extend(_raw_image_candidates(payload, page_url, terms))
 
     if page_is_specific and parser.og_image:
         image_url = _clean_image_url(parser.og_image, page_url)
@@ -523,15 +540,27 @@ async def wikipedia_ultraman_image(
     return None
 
 
+def encyclopedia_reference_matches(
+    name: str,
+    aliases: tuple[str, ...],
+    label: str,
+) -> bool:
+    """Return whether a selected encyclopedia image explicitly names the target."""
+    terms = _specific_terms(name, aliases)
+    return bool(terms) and _matches_specific(label, terms)
+
+
 async def encyclopedia_ultraman_image(
     name: str,
     aliases: tuple[str, ...],
     settings: Settings,
 ) -> EncyclopediaImage:
-    baidu = await baidu_baike_ultraman_image(name, aliases, settings)
-    if baidu is not None:
-        return baidu
+    # Prefer Wikipedia/Wikimedia first: file titles and page titles provide
+    # cleaner machine-checkable identity metadata than generic image search URLs.
     wikipedia = await wikipedia_ultraman_image(name, aliases, settings)
     if wikipedia is not None:
         return wikipedia
+    baidu = await baidu_baike_ultraman_image(name, aliases, settings)
+    if baidu is not None:
+        return baidu
     raise RuntimeError(f"没有找到“{name}”的可靠百科代表图")
