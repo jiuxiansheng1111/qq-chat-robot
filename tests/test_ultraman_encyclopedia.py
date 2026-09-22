@@ -537,3 +537,64 @@ async def test_baidu_image_fallback_requires_trusted_exact_source(monkeypatch):
     assert result is not None
     assert result.source.startswith("百度图片")
     assert "强力型" in result.label
+
+
+def test_bing_image_parser_extracts_exact_tile_metadata():
+    parser = encyclopedia_module._BingImageResultParser()
+    parser.feed(
+        '<a class="iusc" m="{&quot;murl&quot;:&quot;https://img.example/geed.jpg&quot;,'
+        '&quot;purl&quot;:&quot;https://example.com/geed&quot;,'
+        '&quot;t&quot;:&quot;捷德奥特曼·刚燃形态&quot;}"></a>'
+    )
+    assert len(parser.items) == 1
+    assert parser.items[0]["murl"] == "https://img.example/geed.jpg"
+    assert parser.items[0]["t"] == "捷德奥特曼·刚燃形态"
+
+
+@pytest.mark.asyncio
+async def test_bing_image_fallback_skips_wrong_form_and_accepts_exact_form(monkeypatch):
+    image_data = png_bytes()
+    wrong_metadata = (
+        '{"murl":"https://img.example/geed-primitive.jpg",'
+        '"purl":"https://example.com/primitive",'
+        '"t":"捷德奥特曼·原始形态"}'
+    )
+    exact_metadata = (
+        '{"murl":"https://img.example/geed-solid-burning.jpg",'
+        '"purl":"https://example.com/solid-burning",'
+        '"t":"捷德奥特曼·刚燃形态"}'
+    )
+    bing_html = (
+        '<a class="iusc" m="' + wrong_metadata.replace('"', '&quot;') + '"></a>'
+        '<a class="iusc" m="' + exact_metadata.replace('"', '&quot;') + '"></a>'
+    )
+
+    async def handler(request: httpx.Request):
+        if request.url.host == "www.bing.com":
+            return httpx.Response(200, text=bing_html)
+        if request.url.host == "img.example":
+            assert request.url.path.endswith("geed-solid-burning.jpg")
+            return httpx.Response(
+                200,
+                headers={"content-type": "image/png"},
+                content=image_data,
+            )
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mocked_client(**kwargs):
+        kwargs["transport"] = transport
+        return original_client(**kwargs)
+
+    monkeypatch.setattr(encyclopedia_module.httpx, "AsyncClient", mocked_client)
+
+    result = await encyclopedia_module.bing_image_search_ultraman_image(
+        "捷德奥特曼·刚燃形态",
+        ("捷德刚燃形态", "坚固燃烧", "Geed Solid Burning"),
+        Settings(_env_file=None),
+    )
+    assert result is not None
+    assert result.source.startswith("Bing")
+    assert result.label == "捷德奥特曼·刚燃形态"
