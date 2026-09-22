@@ -92,15 +92,6 @@ def _matches_specific(value: str, terms: tuple[str, ...]) -> bool:
     return bool(normalized) and any(term in normalized for term in terms)
 
 
-def encyclopedia_reference_matches(
-    name: str,
-    aliases: tuple[str, ...],
-    value: str,
-) -> bool:
-    """Public exact-name validator used by tests and live image audits."""
-    return _matches_specific(value, _specific_terms(name, aliases))
-
-
 def _clean_image_url(value: str, page_url: str) -> str:
     url = html.unescape(value or "").replace("\\/", "/").strip()
     url = url.replace("\\u002F", "/").replace("\\u002f", "/")
