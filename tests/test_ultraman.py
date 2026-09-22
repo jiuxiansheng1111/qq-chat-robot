@@ -305,6 +305,15 @@ async def test_saga_never_uses_movie_page_poster_as_character_art(monkeypatch):
         )
 
 
+def test_verified_direct_image_map_only_contains_specific_roster_entries():
+    roster_names = {hero.name for hero in ULTRAMAN_ROSTER}
+    assert set(ultraman_module._FORM_IMAGE_DIRECT_URLS) <= roster_names
+    for name, url in ultraman_module._FORM_IMAGE_DIRECT_URLS.items():
+        hero = ultraman_module.ULTRAMAN_BY_NAME[name]
+        assert is_ultraman_form_variant(hero)
+        assert url.startswith("https://tsuburaya-prod.com/wp-content/uploads/")
+
+
 def test_form_image_search_is_specific_for_every_form():
     for form_name, *_ in ultraman_module._FORM_VARIANTS:
         hero = ultraman_module.ULTRAMAN_BY_NAME[form_name]
