@@ -350,11 +350,9 @@ async def _wikipedia_file_image(
 
 def _wikipedia_result_matches(page: dict, terms: tuple[str, ...]) -> bool:
     title = str(page.get("title") or "")
-    if _matches_specific(title, terms):
-        return True
     # For a form, accepting a base-character page image is unsafe. Only use the
     # page image when the page title itself identifies the requested form.
-    return False
+    return _matches_specific(title, terms)
 
 
 async def wikipedia_ultraman_image(
