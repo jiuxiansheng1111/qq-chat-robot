@@ -418,6 +418,28 @@ def test_group_memory_delete_command_extracts_literal_text():
         settings.onebot_self_id = previous
 
 
+def test_group_memory_delete_accepts_clear_alias_and_all_keyword():
+    previous = settings.onebot_self_id
+    settings.onebot_self_id = "bot-1"
+    try:
+        cases = {
+            "删除记忆 hzh": "hzh",
+            "清除记忆 hzh": "hzh",
+            "删除记忆全部": "全部",
+            "清除记忆：全部": "全部",
+            "清除群记忆 全部": "全部",
+        }
+        for command, expected in cases.items():
+            payload = event(command)
+            payload["message"] = [
+                {"type": "at", "data": {"qq": "bot-1"}},
+                {"type": "text", "data": {"text": command}},
+            ]
+            assert extract_group_memory_deletion(payload, message_text(payload)) == expected
+    finally:
+        settings.onebot_self_id = previous
+
+
 def test_sender_display_name_prefers_group_card_and_sanitizes_lines():
     payload = event("hello")
     payload["sender"].update({"card": "小明\n第二行", "nickname": "nickname"})

@@ -404,13 +404,23 @@ def extract_group_memory_deletion(event: dict, text: str) -> str | None:
         "删除群记忆：",
         "删除群记忆:",
         "删除群记忆 ",
+        "清除群记忆：",
+        "清除群记忆:",
+        "清除群记忆 ",
         "删除记忆：",
         "删除记忆:",
         "删除记忆 ",
+        "清除记忆：",
+        "清除记忆:",
+        "清除记忆 ",
         "删除：",
         "删除:",
         "删除 ",
+        "清除：",
+        "清除:",
+        "清除 ",
         "删除",
+        "清除",
     )
     for prefix in prefixes:
         if text.startswith(prefix):
@@ -1310,7 +1320,16 @@ async def onebot_webhook(
             await send_group_message(group_id, "只有群管理员可以清除群记忆。")
     elif (delete_text := extract_group_memory_deletion(event, text)) is not None:
         if not delete_text:
-            await send_group_message(group_id, "要删哪个关键词？例如：@我 删除记忆 hzh")
+            await send_group_message(
+                group_id,
+                "要删哪个关键词？例如：@我 删除记忆 hzh；全部删除可用：@我 删除记忆 全部",
+            )
+        elif delete_text == "全部":
+            if is_admin:
+                await request.app.state.db.clear_group_memories(group_id)
+                await send_group_message(group_id, "本群共享记忆已全部删除。")
+            else:
+                await send_group_message(group_id, "只有群管理员可以删除全部群记忆。")
         else:
             deleted = await request.app.state.db.delete_group_memories_matching(
                 group_id, delete_text
