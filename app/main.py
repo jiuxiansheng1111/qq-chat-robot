@@ -935,11 +935,9 @@ def schedule_possession_style_learning(
 
 async def resolve_ultraman_card_image(hero) -> str:
     """Prefer official artwork, then an exact-match encyclopedia representative image."""
-    official_error: BaseException | None = None
     try:
         return await official_ultraman_image(hero, settings)
     except (RuntimeError, httpx.HTTPError) as exc:
-        official_error = exc
         logger.info(
             "official Ultraman image unavailable for %s; trying encyclopedia: %s",
             hero.name,
