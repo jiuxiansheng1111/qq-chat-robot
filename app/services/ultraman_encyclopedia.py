@@ -77,6 +77,7 @@ def _specific_terms(name: str, aliases: tuple[str, ...]) -> tuple[str, ...]:
     candidates = [name, *aliases]
     terms: list[str] = []
     generic = {_normalize(value) for value in _GENERIC_IMAGE_TERMS}
+    bare_suffix = _normalize(name.split("·", 1)[1]) if "·" in name else ""
     for value in candidates:
         normalized = _normalize(value)
         variants = [normalized]
@@ -90,6 +91,7 @@ def _specific_terms(name: str, aliases: tuple[str, ...]) -> tuple[str, ...]:
             if (
                 len(variant) >= 3
                 and variant not in generic
+                and variant != bare_suffix
                 and variant not in terms
             ):
                 terms.append(variant)
