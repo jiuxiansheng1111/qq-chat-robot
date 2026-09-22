@@ -67,7 +67,6 @@ from app.services.translation import (
     translate_text,
     translated_name_context,
 )
-from app.services.ultraman_encyclopedia import encyclopedia_ultraman_image
 from app.services.ultraman import (
     ULTRAMAN_BY_NAME,
     ULTRAMAN_ROSTER,
@@ -79,6 +78,7 @@ from app.services.ultraman import (
     ultraman_image_aliases,
     ultraman_profile_text,
 )
+from app.services.ultraman_encyclopedia import encyclopedia_ultraman_image
 from app.services.web_search import SearchResult, search_web
 
 settings = get_settings()
