@@ -20,6 +20,7 @@ def test_secondary_onebot_route_is_selected_by_event_self_id():
     assert route.self_id == "3503565007"
     assert route.api_base == "http://127.0.0.1:3001"
     assert route.access_token == "secondary-token"
+    set_current_onebot_self_id("")
     assert route.webhook_token == "secondary-webhook"
 
 
