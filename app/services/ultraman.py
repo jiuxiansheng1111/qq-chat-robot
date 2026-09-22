@@ -691,6 +691,7 @@ _RELATED_VARIANT_NAMES = {
     "帝纳斯奥特曼",
     "诺亚奥特曼",
     "雷杰多奥特曼",
+    "赛迦奥特曼",
     "贝利亚早期形态",
     "托雷基亚早期形态",
 }
@@ -725,6 +726,13 @@ def ultraman_image_aliases(hero: Ultraman) -> tuple[str, ...]:
         for alias, canonical_name in _ULTRAMAN_ALIASES.items()
         if canonical_name == hero.name
     )
+    # Base/standalone characters may safely use a stable English alias derived
+    # from their official slug. Forms that share a parent slug must never inherit
+    # that parent alias, otherwise "Ultraman Zero" could validate a Zero form.
+    if not is_ultraman_form_variant(hero):
+        slug_alias = hero.slug.replace("-", " ").strip()
+        if slug_alias:
+            values.append(slug_alias)
     return tuple(dict.fromkeys(value for value in values if value))
 
 
