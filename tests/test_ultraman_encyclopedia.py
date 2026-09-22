@@ -76,7 +76,7 @@ async def test_baidu_resolver_uses_labeled_form_image_not_base_og(monkeypatch):
     image_data = png_bytes()
 
     async def handler(request: httpx.Request):
-        if request.url.host == "bkso.baidu.com":
+        if request.url.host in {"baike.baidu.com", "bkso.baidu.com"}:
             return httpx.Response(
                 200,
                 text=(
