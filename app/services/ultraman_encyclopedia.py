@@ -56,6 +56,23 @@ _GENERIC_IMAGE_TERMS = {
 }
 
 
+# Some forms live only inside the parent hero's Baidu/Wikipedia article.
+# These terms are for page discovery only; image validation still requires the
+# requested form's strong aliases, so a parent page cannot silently supply a base image.
+_PARENT_DISCOVERY_TERMS = {
+    "闪耀迪迦": ("迪迦奥特曼",),
+    "盖亚奥特曼V2": ("盖亚奥特曼",),
+    "阿古茹奥特曼V2": ("阿古茹奥特曼",),
+    "超级奥特曼泰罗": ("泰罗奥特曼",),
+    "银河维克特利奥特曼": ("银河奥特曼", "维克特利奥特曼"),
+    "维克特利骑士": ("维克特利奥特曼",),
+    "闪耀特利迦永恒": ("特利迦奥特曼",),
+    "真理特利迦": ("特利迦奥特曼",),
+    "贝利亚早期形态": ("贝利亚奥特曼",),
+    "托雷基亚早期形态": ("托雷基亚奥特曼",),
+}
+
+
 @dataclass(frozen=True)
 class EncyclopediaImage:
     data: str
@@ -101,7 +118,9 @@ def _specific_terms(name: str, aliases: tuple[str, ...]) -> tuple[str, ...]:
 def _encyclopedia_search_terms(name: str, aliases: tuple[str, ...]) -> tuple[str, ...]:
     values: list[str] = [name]
     if "·" in name:
-        values.extend((name.replace("·", ""), name.replace("·", " ")))
+        parent, _ = name.split("·", 1)
+        values.extend((parent, name.replace("·", ""), name.replace("·", " ")))
+    values.extend(_PARENT_DISCOVERY_TERMS.get(name, ()))
     values.extend(aliases)
     return tuple(dict.fromkeys(value.strip() for value in values if value.strip()))
 
@@ -290,13 +309,18 @@ async def baidu_baike_ultraman_image(
     # Baidu Baike resolves /item/<lemma title> to the canonical lemma when it
     # exists. Try those URLs directly instead of relying only on a search engine,
     # which often does not surface Baike pages.
-    for query in searches[:8]:
-        item_url = "https://baike.baidu.com/item/" + quote(query, safe="")
-        if item_url not in seen_pages:
-            seen_pages.add(item_url)
-            results.append(SearchResult(query, item_url, "baidu-item"))
+    baidu_lemma_terms = [
+        query for query in searches if re.search(r"[\u3400-\u9fff]", query)
+    ][:5]
+    for query in baidu_lemma_terms:
+        encoded = quote(query, safe="")
+        for base in ("https://baike.baidu.com/item/", "https://wapbaike.baidu.com/item/"):
+            item_url = base + encoded
+            if item_url not in seen_pages:
+                seen_pages.add(item_url)
+                results.append(SearchResult(query, item_url, "baidu-item"))
 
-    for query in searches[:8]:
+    for query in searches[:10]:
         try:
             found = await search_web(f'"{query}" 百度百科', limit=8)
         except (ValueError, httpx.HTTPError):
