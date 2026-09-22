@@ -417,3 +417,62 @@ async def test_form_without_exact_image_never_falls_back_to_base_art(monkeypatch
             hero,
             SimpleNamespace(media_timeout_seconds=10, media_max_bytes=1024),
         )
+
+
+def test_every_form_has_strong_formal_image_aliases():
+    form_names = {item[0] for item in ultraman_module._FORM_VARIANTS}
+    assert form_names == set(ultraman_module._FORM_ALT_NAMES)
+    assert ultraman_module._RELATED_VARIANT_NAMES <= set(ultraman_module._RELATED_ALT_NAMES)
+
+    for name in sorted(form_names | ultraman_module._RELATED_VARIANT_NAMES):
+        hero = ultraman_module.ULTRAMAN_BY_NAME[name]
+        aliases = ultraman_image_aliases(hero)
+        assert aliases[0] == name
+        assert len(aliases) >= 2
+        assert any(
+            any("\u3040" <= ch <= "\u30ff" for ch in alias)
+            or any("a" <= ch.casefold() <= "z" for ch in alias)
+            for alias in aliases[1:]
+        ), name
+
+
+def test_variant_image_aliases_do_not_inherit_chat_only_parent_or_bare_suffixes():
+    for form_name, *_ in ultraman_module._FORM_VARIANTS:
+        hero = ultraman_module.ULTRAMAN_BY_NAME[form_name]
+        aliases = ultraman_image_aliases(hero)
+        parent_slug = hero.slug.replace("-", " ").casefold()
+        assert parent_slug not in {alias.casefold() for alias in aliases}
+        if "·" in form_name:
+            bare_suffix = form_name.split("·", 1)[1]
+            if bare_suffix not in ultraman_module._ENCYCLOPEDIA_IMAGE_ALIASES.get(form_name, ()):
+                assert bare_suffix not in aliases
+
+
+def test_official_form_match_rejects_another_hero_with_same_generic_form_word():
+    tiga_power = ultraman_module.ULTRAMAN_BY_NAME["迪迦奥特曼·强力型"]
+    assert not ultraman_module._official_form_image_matches(
+        tiga_power,
+        "https://example.invalid/ultraman-dyna-strong-type.jpg",
+        "戴拿奥特曼 强力型",
+    )
+    assert ultraman_module._official_form_image_matches(
+        tiga_power,
+        "https://example.invalid/ultraman-tiga-power-type.jpg",
+        "Ultraman Tiga Power Type",
+    )
+
+
+def test_every_variant_search_query_is_specific_to_that_variant():
+    for name in sorted(
+        ultraman_module._FORM_VARIANT_NAMES | ultraman_module._RELATED_VARIANT_NAMES
+    ):
+        hero = ultraman_module.ULTRAMAN_BY_NAME[name]
+        query = ultraman_image_search_query(hero)
+        aliases = ultraman_image_aliases(hero)
+        normalized_query = ultraman_module._normalize_image_descriptor(query)
+        assert any(
+            ultraman_module._normalize_image_descriptor(alias) in normalized_query
+            or normalized_query in ultraman_module._normalize_image_descriptor(alias)
+            for alias in aliases
+            if alias
+        ), name
