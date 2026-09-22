@@ -565,11 +565,12 @@ def _wikipedia_wikitext_image_candidates(
         re.IGNORECASE,
     )
     for match in pattern.finditer(wikitext or ""):
-        start = max(0, match.start() - 700)
-        end = min(len(wikitext), match.end() + 700)
-        context = html.unescape(wikitext[start:end])
+        # Validate only this File/Image link (filename + its own caption/options).
+        # Looking hundreds of characters around the link can accidentally borrow
+        # the caption of the next form in a gallery (e.g. Tiga Power vs Sky).
+        link_text = html.unescape(match.group(0))
         file_title = match.group(1).strip()
-        descriptor = f"{file_title} {context}"
+        descriptor = f"{file_title} {link_text}"
         if not _matches_specific(descriptor, match_terms):
             continue
         normalized_title = file_title
