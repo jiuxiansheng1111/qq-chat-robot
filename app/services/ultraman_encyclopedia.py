@@ -20,12 +20,61 @@ BAIDU_BAIKE_HOSTS = {
 }
 BAIDU_DIRECT_PAGES = {
     "闪耀迪迦": "https://bkso.baidu.com/item/闪耀迪迦/1023751",
+    "梦比优斯奥特曼·凤凰勇者": "https://bkso.baidu.com/item/梦比优斯凤凰形态/8865567",
+    "梦比优斯奥特曼·无限形态": "https://bkso.baidu.com/item/梦比优斯无限形态/8944775",
+    "赛罗奥特曼·无限形态": "https://bkso.baidu.com/item/超限赛罗/23742584",
+    "银河奥特曼·斯特利姆形态": (
+        "https://bkso.baidu.com/item/银河斯特利姆·奥特曼/19250392"
+    ),
+    "艾克斯奥特曼·超越形态": "https://bkso.baidu.com/item/艾克斯超越型/66335709",
+    "欧布奥特曼·重光形态": "https://bkso.baidu.com/item/斯佩修姆哉佩利敖/20203467",
+    "欧布奥特曼·暴炎形态": "https://bkso.baidu.com/item/燃烧炸弹/8072217",
+    "欧布奥特曼·疾风形态": "https://bkso.baidu.com/item/飓风切割/20203456",
+    "欧布奥特曼·暗耀形态": "https://bkso.baidu.com/item/雷霆胸章/19969982",
+    "欧布奥特曼·原生形态": "https://bkso.baidu.com/item/欧布起源/20397989",
+    "欧布奥特曼·煌闪形态": "https://bkso.baidu.com/item/闪电攻击者/20203503",
+    "欧布奥特曼·智勇形态": "https://bkso.baidu.com/item/艾梅利姆头镖/20620536",
     "捷德奥特曼·尊皇形态": "https://bkso.baidu.com/item/捷德奥特曼/20825718",
     "捷德奥特曼·银河初升": "https://bkso.baidu.com/item/捷德奥特曼/20825718",
-    "梦比优斯奥特曼·无限形态": (
-        "https://bkso.baidu.com/item/梦比优斯无限形态/8944775"
-    ),
+    "赛迦奥特曼": "https://bkso.baidu.com/item/赛迦奥特曼/3008291",
+    "令迦奥特曼": "https://bkso.baidu.com/item/令迦奥特曼/24350007",
 }
+
+BAIDU_PARENT_PAGES = {
+    "迪迦奥特曼·强力型": ("https://bkso.baidu.com/item/艾克斯奥特曼剧场版来了！我们的奥特曼/59156783",),
+    "迪迦奥特曼·空中型": ("https://bkso.baidu.com/item/艾克斯奥特曼剧场版来了！我们的奥特曼/59156783",),
+    "戴拿奥特曼·强壮型": ("https://bkso.baidu.com/item/戴拿奥特曼/24257648",),
+    "戴拿奥特曼·奇迹型": ("https://bkso.baidu.com/item/戴拿奥特曼/24257648",),
+    "盖亚奥特曼V2": ("https://bkso.baidu.com/item/盖亚奥特曼/5384276",),
+    "盖亚奥特曼·至高型": ("https://bkso.baidu.com/item/盖亚奥特曼/5384276",),
+    "高斯奥特曼·日冕模式": (
+        "https://bkso.baidu.com/item/高斯奥特曼VS杰斯提斯奥特曼：最终决战/55592251",
+    ),
+    "高斯奥特曼·日蚀模式": (
+        "https://bkso.baidu.com/item/高斯奥特曼VS杰斯提斯奥特曼：最终决战/55592251",
+    ),
+    "奈克瑟斯奥特曼·青年形态": ("https://bkso.baidu.com/item/姬矢准/3556866",),
+    "梦比优斯奥特曼·勇者形态": ("https://bkso.baidu.com/item/梦比优斯奥特曼/2684129",),
+    "梦比优斯奥特曼·燃烧勇者": ("https://bkso.baidu.com/item/梦比优斯奥特曼/2684129",),
+    "维克特利骑士": ("https://bkso.baidu.com/item/维克特利奥特曼/53260527",),
+    "捷德奥特曼·原始形态": ("https://bkso.baidu.com/item/捷德奥特曼/20825718",),
+    "泰迦奥特曼·光子地球": ("https://bkso.baidu.com/item/托雷基亚奥特曼/23366789",),
+    "泰迦奥特曼·三重斯特利姆形态": ("https://bkso.baidu.com/item/托雷基亚奥特曼/23366789",),
+    "闪耀特利迦永恒": ("https://bkso.baidu.com/item/特利迦奥特曼/56750285",),
+    "真理特利迦": ("https://bkso.baidu.com/item/特利迦奥特曼/56750285",),
+    "德凯奥特曼·强劲型": ("https://bkso.baidu.com/item/德凯奥特曼/59714231",),
+    "布莱泽奥特曼·法多兰盔甲": (
+        "https://bkso.baidu.com/item/法德兰辉石/65767412",
+        "https://bkso.baidu.com/item/布莱泽奥特曼/62550634",
+    ),
+    "亚刻奥特曼·银河装甲": (
+        "https://bkso.baidu.com/item/亚刻奥特曼/63972321",
+        "https://bkso.baidu.com/item/亚刻魔方/64252054",
+    ),
+    "贝利亚早期形态": ("https://bkso.baidu.com/item/贝利亚奥特曼/7743176",),
+    "托雷基亚早期形态": ("https://bkso.baidu.com/item/托雷基亚奥特曼/23366789",),
+}
+
 WIKIPEDIA_API_HOSTS = (
     "zh.wikipedia.org",
     "en.wikipedia.org",
@@ -253,7 +302,14 @@ def baidu_page_image_candidates(
     # form as long as it contains a strong "character + form" term.
     candidates.extend(_raw_image_candidates(payload, page_url, terms))
 
-    if page_is_specific and parser.og_image:
+    # Baidu's no-ID /item/<name> route can return a generic 350x350 placeholder
+    # while still echoing the requested title. Only trust an og:image when the
+    # resolved page has a canonical numeric lemma id.
+    parsed_page = urlparse(page_url)
+    has_numeric_lemma_id = bool(
+        re.search(r"/item/[^/?]+/\d+(?:$|/)", parsed_page.path)
+    )
+    if page_is_specific and has_numeric_lemma_id and parser.og_image:
         image_url = _clean_image_url(parser.og_image, page_url)
         if image_url:
             candidates.append((110, image_url, parser.title))
@@ -305,6 +361,11 @@ async def baidu_baike_ultraman_image(
     if direct_url:
         seen_pages.add(direct_url)
         direct_results.append(SearchResult(name, direct_url, "direct"))
+
+    for parent_url in BAIDU_PARENT_PAGES.get(name, ()):
+        if parent_url not in seen_pages:
+            seen_pages.add(parent_url)
+            direct_results.append(SearchResult(name, parent_url, "parent-gallery"))
 
     # Try direct lemma URLs first. Parent-character terms are included by
     # _encyclopedia_search_terms, so forms hosted only in a parent gallery can
