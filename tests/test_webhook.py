@@ -44,6 +44,7 @@ from app.main import (
     settings,
     webhook_token_valid,
 )
+from app.services.ultraman_encyclopedia import EncyclopediaImage
 
 
 def event(text: str, group_id: str = "integration-group", user_id: str = "member", role: str = "member"):
@@ -802,13 +803,46 @@ def test_ultraman_followup_reuses_last_resolved_form(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_ultraman_image_resolution_never_falls_back_to_bilibili(monkeypatch):
+async def test_ultraman_image_resolution_uses_encyclopedia_after_official_failure(
+    monkeypatch,
+):
     hero = type("Hero", (), {"name": "测试形态"})()
 
     async def no_official_image(*args, **kwargs):
-        raise RuntimeError("no verified artwork")
+        raise RuntimeError("no official artwork")
+
+    async def encyclopedia_image(name, aliases, settings):
+        assert name == "测试形态"
+        return EncyclopediaImage(
+            data="base64://ZW5jeWNsb3BlZGlh",
+            source="百度百科",
+            page_url="https://baike.baidu.com/item/test",
+            label="测试形态",
+        )
 
     monkeypatch.setattr("app.main.official_ultraman_image", no_official_image)
+    monkeypatch.setattr("app.main.encyclopedia_ultraman_image", encyclopedia_image)
+    monkeypatch.setattr("app.main.ultraman_image_aliases", lambda hero: (hero.name,))
 
-    with pytest.raises(RuntimeError, match="no verified artwork"):
+    result = await resolve_ultraman_card_image(hero)
+    assert result == "base64://ZW5jeWNsb3BlZGlh"
+
+
+@pytest.mark.asyncio
+async def test_ultraman_image_resolution_fails_when_official_and_encyclopedia_fail(
+    monkeypatch,
+):
+    hero = type("Hero", (), {"name": "测试形态"})()
+
+    async def no_official_image(*args, **kwargs):
+        raise RuntimeError("no official artwork")
+
+    async def no_encyclopedia_image(*args, **kwargs):
+        raise RuntimeError("no encyclopedia artwork")
+
+    monkeypatch.setattr("app.main.official_ultraman_image", no_official_image)
+    monkeypatch.setattr("app.main.encyclopedia_ultraman_image", no_encyclopedia_image)
+    monkeypatch.setattr("app.main.ultraman_image_aliases", lambda hero: (hero.name,))
+
+    with pytest.raises(RuntimeError, match="可靠官方或百科代表图"):
         await resolve_ultraman_card_image(hero)

@@ -75,8 +75,10 @@ from app.services.ultraman import (
     render_ultraman_catalog,
     resolve_ultraman_query,
     ultraman_catalog_text_pages,
+    ultraman_image_aliases,
     ultraman_profile_text,
 )
+from app.services.ultraman_encyclopedia import encyclopedia_ultraman_image
 from app.services.web_search import SearchResult, search_web
 
 settings = get_settings()
@@ -932,8 +934,34 @@ def schedule_possession_style_learning(
 
 
 async def resolve_ultraman_card_image(hero) -> str:
-    """Use only a verified Ultraman image source; never substitute video thumbnails."""
-    return await official_ultraman_image(hero, settings)
+    """Prefer official artwork, then an exact-match encyclopedia representative image."""
+    try:
+        return await official_ultraman_image(hero, settings)
+    except (RuntimeError, httpx.HTTPError) as exc:
+        logger.info(
+            "official Ultraman image unavailable for %s; trying encyclopedia: %s",
+            hero.name,
+            exc,
+        )
+
+    try:
+        encyclopedia = await encyclopedia_ultraman_image(
+            hero.name,
+            ultraman_image_aliases(hero),
+            settings,
+        )
+    except (RuntimeError, httpx.HTTPError, ValueError) as exc:
+        raise RuntimeError(
+            f"没有找到“{hero.name}”的可靠官方或百科代表图"
+        ) from exc
+
+    logger.info(
+        "Ultraman image resolved from %s for %s (%s)",
+        encyclopedia.source,
+        hero.name,
+        encyclopedia.page_url,
+    )
+    return encyclopedia.data
 
 
 async def send_group_image(group_id: str, image_file: str, caption: str = "") -> None:

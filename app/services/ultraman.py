@@ -703,8 +703,29 @@ _RELATED_ALT_NAMES = {
 }
 
 
+_ENCYCLOPEDIA_IMAGE_ALIASES = {
+    "闪耀迪迦": ("闪耀迪迦（TV版）", "闪耀迪迦（剧场版）", "闪光迪迦", "黄金迪迦"),
+    "超级奥特曼泰罗": ("超级泰罗", "超级奥特曼泰罗"),
+    "捷德奥特曼·尊皇形态": ("尊皇形态", "皇家超级大师", "皇家大师"),
+    "捷德奥特曼·银河初升": ("银河初升", "银河升华", "银河升华形态"),
+}
+
+
 def ultraman_image_search_query(hero: Ultraman) -> str:
     return _FORM_IMAGE_SEARCH_QUERIES.get(hero.name, hero.name)
+
+
+def ultraman_image_aliases(hero: Ultraman) -> tuple[str, ...]:
+    values: list[str] = [hero.name]
+    values.extend(_FORM_ALT_NAMES.get(hero.name, ()))
+    values.extend(_RELATED_ALT_NAMES.get(hero.name, ()))
+    values.extend(_ENCYCLOPEDIA_IMAGE_ALIASES.get(hero.name, ()))
+    values.extend(
+        alias
+        for alias, canonical_name in _ULTRAMAN_ALIASES.items()
+        if canonical_name == hero.name
+    )
+    return tuple(dict.fromkeys(value for value in values if value))
 
 
 def is_ultraman_form_variant(hero: Ultraman) -> bool:
