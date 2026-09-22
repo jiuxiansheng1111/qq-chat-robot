@@ -36,12 +36,14 @@ from app.main import (
     notify_rate_limited,
     polish_chat_reply,
     possession_recent_messages_prompt,
+    repeat_echo_candidate,
     qualify_group_memory,
     resolve_ultraman_card_image,
     send_group_message,
     send_group_share_card,
     sender_display_name,
     settings,
+    should_add_murasame_tsundere,
     split_qq_text,
     webhook_token_valid,
 )
@@ -440,6 +442,32 @@ def test_group_memory_delete_accepts_clear_alias_and_all_keyword():
         settings.onebot_self_id = previous
 
 
+def test_repeat_echo_replies_once_on_second_consecutive_match():
+    state: dict[str, dict[str, object]] = {}
+    assert repeat_echo_candidate(state, "g1", "复读这句") is None
+    assert repeat_echo_candidate(state, "g1", "复读这句") == "复读这句"
+    assert repeat_echo_candidate(state, "g1", "复读这句") is None
+    assert repeat_echo_candidate(state, "g1", "换一句") is None
+    assert repeat_echo_candidate(state, "g1", "换一句") == "换一句"
+
+
+def test_repeat_echo_ignores_commands_and_links():
+    state: dict[str, dict[str, object]] = {}
+    for text in ("/help", "https://example.com"):
+        assert repeat_echo_candidate(state, "g1", text) is None
+        assert repeat_echo_candidate(state, "g1", text) is None
+
+
+def test_murasame_tsundere_is_low_frequency_and_disabled_for_serious_prompts():
+    light_seed = next(
+        str(index)
+        for index in range(200)
+        if should_add_murasame_tsundere(str(index), "今天吃什么")
+    )
+    assert should_add_murasame_tsundere(light_seed, "今天吃什么")
+    assert not should_add_murasame_tsundere(light_seed, "程序报错怎么办")
+
+
 def test_sender_display_name_prefers_group_card_and_sanitizes_lines():
     payload = event("hello")
     payload["sender"].update({"card": "小明\n第二行", "nickname": "nickname"})
@@ -682,7 +710,7 @@ async def test_share_card_uses_onebot_share_segment(monkeypatch):
 
 
 def test_default_murasame_voice_uses_chinese_markers():
-    assert ensure_default_murasame_voice("这题答案是 42") == "苟修金，这题答案是 42"
+    assert ensure_default_murasame_voice("这题答案是 42") == "苟修金，吾辈来说：这题答案是 42"
     assert ensure_default_murasame_voice("吾辈已经看过了") == "吾辈已经看过了"
     assert ensure_default_murasame_voice("苟修金，这个没问题") == "苟修金，这个没问题"
 
@@ -695,6 +723,8 @@ def test_persona_uses_苟修金_with_light_japanese_flavor():
         assert token in persona
     assert "主体始终用现代中文" in persona
     assert "不要整句或整段切成日语" in persona
+    assert "事实问答、技术解释、联网搜索" in persona
+    assert "杂鱼~杂鱼~" in persona
     assert "お主" not in persona
     assert "ご主人" not in persona
 
