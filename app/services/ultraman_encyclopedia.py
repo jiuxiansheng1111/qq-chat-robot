@@ -71,9 +71,9 @@ def _normalize(value: str) -> str:
 
 
 def _specific_terms(name: str, aliases: tuple[str, ...]) -> tuple[str, ...]:
+    # Do not auto-add a bare form suffix such as "强力型" / "空中型".
+    # Those labels are shared by multiple Ultras and can validate the wrong image.
     candidates = [name, *aliases]
-    if "·" in name:
-        candidates.append(name.split("·", 1)[1])
     terms: list[str] = []
     generic = {_normalize(value) for value in _GENERIC_IMAGE_TERMS}
     for value in candidates:
@@ -90,6 +90,15 @@ def _specific_terms(name: str, aliases: tuple[str, ...]) -> tuple[str, ...]:
 def _matches_specific(value: str, terms: tuple[str, ...]) -> bool:
     normalized = _normalize(value)
     return bool(normalized) and any(term in normalized for term in terms)
+
+
+def encyclopedia_reference_matches(
+    name: str,
+    aliases: tuple[str, ...],
+    value: str,
+) -> bool:
+    """Public exact-name validator used by tests and live image audits."""
+    return _matches_specific(value, _specific_terms(name, aliases))
 
 
 def _clean_image_url(value: str, page_url: str) -> str:
