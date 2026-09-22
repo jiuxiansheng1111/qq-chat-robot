@@ -1048,10 +1048,6 @@ async def official_ultraman_image(hero: Ultraman, settings: Settings) -> str:
                     raise RuntimeError("图片响应格式无效")
                 if len(image.content) > settings.media_max_bytes:
                     raise RuntimeError("图片超过大小限制")
-                with Image.open(BytesIO(image.content)) as decoded:
-                    width, height = decoded.size
-                if width < 160 or height < 160 or width * height < 40_000:
-                    raise RuntimeError("图片尺寸过小")
                 return "base64://" + base64.b64encode(image.content).decode()
             except (httpx.HTTPError, RuntimeError, OSError, ValueError) as exc:
                 errors.append(str(exc))
