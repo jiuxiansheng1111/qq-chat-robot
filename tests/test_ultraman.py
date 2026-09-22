@@ -17,6 +17,7 @@ from app.services.ultraman import (
     render_ultraman_catalog,
     resolve_ultraman_query,
     ultraman_catalog_text_pages,
+    ultraman_image_aliases,
     ultraman_image_search_query,
     ultraman_profile_text,
 )
@@ -247,6 +248,7 @@ def test_related_special_forms_also_require_specific_artwork():
         "帝纳斯奥特曼",
         "诺亚奥特曼",
         "雷杰多奥特曼",
+        "赛迦奥特曼",
         "贝利亚早期形态",
         "托雷基亚早期形态",
     }
@@ -260,6 +262,47 @@ def test_related_special_forms_also_require_specific_artwork():
             resolved = resolve_ultraman_query(alias)
             assert resolved is not None
             assert resolved.name == canonical_name
+
+
+def test_base_image_aliases_include_slug_but_forms_do_not_inherit_parent_slug():
+    zero = ultraman_module.ULTRAMAN_BY_NAME["赛罗奥特曼"]
+    zero_beyond = ultraman_module.ULTRAMAN_BY_NAME["赛罗奥特曼·无限形态"]
+
+    assert "ultraman zero" in ultraman_image_aliases(zero)
+    assert "ultraman zero" not in ultraman_image_aliases(zero_beyond)
+    assert "Ultraman Zero Beyond" in ultraman_image_aliases(zero_beyond)
+
+
+@pytest.mark.asyncio
+async def test_saga_never_uses_movie_page_poster_as_character_art(monkeypatch):
+    async def handler(request: httpx.Request):
+        if request.url.path == "/business/titlelist/8015":
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/html"},
+                text=(
+                    '<meta property="og:image" '
+                    'content="https://tsuburaya-prod.com/uploads/ultraman-saga-movie-poster.jpg">'
+                ),
+            )
+        raise AssertionError(f"unexpected image request: {request.url}")
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mocked_client(**kwargs):
+        kwargs["transport"] = transport
+        return original_client(**kwargs)
+
+    monkeypatch.setattr(ultraman_module.httpx, "AsyncClient", mocked_client)
+    hero = ultraman_module.ULTRAMAN_BY_NAME["赛迦奥特曼"]
+    assert is_ultraman_form_variant(hero)
+
+    with pytest.raises(RuntimeError, match="没有返回可用图片"):
+        await official_ultraman_image(
+            hero,
+            SimpleNamespace(media_timeout_seconds=10, media_max_bytes=1024),
+        )
 
 
 def test_form_image_search_is_specific_for_every_form():
