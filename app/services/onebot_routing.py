@@ -22,20 +22,29 @@ def current_onebot_self_id() -> str:
 
 
 def onebot_route(settings, self_id: str | None = None) -> OneBotRoute:
-    selected = str(self_id or current_onebot_self_id() or settings.onebot_self_id or "").strip()
+    primary_id = str(getattr(settings, "onebot_self_id", "") or "").strip()
+    selected = str(self_id or current_onebot_self_id() or primary_id or "").strip()
     secondary_id = str(getattr(settings, "onebot_self_id_2", "") or "").strip()
 
     if secondary_id and selected == secondary_id:
         return OneBotRoute(
             self_id=secondary_id,
-            api_base=str(getattr(settings, "onebot_api_base_2", "") or settings.onebot_api_base or "").strip(),
+            api_base=str(
+                getattr(settings, "onebot_api_base_2", "")
+                or getattr(settings, "onebot_api_base", "")
+                or ""
+            ).strip(),
             access_token=str(getattr(settings, "onebot_access_token_2", "") or "").strip(),
-            webhook_token=str(getattr(settings, "onebot_webhook_token_2", "") or settings.onebot_webhook_token or "").strip(),
+            webhook_token=str(
+                getattr(settings, "onebot_webhook_token_2", "")
+                or getattr(settings, "onebot_webhook_token", "")
+                or ""
+            ).strip(),
         )
 
     return OneBotRoute(
-        self_id=str(settings.onebot_self_id or selected or "").strip(),
-        api_base=str(settings.onebot_api_base or "").strip(),
-        access_token=str(settings.onebot_access_token or "").strip(),
-        webhook_token=str(settings.onebot_webhook_token or "").strip(),
+        self_id=str(primary_id or selected or "").strip(),
+        api_base=str(getattr(settings, "onebot_api_base", "") or "").strip(),
+        access_token=str(getattr(settings, "onebot_access_token", "") or "").strip(),
+        webhook_token=str(getattr(settings, "onebot_webhook_token", "") or "").strip(),
     )
