@@ -54,13 +54,13 @@ def test_generic_ultraman_alias_never_validates_a_different_character():
     ) is True
 
 
-def test_baidu_parent_page_rejects_unlabelled_raw_image_even_if_near_form_text():
+def test_baidu_parent_page_accepts_raw_image_when_nearby_context_names_character_and_form():
     html = """
     <html>
       <head><meta property="og:title" content="捷德奥特曼_百度百科"></head>
       <body>
         <script>
-          var text = "尊皇形态";
+          var text = "捷德奥特曼 尊皇形态 皇家超级大师";
           var image = "https://bkimg.cdn.bcebos.com/pic/unlabelled-royal.jpg";
         </script>
       </body>
@@ -69,9 +69,10 @@ def test_baidu_parent_page_rejects_unlabelled_raw_image_even_if_near_form_text()
     candidates = baidu_page_image_candidates(
         html,
         "https://baike.baidu.com/item/捷德奥特曼/20825718",
-        ("捷德奥特曼·尊皇形态", "尊皇形态", "Royal Mega-Master"),
+        ("捷德奥特曼·尊皇形态", "Ultraman Geed Royal Mega-Master"),
     )
-    assert candidates == []
+    assert candidates
+    assert candidates[0][1].endswith("unlabelled-royal.jpg")
 
 
 def test_baidu_parent_page_requires_form_specific_image_label():
@@ -282,22 +283,22 @@ async def test_wikipedia_rejects_base_pageimage_when_form_is_only_in_search_quer
 
 
 @pytest.mark.asyncio
-async def test_encyclopedia_prefers_wikimedia_before_baidu(monkeypatch):
+async def test_encyclopedia_prefers_baidu_before_wikimedia(monkeypatch):
     expected = EncyclopediaImage(
-        data="base64://d2lraQ==",
-        source="Wikimedia Commons",
-        page_url="https://commons.wikimedia.org/wiki/File:Ultraman_Zero_Beyond.png",
-        label="File:Ultraman Zero Beyond.png",
+        data="base64://YmFpZHU=",
+        source="百度百科",
+        page_url="https://baike.baidu.com/item/赛罗奥特曼",
+        label="赛罗奥特曼 Zero Beyond",
     )
     calls: list[str] = []
 
-    async def fake_wikipedia(name, aliases, settings):
-        calls.append("wikipedia")
-        return expected
-
     async def fake_baidu(name, aliases, settings):
         calls.append("baidu")
-        raise AssertionError("Baidu should not run after a verified Wikimedia match")
+        return expected
+
+    async def fake_wikipedia(name, aliases, settings):
+        calls.append("wikipedia")
+        raise AssertionError("Wikipedia should not run after a verified Baidu match")
 
     monkeypatch.setattr(
         encyclopedia_module,
@@ -317,7 +318,7 @@ async def test_encyclopedia_prefers_wikimedia_before_baidu(monkeypatch):
     )
 
     assert result == expected
-    assert calls == ["wikipedia"]
+    assert calls == ["baidu"]
 
 
 def test_encyclopedia_reference_requires_exact_form_not_shared_suffix():
@@ -331,3 +332,24 @@ def test_encyclopedia_reference_requires_exact_form_not_shared_suffix():
         ("ウルトラマンティガ パワータイプ", "Ultraman Tiga Power Type"),
         "File:Ultraman Tiga Power Type.png",
     ) is True
+
+
+def test_compact_wikipedia_filename_without_ultraman_prefix_is_still_exact():
+    assert encyclopedia_reference_matches(
+        "迪迦奥特曼·强力型",
+        ("ウルトラマンティガ パワータイプ", "Ultraman Tiga Power Type"),
+        "File:Tiga Power Type.png",
+    ) is True
+    assert encyclopedia_reference_matches(
+        "迪迦奥特曼·强力型",
+        ("ウルトラマンティガ パワータイプ", "Ultraman Tiga Power Type"),
+        "File:Dyna Strong Type.png",
+    ) is False
+
+
+def test_bare_shared_form_suffix_is_not_enough_to_validate_image():
+    assert encyclopedia_reference_matches(
+        "迪迦奥特曼·强力型",
+        ("强力型", "Ultraman Tiga Power Type"),
+        "强力型",
+    ) is False
