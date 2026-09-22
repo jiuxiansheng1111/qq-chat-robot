@@ -1,0 +1,38 @@
+name: Ultraman image audit
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "app/services/ultraman.py"
+      - "app/services/ultraman_encyclopedia.py"
+      - "scripts/audit_ultraman_images.py"
+      - ".github/workflows/ultraman-image-audit.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install runtime dependencies
+        run: python -m pip install -e .
+      - name: Audit all Ultraman images
+        run: >-
+          python scripts/audit_ultraman_images.py
+          --output ultraman-image-audit.json
+          --concurrency 3
+          --timeout 10
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ultraman-image-audit
+          path: ultraman-image-audit.json
+          if-no-files-found: warn

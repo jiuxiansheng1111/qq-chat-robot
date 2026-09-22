@@ -7,8 +7,11 @@ from PIL import Image
 import app.services.ultraman_encyclopedia as encyclopedia_module
 from app.config import Settings
 from app.services.ultraman_encyclopedia import (
+    EncyclopediaImage,
     baidu_baike_ultraman_image,
     baidu_page_image_candidates,
+    encyclopedia_reference_matches,
+    encyclopedia_ultraman_image,
     wikipedia_ultraman_image,
 )
 from app.services.web_search import SearchResult
@@ -36,6 +39,39 @@ def test_baidu_standalone_form_page_can_use_exact_page_og_image():
     )
     assert candidates
     assert candidates[0][1] == "https://bkimg.cdn.bcebos.com/pic/glitter.jpg"
+
+
+def test_generic_ultraman_alias_never_validates_a_different_character():
+    assert encyclopedia_reference_matches(
+        "初代奥特曼",
+        ("奥特曼", "Ultraman"),
+        "File:Ultraman Zero.png",
+    ) is False
+    assert encyclopedia_reference_matches(
+        "初代奥特曼",
+        ("奥特曼", "Ultraman"),
+        "初代奥特曼",
+    ) is True
+
+
+def test_baidu_parent_page_rejects_unlabelled_raw_image_even_if_near_form_text():
+    html = """
+    <html>
+      <head><meta property="og:title" content="捷德奥特曼_百度百科"></head>
+      <body>
+        <script>
+          var text = "尊皇形态";
+          var image = "https://bkimg.cdn.bcebos.com/pic/unlabelled-royal.jpg";
+        </script>
+      </body>
+    </html>
+    """
+    candidates = baidu_page_image_candidates(
+        html,
+        "https://baike.baidu.com/item/捷德奥特曼/20825718",
+        ("捷德奥特曼·尊皇形态", "尊皇形态", "Royal Mega-Master"),
+    )
+    assert candidates == []
 
 
 def test_baidu_parent_page_requires_form_specific_image_label():
@@ -243,3 +279,42 @@ async def test_wikipedia_rejects_base_pageimage_when_form_is_only_in_search_quer
         Settings(_env_file=None),
     )
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_encyclopedia_prefers_wikimedia_before_baidu(monkeypatch):
+    expected = EncyclopediaImage(
+        data="base64://d2lraQ==",
+        source="Wikimedia Commons",
+        page_url="https://commons.wikimedia.org/wiki/File:Ultraman_Zero_Beyond.png",
+        label="File:Ultraman Zero Beyond.png",
+    )
+    calls: list[str] = []
+
+    async def fake_wikipedia(name, aliases, settings):
+        calls.append("wikipedia")
+        return expected
+
+    async def fake_baidu(name, aliases, settings):
+        calls.append("baidu")
+        raise AssertionError("Baidu should not run after a verified Wikimedia match")
+
+    monkeypatch.setattr(
+        encyclopedia_module,
+        "wikipedia_ultraman_image",
+        fake_wikipedia,
+    )
+    monkeypatch.setattr(
+        encyclopedia_module,
+        "baidu_baike_ultraman_image",
+        fake_baidu,
+    )
+
+    result = await encyclopedia_ultraman_image(
+        "赛罗奥特曼·无限形态",
+        ("Ultraman Zero Beyond",),
+        Settings(_env_file=None),
+    )
+
+    assert result == expected
+    assert calls == ["wikipedia"]

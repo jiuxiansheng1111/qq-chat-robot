@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     groq_model: str = "openai/gpt-oss-20b"
     groq_api_key: str = Field(default="", repr=False)
     llm_timeout_seconds: float = 45
-    llm_max_output_tokens: int = 500
+    llm_max_output_tokens: int = 3000
     llm_temperature: float = 0.7
     llm_max_concurrency: int = 10
     llm_queue_size: int = 30
@@ -58,7 +58,11 @@ class Settings(BaseSettings):
     persona_name: str = "阿柚"
     persona_prompt_file: str = "prompts/persona.txt"
     persona_examples_file: str = "prompts/examples.jsonl"
-    max_context_messages: int = 10
+    max_context_messages: int = 100
+    group_context_history_count: int = 300
+    group_context_message_limit: int = 300
+    group_context_char_limit: int = 60000
+    qq_send_chunk_chars: int = 1800
     media_max_bytes: int = 5 * 1024 * 1024
     media_timeout_seconds: float = 60
     media_retry_attempts: int = 2
