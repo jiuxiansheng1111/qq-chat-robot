@@ -22,7 +22,7 @@ jobs:
       - name: Install project
         run: python -m pip install -e .
       - name: Audit every independent Ultraman form image
-        run: python scripts/audit_ultraman_images.py --report ultraman-image-audit.json --concurrency 3
+        run: python scripts/audit_ultraman_images.py --report ultraman-image-audit.json --concurrency 6
       - name: Upload audit report
         if: always()
         uses: actions/upload-artifact@v4
