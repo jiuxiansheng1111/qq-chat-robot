@@ -145,3 +145,42 @@ async def test_search_combines_totalrank_and_click_results(monkeypatch):
 
     assert {item.bvid for item in results} == {"BV1ff411c7mD", "BV1gg411c7mD"}
     assert choose_bilibili_video("迪迦 最终圣战", results).bvid == "BV1gg411c7mD"
+
+
+def test_choose_video_requires_a_cover_for_share_card():
+    no_cover = BilibiliVideo(
+        bvid="BV1hh411c7mD",
+        title="迪迦奥特曼 最终圣战",
+        author="A",
+        description="",
+        tags="迪迦",
+        cover_url="",
+        play=99_000_000,
+        duration="03:00",
+        pubdate=1,
+    )
+    with_cover = video(
+        bvid="BV1ii411c7mD",
+        title="迪迦奥特曼 最终圣战",
+        play=100_000,
+    )
+
+    assert choose_bilibili_video(
+        "迪迦奥特曼 最终圣战",
+        [no_cover, with_cover],
+    ) == with_cover
+
+
+def test_choose_video_returns_none_when_all_relevant_results_lack_covers():
+    item = BilibiliVideo(
+        bvid="BV1jj411c7mD",
+        title="猫和老鼠 搞笑合集",
+        author="A",
+        description="",
+        tags="猫和老鼠",
+        cover_url="",
+        play=5_000_000,
+        duration="03:00",
+        pubdate=1,
+    )
+    assert choose_bilibili_video("猫和老鼠 搞笑合集", [item]) is None

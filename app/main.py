@@ -34,7 +34,6 @@ from app.plugins.registry import registry
 from app.services.bilibili import (
     bilibili_card_content,
     choose_bilibili_video,
-    download_bilibili_cover,
     search_bilibili_videos,
 )
 from app.services.group_memory_logic import (
@@ -71,13 +70,11 @@ from app.services.translation import (
 from app.services.ultraman import (
     ULTRAMAN_BY_NAME,
     ULTRAMAN_ROSTER,
-    is_ultraman_form_variant,
     official_ultraman_image,
     render_ultraman_card,
     render_ultraman_catalog,
     resolve_ultraman_query,
     ultraman_catalog_text_pages,
-    ultraman_image_search_query,
     ultraman_profile_text,
 )
 from app.services.web_search import SearchResult, search_web
@@ -935,22 +932,8 @@ def schedule_possession_style_learning(
 
 
 async def resolve_ultraman_card_image(hero) -> str:
-    try:
-        return await official_ultraman_image(hero, settings)
-    except (RuntimeError, httpx.HTTPError) as exc:
-        if not is_ultraman_form_variant(hero):
-            raise
-        logger.info(
-            "dedicated Ultraman form image unavailable for %s, trying Bilibili cover: %s",
-            hero.name,
-            exc,
-        )
-        image_query = ultraman_image_search_query(hero)
-        videos = await search_bilibili_videos(image_query, settings)
-        video = choose_bilibili_video(image_query, videos)
-        if video is None:
-            raise RuntimeError(f"没有找到“{hero.name}”的可靠形态图片") from exc
-        return await download_bilibili_cover(video, settings)
+    """Use only a verified Ultraman image source; never substitute video thumbnails."""
+    return await official_ultraman_image(hero, settings)
 
 
 async def send_group_image(group_id: str, image_file: str, caption: str = "") -> None:
@@ -1351,7 +1334,7 @@ async def onebot_webhook(
             await send_group_image(group_id, card, caption)
         except (RuntimeError, httpx.HTTPError) as exc:
             logger.warning("official Ultraman image failed: %s", exc)
-            await send_group_message(group_id, caption + "\n图片暂时加载失败，稍后再查看吧。")
+            await send_group_message(group_id, caption + "\n暂无可靠的对应图片，吾辈不会拿视频封面或其他形态图片冒充。")
     elif text in MY_ULTRAMAN_COMMANDS or (
         bot_mentioned(event) and text in MY_ULTRAMAN_COMMANDS
     ):
@@ -1395,7 +1378,7 @@ async def onebot_webhook(
             await send_group_image(group_id, card, caption)
         except (RuntimeError, httpx.HTTPError) as exc:
             logger.warning("Ultraman encyclopedia image failed: %s", exc)
-            await send_group_message(group_id, caption + "\n图片暂时加载失败，稍后再查看吧。")
+            await send_group_message(group_id, caption + "\n暂无可靠的对应图片，吾辈不会拿视频封面或其他形态图片冒充。")
     elif (
         bot_mentioned(event)
         and asks_for_ultraman_image_followup(text)
@@ -1423,7 +1406,7 @@ async def onebot_webhook(
                 logger.warning("Ultraman follow-up image failed: %s", exc)
                 await send_group_message(
                     group_id,
-                    f"苟修金，【{recent_ultraman.name}】的图片这次加载失败了，稍后再试。",
+                    f"苟修金，【{recent_ultraman.name}】目前没有可靠的对应图片，吾辈不会拿视频封面冒充。",
                 )
     elif text in CAT_IMAGE_COMMANDS or mentioned_image_command(event, CAT_IMAGE_COMMANDS):
         try:

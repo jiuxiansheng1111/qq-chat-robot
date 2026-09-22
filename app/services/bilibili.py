@@ -176,6 +176,8 @@ def choose_bilibili_video(
 
     scored: list[tuple[int, int, float, int, BilibiliVideo]] = []
     for video in videos:
+        if not video.cover_url:
+            continue
         relevance = bilibili_relevance_score(query, video)
         tier = _relevance_tier(query, video)
         if relevance < 18 or tier == 0:
