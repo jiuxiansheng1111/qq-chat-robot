@@ -71,20 +71,37 @@ def _normalize(value: str) -> str:
 
 
 def _specific_terms(name: str, aliases: tuple[str, ...]) -> tuple[str, ...]:
-    # Do not auto-add a bare form suffix such as "强力型" / "空中型".
-    # Those labels are shared by multiple Ultras and can validate the wrong image.
+    # Keep the character identity + form identity together. We accept both
+    # "Ultraman Tiga Power Type" and "Tiga Power Type", but never a bare
+    # generic suffix such as only "Power Type" / "强力型".
     candidates = [name, *aliases]
     terms: list[str] = []
     generic = {_normalize(value) for value in _GENERIC_IMAGE_TERMS}
     for value in candidates:
         normalized = _normalize(value)
-        if (
-            len(normalized) >= 3
-            and normalized not in generic
-            and normalized not in terms
-        ):
-            terms.append(normalized)
+        variants = [normalized]
+        stripped = normalized
+        for token in generic:
+            if token:
+                stripped = stripped.replace(token, "")
+        if stripped and stripped != normalized:
+            variants.append(stripped)
+        for variant in variants:
+            if (
+                len(variant) >= 3
+                and variant not in generic
+                and variant not in terms
+            ):
+                terms.append(variant)
     return tuple(terms)
+
+
+def _encyclopedia_search_terms(name: str, aliases: tuple[str, ...]) -> tuple[str, ...]:
+    values: list[str] = [name]
+    if "·" in name:
+        values.extend((name.replace("·", ""), name.replace("·", " ")))
+    values.extend(aliases)
+    return tuple(dict.fromkeys(value.strip() for value in values if value.strip()))
 
 
 def _matches_specific(value: str, terms: tuple[str, ...]) -> bool:
@@ -210,11 +227,10 @@ def baidu_page_image_candidates(
         if score:
             candidates.append((score, image_url, label))
 
-    # Unlabelled JSON/HTML image URLs are only safe when the encyclopedia page
-    # itself is specifically about the requested form. On a parent character
-    # page they can sit beside unrelated form text and cause a wrong image match.
-    if page_is_specific:
-        candidates.extend(_raw_image_candidates(payload, page_url, terms))
+    # Baidu/Wikipedia parent pages often contain a form gallery whose image URL
+    # itself is generic. The local HTML/JSON context can still prove the exact
+    # form as long as it contains a strong "character + form" term.
+    candidates.extend(_raw_image_candidates(payload, page_url, terms))
 
     if page_is_specific and parser.og_image:
         image_url = _clean_image_url(parser.og_image, page_url)
@@ -260,8 +276,7 @@ async def baidu_baike_ultraman_image(
     aliases: tuple[str, ...],
     settings: Settings,
 ) -> EncyclopediaImage | None:
-    searches = [name]
-    searches.extend(alias for alias in aliases if re.search(r"[\u3400-\u9fff]", alias))
+    searches = _encyclopedia_search_terms(name, aliases)
     seen_pages: set[str] = set()
     results = []
 
@@ -270,9 +285,18 @@ async def baidu_baike_ultraman_image(
         seen_pages.add(direct_url)
         results.append(SearchResult(name, direct_url, "direct"))
 
-    for query in searches[:3]:
+    # Baidu Baike resolves /item/<lemma title> to the canonical lemma when it
+    # exists. Try those URLs directly instead of relying only on a search engine,
+    # which often does not surface Baike pages.
+    for query in searches[:8]:
+        item_url = "https://baike.baidu.com/item/" + quote(query, safe="")
+        if item_url not in seen_pages:
+            seen_pages.add(item_url)
+            results.append(SearchResult(query, item_url, "baidu-item"))
+
+    for query in searches[:8]:
         try:
-            found = await search_web(f'"{query}" 百度百科', limit=6)
+            found = await search_web(f'"{query}" 百度百科', limit=8)
         except (ValueError, httpx.HTTPError):
             continue
         for result in found:
@@ -280,9 +304,6 @@ async def baidu_baike_ultraman_image(
             if host in BAIDU_BAIKE_HOSTS and result.url not in seen_pages:
                 seen_pages.add(result.url)
                 results.append(result)
-
-    if not results:
-        return None
 
     timeout = max(5.0, min(float(settings.media_timeout_seconds), 20.0))
     headers = {"User-Agent": ENCYCLOPEDIA_USER_AGENT}
@@ -394,7 +415,7 @@ async def wikipedia_ultraman_image(
     timeout = max(5.0, min(float(settings.media_timeout_seconds), 20.0))
     headers = {"User-Agent": ENCYCLOPEDIA_USER_AGENT}
     terms = _specific_terms(name, aliases)
-    queries = [name, *aliases][:6]
+    queries = list(_encyclopedia_search_terms(name, aliases))[:10]
     async with httpx.AsyncClient(
         timeout=timeout,
         follow_redirects=True,
@@ -455,6 +476,52 @@ async def wikipedia_ultraman_image(
                             )
                             if resolved is not None:
                                 return resolved
+
+                    # A form can live as a subsection/gallery on the parent
+                    # Wikipedia article. Parse rendered HTML and accept an image
+                    # when its alt/title or nearby context names the exact form.
+                    page_id = page.get("pageid")
+                    if page_id:
+                        try:
+                            parsed_response = await client.get(
+                                endpoint,
+                                params={
+                                    "action": "parse",
+                                    "pageid": page_id,
+                                    "prop": "text",
+                                    "format": "json",
+                                    "formatversion": 2,
+                                },
+                            )
+                            parsed_response.raise_for_status()
+                            parsed_payload = parsed_response.json()
+                            rendered_html = str(
+                                (parsed_payload.get("parse") or {}).get("text") or ""
+                            )
+                        except (ValueError, httpx.HTTPError):
+                            rendered_html = ""
+                        if rendered_html:
+                            candidates = baidu_page_image_candidates(
+                                rendered_html,
+                                page_url,
+                                (name, *aliases),
+                            )
+                            for _, image_url, label in candidates[:12]:
+                                try:
+                                    data = await _download_verified_image(
+                                        client,
+                                        image_url,
+                                        page_url,
+                                        settings,
+                                    )
+                                except (RuntimeError, httpx.HTTPError):
+                                    continue
+                                return EncyclopediaImage(
+                                    data=data,
+                                    source=f"{host} article context",
+                                    page_url=page_url,
+                                    label=label or page_title,
+                                )
 
                     if not _wikipedia_result_matches(page, terms):
                         continue
