@@ -73,6 +73,7 @@ from app.services.ultraman import (
     ULTRAMAN_BY_NAME,
     ULTRAMAN_ROSTER,
     official_ultraman_image,
+    official_ultraman_search_image,
     render_ultraman_card,
     render_ultraman_catalog,
     resolve_ultraman_query,
@@ -991,6 +992,15 @@ async def resolve_ultraman_card_image(hero) -> str:
     except (RuntimeError, httpx.HTTPError) as exc:
         logger.info(
             "official Ultraman image unavailable for %s; trying encyclopedia: %s",
+            hero.name,
+            exc,
+        )
+
+    try:
+        return await official_ultraman_search_image(hero, settings)
+    except (RuntimeError, httpx.HTTPError, ValueError) as exc:
+        logger.info(
+            "exact official form image unavailable for %s; trying encyclopedia: %s",
             hero.name,
             exc,
         )
