@@ -7,7 +7,6 @@ from PIL import Image
 import app.services.ultraman_encyclopedia as encyclopedia_module
 from app.config import Settings
 from app.services.ultraman_encyclopedia import (
-    EncyclopediaImage,
     baidu_baike_ultraman_image,
     baidu_page_image_candidates,
     wikipedia_ultraman_image,
