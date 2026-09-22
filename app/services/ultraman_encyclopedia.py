@@ -525,6 +525,40 @@ async def baidu_baike_ultraman_image(
         return await try_pages(discovered)
 
 
+def _wikipedia_wikitext_image_candidates(
+    wikitext: str,
+    name: str,
+    aliases: tuple[str, ...],
+    page_title: str,
+) -> list[str]:
+    """Return File:/Image: titles whose local wikitext context names the exact form."""
+    strong_terms = _specific_terms(name, aliases)
+    parent_terms = _parent_page_form_terms(name, aliases, page_title)
+    match_terms = tuple(dict.fromkeys((*strong_terms, *parent_terms)))
+    if not match_terms:
+        return []
+
+    candidates: list[str] = []
+    pattern = re.compile(
+        r"\[\[(?:File|Image|文件|檔案|ファイル):([^\]|\n]+)(?:\|[^\]]*)?\]\]",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(wikitext or ""):
+        start = max(0, match.start() - 700)
+        end = min(len(wikitext), match.end() + 700)
+        context = html.unescape(wikitext[start:end])
+        file_title = match.group(1).strip()
+        descriptor = f"{file_title} {context}"
+        if not _matches_specific(descriptor, match_terms):
+            continue
+        normalized_title = file_title
+        if not re.match(r"^(?:File|Image):", normalized_title, re.IGNORECASE):
+            normalized_title = "File:" + normalized_title
+        if normalized_title not in candidates:
+            candidates.append(normalized_title)
+    return candidates
+
+
 async def _wikipedia_file_image(
     client: httpx.AsyncClient,
     endpoint: str,
@@ -659,8 +693,8 @@ async def wikipedia_ultraman_image(
                                 return resolved
 
                     # A form can live as a subsection/gallery on the parent
-                    # Wikipedia article. Parse rendered HTML and accept an image
-                    # when its alt/title or nearby context names the exact form.
+                    # Wikipedia article. First inspect wikitext because captions
+                    # often name the form even when the uploaded file name is generic.
                     page_id = page.get("pageid")
                     if page_id:
                         try:
@@ -669,18 +703,37 @@ async def wikipedia_ultraman_image(
                                 params={
                                     "action": "parse",
                                     "pageid": page_id,
-                                    "prop": "text",
+                                    "prop": "text|wikitext",
                                     "format": "json",
                                     "formatversion": 2,
                                 },
                             )
                             parsed_response.raise_for_status()
                             parsed_payload = parsed_response.json()
-                            rendered_html = str(
-                                (parsed_payload.get("parse") or {}).get("text") or ""
-                            )
+                            parsed = parsed_payload.get("parse") or {}
+                            rendered_html = str(parsed.get("text") or "")
+                            wikitext = str(parsed.get("wikitext") or "")
                         except (ValueError, httpx.HTTPError):
                             rendered_html = ""
+                            wikitext = ""
+
+                        for file_title in _wikipedia_wikitext_image_candidates(
+                            wikitext,
+                            name,
+                            aliases,
+                            page_title,
+                        )[:12]:
+                            resolved = await _wikipedia_file_image(
+                                client,
+                                endpoint,
+                                file_title,
+                                page_url,
+                                f"{host} wikitext image",
+                                settings,
+                            )
+                            if resolved is not None:
+                                return resolved
+
                         if rendered_html:
                             candidates = baidu_page_image_candidates(
                                 rendered_html,
