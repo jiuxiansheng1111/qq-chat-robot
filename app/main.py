@@ -1046,7 +1046,7 @@ async def send_group_image(group_id: str, image_file: str, caption: str = "") ->
         )
     async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
         response = await client.post(
-            f"{settings.onebot_api_base.rstrip('/')}/send_group_msg",
+            f"{route.api_base.rstrip('/')}/send_group_msg",
             headers=headers,
             json={"group_id": group_id, "message": message},
         )
@@ -1077,7 +1077,7 @@ async def send_group_music_card(group_id: str, track: MusicTrack) -> None:
         data["image"] = track.cover_url
     async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
         response = await client.post(
-            f"{settings.onebot_api_base.rstrip('/')}/send_group_msg",
+            f"{route.api_base.rstrip('/')}/send_group_msg",
             headers=headers,
             json={"group_id": group_id, "message": [{"type": "music", "data": data}]},
         )
@@ -1099,7 +1099,7 @@ async def send_group_netease_card(group_id: str, track: NeteaseTrack) -> None:
     )
     async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
         response = await client.post(
-            f"{settings.onebot_api_base.rstrip('/')}/send_group_msg",
+            f"{route.api_base.rstrip('/')}/send_group_msg",
             headers=headers,
             json={
                 "group_id": group_id,
