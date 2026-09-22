@@ -7,8 +7,8 @@ import httpx
 from app.config import Settings
 from app.db.database import Database
 from app.llm.manager import LLMManager
-from app.services.onebot_routing import onebot_route
 from app.llm.providers import LLMError
+from app.services.onebot_routing import onebot_route
 
 logger = logging.getLogger("qqchat.possession_style")
 
