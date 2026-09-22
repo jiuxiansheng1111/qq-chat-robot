@@ -22,6 +22,7 @@ from app.services.ultraman import (
     ULTRAMAN_ROSTER,
     is_ultraman_form_variant,
     official_ultraman_image,
+    official_ultraman_search_image,
     ultraman_image_aliases,
 )
 from app.services.ultraman_encyclopedia import (
@@ -84,6 +85,33 @@ async def audit_one(hero, settings: Settings, semaphore: asyncio.Semaphore) -> d
                     width=width,
                     height=height,
                 )
+
+        if result["status"] == "missing" and is_ultraman_form_variant(hero):
+            try:
+                data = await official_ultraman_search_image(hero, settings)
+            except Exception as exc:
+                previous = result["official_error"]
+                exact_error = f"{type(exc).__name__}: {exc}"[:500]
+                result["official_error"] = (
+                    (previous + " | exact-search: " + exact_error) if previous else exact_error
+                )[:900]
+            else:
+                try:
+                    width, height = _image_size(data)
+                except Exception as exc:
+                    result.update(
+                        status="decode_error",
+                        source="圆谷官方精确搜索",
+                        encyclopedia_error=f"{type(exc).__name__}: {exc}"[:500],
+                    )
+                else:
+                    result.update(
+                        status="ok",
+                        source="圆谷官方精确搜索",
+                        label=hero.name,
+                        width=width,
+                        height=height,
+                    )
 
         if result["status"] == "missing":
             try:
