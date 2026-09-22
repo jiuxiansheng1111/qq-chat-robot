@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     onebot_access_token: str = Field(default="", repr=False)
     onebot_webhook_token: str = Field(default="", repr=False)
     onebot_self_id: str = ""
+    # Optional second NapCat / QQ account. Empty values keep legacy single-bot behavior.
+    onebot_api_base_2: str = ""
+    onebot_access_token_2: str = Field(default="", repr=False)
+    onebot_webhook_token_2: str = Field(default="", repr=False)
+    onebot_self_id_2: str = ""
 
     llm_provider: str = "zhipu"
     llm_model: str = "glm-4.7-flash"
