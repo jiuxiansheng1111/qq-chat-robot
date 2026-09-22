@@ -6,7 +6,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.rate_limit import LocalRateLimiter
-from app.services.ultraman_encyclopedia import EncyclopediaImage
 from app.main import (
     CAT_IMAGE_COMMANDS,
     NAILONG_IMAGE_COMMANDS,
@@ -45,6 +44,7 @@ from app.main import (
     settings,
     webhook_token_valid,
 )
+from app.services.ultraman_encyclopedia import EncyclopediaImage
 
 
 def event(text: str, group_id: str = "integration-group", user_id: str = "member", role: str = "member"):
