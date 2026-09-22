@@ -11,7 +11,7 @@ import httpx
 from PIL import Image
 
 from app.config import Settings
-from app.services.web_search import search_web
+from app.services.web_search import SearchResult, search_web
 
 BAIDU_BAIKE_HOSTS = {
     "baike.baidu.com",
@@ -251,13 +251,7 @@ async def baidu_baike_ultraman_image(
     direct_url = BAIDU_DIRECT_PAGES.get(name)
     if direct_url:
         seen_pages.add(direct_url)
-        results.append(
-            type(
-                "_DirectBaikeResult",
-                (),
-                {"title": name, "url": direct_url, "snippet": "direct"},
-            )()
-        )
+        results.append(SearchResult(name, direct_url, "direct"))
 
     for query in searches[:3]:
         try:
