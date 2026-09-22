@@ -1021,7 +1021,8 @@ async def resolve_ultraman_card_image(hero) -> str:
         return await official_ultraman_search_image(hero, settings)
     except (RuntimeError, httpx.HTTPError, ValueError) as exc:
         raise RuntimeError(
-            f"没有找到“{hero.name}”的可靠官方、百度百科或 Wikipedia 对应图片"
+            f"没有找到“{hero.name}”的可靠官方或百科代表图"
+            "（已尝试百度百科、Wikipedia/Wikimedia 与圆谷站内搜索）"
         ) from exc
 
 
