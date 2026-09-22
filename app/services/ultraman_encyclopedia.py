@@ -5,7 +5,7 @@ import unicodedata
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from io import BytesIO
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 import httpx
 from PIL import Image
@@ -266,8 +266,8 @@ async def baidu_baike_ultraman_image(
                 page.raise_for_status()
             except httpx.HTTPError:
                 continue
-            if not _matches_specific(page.text, _specific_terms(name, aliases)):
-                continue
+            # Candidate labels/context perform the exact-form validation. Do not
+            # reject a page merely because the form name lives in an image alt/JSON field.
             candidates = baidu_page_image_candidates(
                 page.text,
                 str(page.url),
@@ -403,7 +403,10 @@ async def wikipedia_ultraman_image(
                     if not isinstance(page, dict):
                         continue
                     page_title = str(page.get("title") or query)
-                    page_url = f"https://{host}/wiki/" + page_title.replace(" ", "_")
+                    page_url = (
+                        f"https://{host}/wiki/"
+                        + quote(page_title.replace(" ", "_"), safe="():,_-")
+                    )
 
                     images = page.get("images", [])
                     if isinstance(images, list):
@@ -488,7 +491,7 @@ async def wikipedia_ultraman_image(
                     continue
                 page_url = (
                     "https://commons.wikimedia.org/wiki/"
-                    + file_title.replace(" ", "_")
+                    + quote(file_title.replace(" ", "_"), safe="():,_-")
                 )
                 try:
                     data = await _download_verified_image(
