@@ -3,6 +3,8 @@ import pytest
 import app.services.possession_style as possession_style_module
 from app.services.possession_style import (
     fetch_member_style_history,
+    group_context_from_lines,
+    group_history_context,
     history_message_text,
     image_references_from_message,
     learn_possession_style,
@@ -45,6 +47,29 @@ def test_member_style_samples_filters_other_members_and_rich_messages():
         }
     }
     assert member_style_samples(payload, "7", 10) == ["哈哈，确实", "行吧行吧"]
+
+
+def test_group_context_keeps_old_to_new_order_and_applies_budget():
+    payload = {
+        "data": {
+            "messages": [
+                {"sender": {"card": "甲"}, "message": "第一条"},
+                {"sender": {"card": "乙"}, "message": "第二条"},
+                {"sender": {"card": "丙"}, "message": "第三条"},
+            ]
+        }
+    }
+    context = group_history_context(payload, message_limit=300, char_limit=60000)
+    assert context.index("甲：第一条") < context.index("乙：第二条") < context.index("丙：第三条")
+
+    cached = group_context_from_lines(
+        ["甲：第一条", "乙：第二条", "丙：第三条"],
+        message_limit=2,
+        char_limit=60000,
+    )
+    assert "甲：第一条" not in cached
+    assert "乙：第二条" in cached
+    assert "丙：第三条" in cached
 
 
 def test_style_reference_examples_keep_rhythm_but_drop_identity_facts():
