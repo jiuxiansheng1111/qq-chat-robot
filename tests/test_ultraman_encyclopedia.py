@@ -23,6 +23,82 @@ def png_bytes(width: int = 480, height: int = 720) -> bytes:
     return buffer.getvalue()
 
 
+@pytest.mark.asyncio
+async def test_verified_download_normalizes_supported_images_to_jpeg():
+    source = png_bytes(480, 720)
+
+    async def handler(request: httpx.Request):
+        return httpx.Response(
+            200,
+            headers={"content-type": "image/png"},
+            content=source,
+        )
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        result = await encyclopedia_module._download_verified_image(
+            client,
+            "https://example.invalid/image.png",
+            "https://example.invalid/page",
+            Settings(_env_file=None),
+        )
+
+    import base64
+
+    raw = base64.b64decode(result.removeprefix("base64://"))
+    with Image.open(BytesIO(raw)) as decoded:
+        assert decoded.format == "JPEG"
+        assert decoded.size == (480, 720)
+
+
+@pytest.mark.asyncio
+async def test_bing_image_search_falls_back_to_thumbnail_when_original_is_blocked(
+    monkeypatch,
+):
+    source = png_bytes(480, 720)
+
+    async def handler(request: httpx.Request):
+        if request.url.host == "www.bing.com":
+            metadata = (
+                '{"t":"Ultraman Geed Galaxy Rising",'
+                '"desc":"Ultraman Geed Galaxy Rising",'
+                '"murl":"https://blocked.example/original.png",'
+                '"turl":"https://thumb.example/thumb.png",'
+                '"purl":"https://example.com/geed-galaxy-rising"}'
+            )
+            return httpx.Response(
+                200,
+                text=f'<a class="iusc" m=\'{metadata}\'></a>',
+            )
+        if request.url.host == "blocked.example":
+            return httpx.Response(403)
+        if request.url.host == "thumb.example":
+            return httpx.Response(
+                200,
+                headers={"content-type": "image/png"},
+                content=source,
+            )
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mocked_client(**kwargs):
+        kwargs["transport"] = transport
+        return original_client(**kwargs)
+
+    monkeypatch.setattr(encyclopedia_module.httpx, "AsyncClient", mocked_client)
+
+    result = await encyclopedia_module.bing_image_search_ultraman_image(
+        "捷德奥特曼·银河初升",
+        ("Ultraman Geed Galaxy Rising",),
+        Settings(_env_file=None),
+    )
+
+    assert result is not None
+    assert result.source == "Bing 缩略图精确形态匹配"
+
+
 def test_baidu_standalone_form_page_can_use_exact_page_og_image():
     html = """
     <html>
