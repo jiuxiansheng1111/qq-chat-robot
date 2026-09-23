@@ -176,3 +176,29 @@ async def test_real_pig_image_uses_curated_wikimedia_photo(monkeypatch):
     assert result.url.startswith("base64://")
     assert base64.b64decode(result.url.removeprefix("base64://")) == b"real-pig-photo"
     assert result.source_url.endswith("File:Cute_Piglet.jpg")
+
+
+
+@pytest.mark.asyncio
+async def test_cat_gif_retries_recent_duplicate_content(monkeypatch):
+    media_module._cat_gif_cache.clear()
+    media_module._cat_cached_hashes.clear()
+    media_module._cat_recent_hashes.clear()
+
+    duplicate = "base64://" + base64.b64encode(b"GIF89a-same-cat").decode()
+    unique = "base64://" + base64.b64encode(b"GIF89a-new-cat").decode()
+    media_module._remember_cat_digest(media_module._cat_digest(duplicate))
+    values = iter((duplicate, unique))
+
+    async def fake_download(settings):
+        return next(values)
+
+    async def no_refill(settings):
+        return None
+
+    monkeypatch.setattr(media_module, "_download_cat_gif", fake_download)
+    monkeypatch.setattr(media_module, "warm_cat_gif_cache", no_refill)
+
+    result = await random_cat_gif(SimpleNamespace(cat_cache_size=6))
+    await asyncio.sleep(0)
+    assert result == unique
