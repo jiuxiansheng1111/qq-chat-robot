@@ -99,11 +99,9 @@ async def run(report_path: Path, concurrency: int, require_all: bool) -> int:
     settings.media_timeout_seconds = min(float(settings.media_timeout_seconds), 12.0)
     settings.media_max_bytes = max(int(settings.media_max_bytes), 8 * 1024 * 1024)
 
-    heroes = [
-        hero
-        for hero in ultraman.ULTRAMAN_ROSTER
-        if ultraman.is_ultraman_form_variant(hero)
-    ]
+    # Audit the complete roster, not only independent forms. A green report must
+    # mean every drawable entry used by 今日奥特曼/图鉴 has a decodable image.
+    heroes = list(ultraman.ULTRAMAN_ROSTER)
     semaphore = asyncio.Semaphore(max(1, min(concurrency, 6)))
     rows = await asyncio.gather(
         *(audit_one(hero, settings, semaphore) for hero in heroes)
@@ -160,7 +158,7 @@ async def run(report_path: Path, concurrency: int, require_all: bool) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Audit every independent Ultraman form image using strict exact-name matching."
+        description="Audit every Ultraman roster image using strict name/source validation."
     )
     parser.add_argument(
         "--report",
