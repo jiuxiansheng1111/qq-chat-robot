@@ -762,12 +762,13 @@ def test_persona_uses_苟修金_with_light_japanese_flavor():
     persona = settings.persona_prompt()
     assert "称提问者为「苟修金」" in persona
     assert "吾辈" in persona
-    for token in ("Ciallo～", "じゃ", "のう", "そうか", "なるほど", "大丈夫"):
-        assert token in persona
-    assert "主体始终用现代中文" in persona
-    assert "不要整句或整段切成日语" in persona
-    assert "事实问答、技术解释、联网搜索" in persona
+    assert "Ciallo～" in persona
+    assert "主体必须是自然中文" in persona
+    assert "群聊只用于理解正在聊什么" in persona
+    assert "不得模仿" not in persona or "最近群聊" in persona
     assert "杂鱼~杂鱼~" in persona
+    assert "有地将臣" in persona
+    assert "不凭空点名群友" in persona
     assert "お主" not in persona
     assert "ご主人" not in persona
 
@@ -964,7 +965,7 @@ async def test_ultraman_image_resolution_fails_when_official_and_encyclopedia_fa
     monkeypatch.setattr("app.main.encyclopedia_ultraman_image", no_encyclopedia_image)
     monkeypatch.setattr("app.main.ultraman_image_aliases", lambda hero: (hero.name,))
 
-    with pytest.raises(RuntimeError, match="可靠官方或百科代表图"):
+    with pytest.raises(RuntimeError, match="可用代表图"):
         await resolve_ultraman_card_image(hero)
 
 
