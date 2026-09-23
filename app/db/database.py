@@ -152,6 +152,16 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_daily_ultraman_user
                     ON daily_ultraman(user_id, draw_date);
+                CREATE TABLE IF NOT EXISTS daily_anime_character (
+                    user_id TEXT NOT NULL,
+                    draw_date TEXT NOT NULL,
+                    group_id TEXT NOT NULL,
+                    character_name TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, draw_date)
+                );
+                CREATE INDEX IF NOT EXISTS idx_daily_anime_character_user
+                    ON daily_anime_character(user_id, draw_date);
                 """
             )
             columns = await db.execute_fetchall("PRAGMA table_info(daily_possession)")
@@ -615,6 +625,48 @@ class Database:
             "SELECT ultraman_name, COUNT(*) AS appearances "
             "FROM daily_ultraman WHERE user_id = ? "
             "GROUP BY ultraman_name ORDER BY appearances DESC, ultraman_name LIMIT 1",
+            (user_id,),
+        )
+        return int(totals[0]), int(totals[1]), str(favorite[0]), int(favorite[1])
+
+    async def get_or_create_daily_anime_character(
+        self,
+        group_id: str,
+        user_id: str,
+        draw_date: str,
+        candidate_name: str,
+    ) -> tuple[str, bool]:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                "INSERT OR IGNORE INTO daily_anime_character"
+                "(user_id, draw_date, group_id, character_name) VALUES (?, ?, ?, ?)",
+                (user_id, draw_date, group_id, candidate_name),
+            )
+            created = cursor.rowcount > 0
+            row = await (
+                await db.execute(
+                    "SELECT character_name FROM daily_anime_character "
+                    "WHERE user_id = ? AND draw_date = ?",
+                    (user_id, draw_date),
+                )
+            ).fetchone()
+            await db.commit()
+        return str(row[0]), created
+
+    async def anime_character_collection_stats(
+        self, user_id: str
+    ) -> tuple[int, int, str, int] | None:
+        totals = await self.fetchone(
+            "SELECT COUNT(*), COUNT(DISTINCT character_name) "
+            "FROM daily_anime_character WHERE user_id = ?",
+            (user_id,),
+        )
+        if not totals or not totals[0]:
+            return None
+        favorite = await self.fetchone(
+            "SELECT character_name, COUNT(*) AS appearances "
+            "FROM daily_anime_character WHERE user_id = ? "
+            "GROUP BY character_name ORDER BY appearances DESC, character_name LIMIT 1",
             (user_id,),
         )
         return int(totals[0]), int(totals[1]), str(favorite[0]), int(favorite[1])
