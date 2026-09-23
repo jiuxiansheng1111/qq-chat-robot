@@ -1,6 +1,7 @@
 import pytest
 
 import app.services.slang as slang
+from app.services.web_search import SearchResult
 
 
 def test_unknown_slang_heuristic_targets_acronyms_not_normal_words():
@@ -37,7 +38,7 @@ async def test_unknown_slang_can_use_web_evidence_after_unknown(monkeypatch):
 
     async def fake_search(query: str, limit: int = 3, timeout: float = 4):
         return [
-            slang.SearchResult(
+            SearchResult(
                 title="网络词解释",
                 url="https://example.com/slang",
                 snippet="该缩写在这个语境中用于辱骂他人。",
