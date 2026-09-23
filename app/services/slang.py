@@ -16,6 +16,8 @@ class SlangVerdict:
 
 def needs_slang_check(text: str) -> bool:
     compact = re.sub(r"\s+", "", str(text or "")).strip()
+    compact = re.sub(r"(?:小丛雨|穗织幼刀姬)", "", compact)
+    compact = re.sub(r"[，,。.!！?？:：~～、]+", "", compact).strip()
     if not compact or len(compact) > 40:
         return False
     # Short Latin acronyms are common in Chinese online slang (e.g. sb/fw/nt)
