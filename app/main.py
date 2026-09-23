@@ -1395,7 +1395,8 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
             )
             llm_aliases: list[str] = []
             for row in search_term_answer.splitlines():
-                term = re.sub(r"^[-*•\\d.、)）\\s]+", "", row).strip(" \\t\\\"'“”")
+                term = re.sub(r"^[-*•\\d.、)）\\s]+", "", row).strip()
+                term = term.strip('"').strip("'").strip("“").strip("”")
                 if 2 <= len(term) <= 100 and term not in llm_aliases:
                     llm_aliases.append(term)
             if llm_aliases:
