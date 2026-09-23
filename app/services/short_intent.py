@@ -1,6 +1,5 @@
 import re
 
-
 _SHORT_LIMIT = 36
 _PUNCTUATION_RE = re.compile(r"[\s，。！？!?、；;：:'\"“”‘’~～（）()\[\]【】]+")
 _VIEW_WORDS = ("看", "查看", "看看", "看下", "看一下", "查", "查下", "查询", "多少", "几", "当前", "现在", "我的")
@@ -11,9 +10,7 @@ _CATALOG_WORDS = ("图鉴", "全部", "所有", "大全", "列表")
 
 
 def _compact(text: str) -> str:
-    value = str(text or "").strip()
-    if value.startswith("/"):
-        value = value[1:]
+    value = str(text or "").strip().removeprefix("/")
     return _PUNCTUATION_RE.sub("", value).casefold()
 
 
