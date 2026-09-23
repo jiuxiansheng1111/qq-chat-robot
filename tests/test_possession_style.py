@@ -72,6 +72,38 @@ def test_group_context_keeps_old_to_new_order_and_applies_budget():
     assert "丙：第三条" in cached
 
 
+
+
+def test_group_history_context_excludes_bot_self_messages():
+    payload = {
+        "data": {
+            "messages": [
+                {
+                    "user_id": "3503565007",
+                    "sender": {"user_id": "3503565007", "card": "穗织幼刀姬"},
+                    "message": "错误旧回复：调教某个无关功能",
+                },
+                {
+                    "user_id": "7",
+                    "sender": {"user_id": "7", "card": "群友"},
+                    "message": "有地将臣认识吗",
+                },
+            ]
+        }
+    }
+    context = group_history_context(
+        payload,
+        exclude_user_ids={"3503565007"},
+    )
+    assert "错误旧回复" not in context
+    assert "有地将臣认识吗" in context
+
+
+def test_group_context_explicitly_forbids_style_copying():
+    context = group_context_from_lines(["甲：句尾喵", "乙：正常说话"])
+    assert "不得模仿" in context
+    assert "口癖" in context
+
 def test_style_reference_examples_keep_rhythm_but_drop_identity_facts():
     assert style_reference_examples(
         [
