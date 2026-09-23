@@ -119,6 +119,7 @@ from app.services.ultraman_encyclopedia import (
     bing_image_relaxed_ultraman_image,
     bing_image_search_ultraman_image,
     official_merch_ultraman_image,
+    search_engine_first_ultraman_image,
     web_page_ultraman_image,
     wikipedia_ultraman_image,
 )
@@ -1646,6 +1647,20 @@ def _track_ultraman_prefetch(task: asyncio.Task) -> None:
     task.add_done_callback(_consume)
 
 
+async def _delayed_search_engine_first_image(hero, aliases) -> object:
+    # Give exact/official sources a short head start, then prefer "a picture now"
+    # over waiting for every strict source to time out.
+    await asyncio.sleep(2.0)
+    result = await search_engine_first_ultraman_image(
+        hero.name,
+        aliases,
+        settings,
+    )
+    if result is None:
+        raise RuntimeError("搜索引擎首图兜底没有可下载结果")
+    return result
+
+
 async def resolve_ultraman_card_image(hero, llm=None) -> str:
     """Resolve a hero image with a strict response deadline and persistent cache.
 
@@ -1696,6 +1711,10 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
         (
             "Bing精确最终兜底",
             lambda: bing_image_relaxed_ultraman_image(hero.name, aliases, settings),
+        ),
+        (
+            "搜索引擎精确名称首图",
+            lambda: _delayed_search_engine_first_image(hero, aliases),
         ),
     )
 
