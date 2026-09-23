@@ -126,6 +126,16 @@ LONG_MEMORY_LIST_COMMANDS = frozenset({"/长期记忆列表", "我的长期记�
 LONG_MEMORY_CLEAR_COMMANDS = frozenset({"/长期记忆清除", "清除长期记忆", "忘记我"})
 GROUP_MEMORY_LIST_COMMANDS = frozenset({"/群记忆", "群记忆", "你在群里记住了什么"})
 GROUP_MEMORY_CLEAR_COMMANDS = frozenset({"/清除群记忆", "清除群记忆"})
+MEMBER_IDENTITY_LIST_COMMANDS = frozenset({
+    "/身份记忆", "身份记忆", "/我的身份记忆", "我的身份记忆"
+})
+MEMBER_IDENTITY_CLEAR_COMMANDS = frozenset({
+    "/清除身份记忆", "清除身份记忆", "/删除身份记忆", "删除身份记忆",
+    "忘记我是谁", "忘掉我是谁"
+})
+MEMBER_IDENTITY_ADMIN_CLEAR_COMMANDS = frozenset({
+    "/清除成员身份", "清除成员身份", "/删除成员身份", "删除成员身份"
+})
 POSSESSION_STYLE_CLEAR_COMMANDS = frozenset(
     {"/删除语气", "删除语气", "/清除语气", "清除语气", "忘记这个人的语气"}
 )
@@ -658,7 +668,61 @@ def asks_for_sender_name(text: str) -> bool:
         "我叫什么",
         "我叫什么名字",
         "我的名字是什么",
+        "你知道我是谁吗",
+        "你还记得我是谁吗",
+        "你记得我是谁吗",
+        "知道我是谁吗",
     }
+
+
+_MEMBER_RELATION_ROLE_SUFFIX = re.compile(
+    r"的(?:爸爸|父亲|老爸|爸|妈妈|母亲|老妈|妈|儿子|女儿|哥哥|姐姐|弟弟|妹妹|"
+    r"朋友|老师|学生|老板|同事|队友|对象|男朋友|女朋友|老婆|老公)$"
+)
+
+
+def extract_member_identity_binding(
+    content: str,
+    current_user_id: str,
+) -> tuple[str, str] | None:
+    """Extract stable QQ-user -> alias bindings without treating relations as aliases."""
+    compact = re.sub(r"\s+", "", str(content or "")).strip("，,。；;：:")
+    if not compact:
+        return None
+
+    match = re.fullmatch(r"(?:我是|我叫|我的名字是)(.{1,100})", compact)
+    if match:
+        alias = match.group(1).strip()
+        if not alias or _MEMBER_RELATION_ROLE_SUFFIX.search(alias):
+            return None
+        return str(current_user_id), alias
+
+    match = re.fullmatch(
+        r"(?:QQ|qq)?[:：]?([1-9]\d{4,11})(?:是|叫|的名字是)(.{1,100})",
+        compact,
+    )
+    if match:
+        alias = match.group(2).strip()
+        if not alias or _MEMBER_RELATION_ROLE_SUFFIX.search(alias):
+            return None
+        return match.group(1), alias
+    return None
+
+
+def extract_member_identity_lookup(text: str) -> str | None:
+    compact = re.sub(r"[\s，。！？!?、'\"~～]", "", str(text or "")).strip()
+    if not compact or compact in {"你是谁", "我是谁"}:
+        return None
+    match = re.fullmatch(
+        r"(.{1,100}?)(?:是谁|叫什么|叫什么名字|是什么人)(?:吗|嘛|呢)?",
+        compact,
+    )
+    if not match:
+        return None
+    target = match.group(1).strip()
+    if target in {"你", "我", "吾辈"}:
+        return None
+    return target
 
 
 def extract_possession_alias(text: str, current_name: str) -> str | None:
@@ -1498,19 +1562,84 @@ async def onebot_webhook(
         elif SENSITIVE_MEMORY_PATTERN.search(group_memory):
             await send_group_message(group_id, "这段像是敏感信息，我就不存啦。")
         else:
-            current_possession = await request.app.state.db.daily_possession(
-                group_id, today
+            member_binding = extract_member_identity_binding(group_memory, user_id)
+            if member_binding is not None:
+                target_user_id, alias = member_binding
+                if target_user_id == user_id:
+                    identity_display_name = sender_display_name(event)
+                else:
+                    identity_display_name = await request.app.state.db.latest_group_member_display_name(
+                        group_id, target_user_id
+                    )
+                    if not identity_display_name:
+                        try:
+                            identity_display_name = await group_member_name(
+                                group_id, target_user_id
+                            )
+                        except (RuntimeError, ValueError, httpx.HTTPError):
+                            identity_display_name = "群成员"
+                await request.app.state.db.add_group_member_identity(
+                    group_id,
+                    target_user_id,
+                    identity_display_name,
+                    alias,
+                )
+                if target_user_id == user_id:
+                    await send_group_message(
+                        group_id,
+                        f"记住了。以后在本群问到汝是谁，吾辈会按“{alias}”来认，不会把QQ号报出来。",
+                    )
+                else:
+                    await send_group_message(
+                        group_id,
+                        f"记住了这名群友与“{alias}”的对应关系；正常回答时吾辈不会报QQ号。",
+                    )
+            else:
+                current_possession = await request.app.state.db.daily_possession(
+                    group_id, today
+                )
+                current_identity = (
+                    current_possession[1] if current_possession else settings.persona_name
+                )
+                qualified_memory = qualify_group_memory(
+                    group_memory,
+                    current_identity,
+                    sender_display_name(event),
+                )
+                await request.app.state.db.add_group_memory(group_id, qualified_memory)
+                await send_group_message(group_id, f"记住了：{qualified_memory}")
+    elif text in MEMBER_IDENTITY_LIST_COMMANDS and (
+        text.startswith("/") or bot_mentioned(event)
+    ):
+        aliases = await request.app.state.db.group_member_identities(group_id, user_id)
+        if aliases:
+            await send_group_message(
+                group_id,
+                "吾辈记得汝在本群绑定过这些身份/称呼："
+                + "、".join(f"“{item}”" for item in aliases[:10])
+                + "。QQ号只用于内部定位，正常回答不会念出来。",
             )
-            current_identity = (
-                current_possession[1] if current_possession else settings.persona_name
-            )
-            qualified_memory = qualify_group_memory(
-                group_memory,
-                current_identity,
-                sender_display_name(event),
-            )
-            await request.app.state.db.add_group_memory(group_id, qualified_memory)
-            await send_group_message(group_id, f"记住了：{qualified_memory}")
+        else:
+            await send_group_message(group_id, "吾辈还没有给汝保存身份/称呼绑定。")
+    elif text in MEMBER_IDENTITY_CLEAR_COMMANDS and (
+        text.startswith("/") or bot_mentioned(event)
+    ):
+        await request.app.state.db.clear_group_member_identities(group_id, user_id)
+        await send_group_message(
+            group_id,
+            "汝在本群的身份/称呼绑定已经清空；普通群记忆和长期记忆没有动。",
+        )
+    elif text in MEMBER_IDENTITY_ADMIN_CLEAR_COMMANDS and (
+        text.startswith("/") or bot_mentioned(event)
+    ):
+        targets = mentioned_user_ids(event)
+        if not is_admin:
+            await send_group_message(group_id, "清除其他群友的身份绑定需要群管理员权限。")
+        elif len(targets) != 1:
+            await send_group_message(group_id, "用法：@我 清除成员身份 @一名群成员")
+        else:
+            await request.app.state.db.clear_group_member_identities(group_id, targets[0])
+            await send_group_message(group_id, "这名群友的身份/称呼绑定已经清空。")
     elif text in GROUP_MEMORY_LIST_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
         memories = await request.app.state.db.group_memories(group_id)
         if memories:
@@ -1592,7 +1721,72 @@ async def onebot_webhook(
         else:
             await send_group_message(group_id, "现在没有在夺舍。")
     elif bot_mentioned(event) and asks_for_sender_name(text):
-        await send_group_message(group_id, f"你的名字是“{sender_display_name(event)}”。")
+        aliases = await request.app.state.db.group_member_identities(group_id, user_id)
+        if aliases:
+            latest = aliases[0]
+            extra = (
+                "；另外还记过：" + "、".join(f"“{item}”" for item in aliases[1:4])
+                if len(aliases) > 1
+                else ""
+            )
+            await send_group_message(
+                group_id,
+                f"吾辈记得，汝在本群说过自己是“{latest}”{extra}。"
+                "至于QQ号，吾辈认得就行，不拿出来念。",
+            )
+        else:
+            await send_group_message(
+                group_id,
+                f"吾辈目前只认得汝的群名片“{sender_display_name(event)}”；"
+                "若想固定一个身份，可以对吾辈说“记住，我是xxx”。",
+            )
+    elif bot_mentioned(event) and (
+        (member_identity_target := extract_member_identity_lookup(text)) is not None
+    ):
+        matches = await request.app.state.db.find_group_member_identity(
+            group_id, member_identity_target
+        )
+        if matches:
+            _, matched_display_name, matched_alias = matches[0]
+            target_key = member_identity_target.casefold()
+            if target_key == matched_alias.casefold():
+                visible_name = matched_display_name or "这名群友"
+                await send_group_message(
+                    group_id,
+                    f"吾辈记得，“{member_identity_target}”对应的是“{visible_name}”。",
+                )
+            else:
+                aliases = []
+                for matched_user_id, _, alias in matches:
+                    for item in await request.app.state.db.group_member_identities(
+                        group_id, matched_user_id
+                    ):
+                        if item not in aliases:
+                            aliases.append(item)
+                await send_group_message(
+                    group_id,
+                    "吾辈记得，这名群友绑定的是"
+                    + "、".join(f"“{item}”" for item in aliases[:5])
+                    + "。QQ号就不拿出来念了。",
+                )
+        else:
+            # Fall through to the LLM/group-memory path instead of inventing an identity.
+            group_memories = await request.app.state.db.group_memories(group_id)
+            memory_answer = resolve_group_memory_question(text, group_memories)
+            if memory_answer is not None:
+                await send_group_message(
+                    group_id,
+                    ensure_default_murasame_voice(
+                        format_group_memory_answer(memory_answer, text),
+                        seed=f"group-memory:{group_id}:{user_id}:{text}",
+                        prompt=text,
+                    ),
+                )
+            else:
+                await send_group_message(
+                    group_id,
+                    "吾辈这里没有可靠的成员身份绑定，不能拿QQ号或昵称硬猜。",
+                )
     elif bot_mentioned(event) and is_identity_question(text):
         possession = await request.app.state.db.daily_possession(group_id, today)
         if possession:
