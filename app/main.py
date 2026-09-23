@@ -388,6 +388,52 @@ def has_reply_segment(event: dict) -> bool:
     )
 
 
+def reply_message_id(event: dict) -> str:
+    """Extract the quoted OneBot message id, if present."""
+    message = event.get("message", "")
+    if isinstance(message, str):
+        match = re.search(r"\[CQ:reply,id=([^,\]]+)", message)
+        return match.group(1).strip() if match else ""
+    for segment in message or []:
+        if not isinstance(segment, dict) or segment.get("type") != "reply":
+            continue
+        return str(segment.get("data", {}).get("id") or "").strip()
+    return ""
+
+
+async def reply_targets_bot(event: dict) -> bool:
+    """Resolve a quoted message and check whether it was sent by this bot."""
+    message_id = reply_message_id(event)
+    self_id = event_bot_self_id(event)
+    if not message_id or not self_id:
+        return False
+    route = onebot_route(settings, self_id)
+    if not route.api_base:
+        return False
+    headers = (
+        {"Authorization": f"Bearer {route.access_token}"}
+        if route.access_token
+        else {}
+    )
+    try:
+        async with httpx.AsyncClient(timeout=8, trust_env=False) as client:
+            response = await client.post(
+                f"{route.api_base.rstrip('/')}/get_msg",
+                headers=headers,
+                json={"message_id": message_id},
+            )
+            response.raise_for_status()
+            payload = response.json()
+    except (httpx.HTTPError, ValueError):
+        return False
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        return False
+    sender = data.get("sender") if isinstance(data.get("sender"), dict) else {}
+    sender_id = str(data.get("user_id") or sender.get("user_id") or "").strip()
+    return sender_id == self_id
+
+
 def bot_mentioned(event: dict) -> bool:
     self_id = event_bot_self_id(event)
     if not self_id:
@@ -1813,8 +1859,17 @@ async def onebot_webhook(
             await send_group_message(group_id, f"好感度已重置为 {score}/100。")
         return {"ok": True, "source": "affection_reset"}
 
+    reply_to_murasame = (
+        await reply_targets_bot(event)
+        if has_reply_segment(event)
+        else False
+    )
+    addressed_to_murasame = (
+        murasame_addressed(event, text) or reply_to_murasame
+    )
+
     if (
-        murasame_addressed(event, text)
+        addressed_to_murasame
         and not active_possession_for_affection
         and text not in AFFECTION_VIEW_COMMANDS
         and text not in AFFECTION_HISTORY_COMMANDS
@@ -2596,7 +2651,7 @@ async def onebot_webhook(
             except (ValueError, RuntimeError, httpx.HTTPError) as exc:
                 logger.warning("web search failed: %s", exc)
                 await send_group_message(group_id, "联网搜索暂时不可用，稍后再试一下吧。")
-    elif text.startswith(("/ai ", "/AI ")) or (murasame_addressed(event, text) and text):
+    elif text.startswith(("/ai ", "/AI ")) or (addressed_to_murasame and text):
         prompt = text.split(" ", 1)[1].strip() if text.startswith(("/ai ", "/AI ")) else text
         group_memories = await request.app.state.db.group_memories(group_id)
         active_possession = await request.app.state.db.daily_possession(group_id, today)
