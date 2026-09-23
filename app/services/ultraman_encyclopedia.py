@@ -516,13 +516,24 @@ async def _download_verified_image(
     if len(response.content) > settings.media_max_bytes:
         raise RuntimeError("百科图片超过大小限制")
     try:
-        with Image.open(BytesIO(response.content)) as image:
-            width, height = image.size
+        with Image.open(BytesIO(response.content)) as source:
+            width, height = source.size
+            if width < 160 or height < 160 or width * height < 40_000:
+                raise RuntimeError("百科图片尺寸过小")
+            # QQ/NapCat 对部分 WebP/AVIF/PNG 外链兼容性不稳定。
+            # 在机器人侧统一解码并转成 JPEG，再以 base64 发送，避免客户端
+            # 继续依赖原网站、防盗链或不受支持的图片编码。
+            image = source.convert("RGB")
+            output = BytesIO()
+            image.save(output, format="JPEG", quality=92, optimize=True)
+    except RuntimeError:
+        raise
     except (OSError, ValueError) as exc:
         raise RuntimeError("百科图片无法解码") from exc
-    if width < 160 or height < 160 or width * height < 40_000:
-        raise RuntimeError("百科图片尺寸过小")
-    return "base64://" + base64.b64encode(response.content).decode()
+    payload = output.getvalue()
+    if len(payload) > settings.media_max_bytes:
+        raise RuntimeError("转换后的百科图片超过大小限制")
+    return "base64://" + base64.b64encode(payload).decode()
 
 
 async def baidu_baike_ultraman_image(
@@ -1114,31 +1125,49 @@ async def bing_image_search_ultraman_image(
             for item in parser.items[:35]:
                 title = html.unescape(str(item.get("t") or ""))
                 description = html.unescape(str(item.get("desc") or ""))
-                image_url = html.unescape(str(item.get("murl") or "")).strip()
+                original_url = html.unescape(str(item.get("murl") or "")).strip()
+                thumb_url = html.unescape(
+                    str(item.get("turl") or item.get("turl2") or "")
+                ).strip()
                 page_url = html.unescape(str(item.get("purl") or "")).strip()
-                descriptor = f"{title} {description} {image_url} {page_url}"
+                descriptor = f"{title} {description} {original_url} {page_url}"
                 if not _matches_specific(descriptor, terms):
                     continue
-                if not image_url.startswith(("https://", "http://")):
-                    continue
 
-                referer = page_url if page_url.startswith(("https://", "http://")) else "https://www.bing.com/images/"
-                referer = quote(referer, safe=":/?&=%#")
-                try:
-                    data_b64 = await _download_verified_image(
-                        client,
-                        image_url,
-                        referer,
-                        settings,
-                    )
-                except (RuntimeError, httpx.HTTPError):
-                    continue
-                return EncyclopediaImage(
-                    data=data_b64,
-                    source="Bing 图片精确形态匹配",
-                    page_url=page_url or f"https://www.bing.com/images/search?q={quote(query)}",
-                    label=title or description or query,
+                referer = (
+                    page_url
+                    if page_url.startswith(("https://", "http://"))
+                    else "https://www.bing.com/images/"
                 )
+                referer = quote(referer, safe=":/?&=%#")
+                image_urls = tuple(
+                    dict.fromkeys(
+                        url
+                        for url in (original_url, thumb_url)
+                        if url.startswith(("https://", "http://"))
+                    )
+                )
+                for image_url in image_urls:
+                    try:
+                        data_b64 = await _download_verified_image(
+                            client,
+                            image_url,
+                            referer,
+                            settings,
+                        )
+                    except (RuntimeError, httpx.HTTPError):
+                        continue
+                    return EncyclopediaImage(
+                        data=data_b64,
+                        source=(
+                            "Bing 图片精确形态匹配"
+                            if image_url == original_url
+                            else "Bing 缩略图精确形态匹配"
+                        ),
+                        page_url=page_url
+                        or f"https://www.bing.com/images/search?q={quote(query)}",
+                        label=title or description or query,
+                    )
     return None
 
 
