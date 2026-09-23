@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     llm_queue_timeout_seconds: float = 8
     auto_web_search_enabled: bool = False
     auto_web_search_limit: int = 5
+    # Optional outbound proxy for web search/media. When empty, common local
+    # Clash Verge/Clash mixed ports are auto-detected.
+    web_proxy_url: str = ""
+    web_proxy_auto_detect: bool = True
 
     persona_name: str = "小丛雨"
     persona_prompt_file: str = "prompts/persona.txt"
