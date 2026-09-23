@@ -1441,6 +1441,181 @@ async def web_page_ultraman_image(
     return None
 
 
+async def search_engine_first_ultraman_image(
+    name: str,
+    aliases: tuple[str, ...],
+    settings: Settings,
+) -> EncyclopediaImage | None:
+    """Last-resort exact-name image search.
+
+    The user explicitly prefers getting the first plausible search-engine image
+    over returning no character image. Source sites are therefore unrestricted
+    here (Tencent Video, iQIYI, Bilibili, ordinary articles, etc.). We still
+    require a real decodable image with a reasonable size.
+    """
+    query_values = [name]
+    query_values.extend(
+        alias
+        for alias in aliases
+        if alias
+        and (
+            re.search(r"[A-Za-z]", alias)
+            or re.search(r"[\u3040-\u30ff]", alias)
+        )
+    )
+    queries = list(dict.fromkeys(query_values))[:4]
+    timeout = max(3.0, min(float(settings.media_timeout_seconds), 6.0))
+    headers = {
+        "User-Agent": ENCYCLOPEDIA_USER_AGENT,
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,ja;q=0.7",
+    }
+
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        headers=headers,
+    ) as client:
+        # Baidu Images first: its ordered result list is usually strong for
+        # Chinese Ultra form names, and middle/thumb URLs are QQ-friendly.
+        for query in queries:
+            try:
+                response = await client.get(
+                    "https://image.baidu.com/search/acjson",
+                    params={
+                        "tn": "resultjson_com",
+                        "ipn": "rj",
+                        "ct": "201326592",
+                        "fp": "result",
+                        "queryWord": query,
+                        "word": query,
+                        "ie": "utf-8",
+                        "oe": "utf-8",
+                        "pn": "0",
+                        "rn": "10",
+                        "newReq": "1",
+                    },
+                    headers={
+                        "User-Agent": ENCYCLOPEDIA_USER_AGENT,
+                        "Referer": "https://image.baidu.com/",
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+            except (ValueError, httpx.HTTPError):
+                continue
+
+            items = payload.get("data", [])
+            if isinstance(items, list):
+                for item in items[:10]:
+                    if not isinstance(item, dict):
+                        continue
+                    image_url = str(
+                        item.get("middleURL")
+                        or item.get("thumbURL")
+                        or item.get("hoverURL")
+                        or ""
+                    ).strip()
+                    if image_url.startswith("http://"):
+                        image_url = "https://" + image_url.removeprefix("http://")
+                    if not image_url.startswith("https://"):
+                        continue
+                    page_url = str(item.get("fromURL") or "").strip()
+                    source_host = str(
+                        item.get("fromURLHost") or ""
+                    ).strip()
+                    if not page_url.startswith(("https://", "http://")):
+                        page_url = "https://image.baidu.com/"
+                    title = html.unescape(
+                        str(
+                            item.get("fromPageTitleEnc")
+                            or item.get("fromPageTitle")
+                            or item.get("title")
+                            or query
+                        )
+                    )
+                    try:
+                        data_b64 = await _download_verified_image(
+                            client,
+                            image_url,
+                            page_url,
+                            settings,
+                        )
+                    except (RuntimeError, httpx.HTTPError):
+                        continue
+                    return EncyclopediaImage(
+                        data=data_b64,
+                        source=(
+                            f"百度图片首图（{source_host}）"
+                            if source_host
+                            else "百度图片首图"
+                        ),
+                        page_url=page_url,
+                        label=title or query,
+                    )
+
+        # Bing Images is the second unrestricted first-result source.
+        for query in queries:
+            try:
+                response = await client.get(
+                    "https://www.bing.com/images/async",
+                    params={
+                        "q": query,
+                        "first": "1",
+                        "count": "20",
+                        "adlt": "strict",
+                        "scenario": "ImageBasicHover",
+                    },
+                    headers={
+                        "User-Agent": ENCYCLOPEDIA_USER_AGENT,
+                        "Referer": "https://www.bing.com/images/",
+                    },
+                )
+                response.raise_for_status()
+            except httpx.HTTPError:
+                continue
+
+            parser = _BingImageResultParser()
+            parser.feed(response.text)
+            for item in parser.items[:20]:
+                title = html.unescape(str(item.get("t") or query))
+                page_url = html.unescape(
+                    str(item.get("purl") or "")
+                ).strip()
+                thumb_url = html.unescape(
+                    str(item.get("turl") or item.get("turl2") or "")
+                ).strip()
+                original_url = html.unescape(
+                    str(item.get("murl") or "")
+                ).strip()
+                referer = (
+                    page_url
+                    if page_url.startswith(("https://", "http://"))
+                    else "https://www.bing.com/images/"
+                )
+                for image_url in dict.fromkeys(
+                    url
+                    for url in (thumb_url, original_url)
+                    if url.startswith(("https://", "http://"))
+                ):
+                    try:
+                        data_b64 = await _download_verified_image(
+                            client,
+                            image_url,
+                            referer,
+                            settings,
+                        )
+                    except (RuntimeError, httpx.HTTPError):
+                        continue
+                    return EncyclopediaImage(
+                        data=data_b64,
+                        source="Bing 图片首图",
+                        page_url=page_url
+                        or f"https://www.bing.com/images/search?q={quote(query)}",
+                        label=title or query,
+                    )
+    return None
+
+
 async def bing_image_relaxed_ultraman_image(
     name: str,
     aliases: tuple[str, ...],
@@ -1590,4 +1765,7 @@ async def encyclopedia_ultraman_image(
     relaxed = await bing_image_relaxed_ultraman_image(name, aliases, settings)
     if relaxed is not None:
         return relaxed
-    raise RuntimeError(f"没有找到“{name}”的可靠百科/图片搜索代表图")
+    first_result = await search_engine_first_ultraman_image(name, aliases, settings)
+    if first_result is not None:
+        return first_result
+    raise RuntimeError(f"没有找到“{name}”的可下载代表图")
