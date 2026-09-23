@@ -402,6 +402,19 @@ def bot_mentioned(event: dict) -> bool:
     )
 
 
+def murasame_addressed(event: dict, text: str) -> bool:
+    """Treat explicit persona-name calls as direct messages even without an @."""
+    if bot_mentioned(event):
+        return True
+    compact = re.sub(r"\s+", "", str(text or "")).casefold()
+    names = {
+        settings.persona_name.casefold(),
+        "小丛雨",
+        "穗织幼刀姬",
+    }
+    return any(name and name in compact for name in names)
+
+
 def mentioned_image_command(event: dict, commands: frozenset[str]) -> bool:
     """Return whether a QQ @mention contains one of the image commands."""
     return bot_mentioned(event) and message_text(event) in commands
@@ -1798,7 +1811,7 @@ async def onebot_webhook(
         return {"ok": True, "source": "affection_reset"}
 
     if (
-        bot_mentioned(event)
+        murasame_addressed(event, text)
         and not active_possession_for_affection
         and text not in AFFECTION_VIEW_COMMANDS
         and text not in AFFECTION_HISTORY_COMMANDS
@@ -2557,7 +2570,7 @@ async def onebot_webhook(
             except (ValueError, RuntimeError, httpx.HTTPError) as exc:
                 logger.warning("web search failed: %s", exc)
                 await send_group_message(group_id, "联网搜索暂时不可用，稍后再试一下吧。")
-    elif text.startswith(("/ai ", "/AI ")) or (bot_mentioned(event) and text):
+    elif text.startswith(("/ai ", "/AI ")) or (murasame_addressed(event, text) and text):
         prompt = text.split(" ", 1)[1].strip() if text.startswith(("/ai ", "/AI ")) else text
         group_memories = await request.app.state.db.group_memories(group_id)
         active_possession = await request.app.state.db.daily_possession(group_id, today)
