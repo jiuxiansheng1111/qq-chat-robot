@@ -11,16 +11,18 @@ from app.services.affection import (
 
 
 def test_affection_defaults_and_unlock_threshold():
-    assert AFFECTION_INITIAL == 30
-    assert MEMORY_UNLOCK_SCORE == 60
-    assert "30/100" in affection_status_text(30)
-    assert "60" in affection_status_text(30)
+    assert AFFECTION_INITIAL == 40
+    assert MEMORY_UNLOCK_SCORE == 55
+    assert "40/100" in affection_status_text(40)
+    assert "55" in affection_status_text(40)
 
 
 def test_affection_stage_changes_reply_behavior():
+    assert affection_stage(5)[0] == "冰封"
     assert affection_stage(30)[0] == "高冷傲娇"
     assert affection_stage(65)[0] == "亲近"
     assert affection_stage(90)[0] == "十分亲密"
+    assert "2到8个汉字" in affection_prompt(5)
     assert "1到2句" in affection_prompt(30)
     assert "主动接一个自然的小问题" in affection_prompt(65)
     assert "排他" in affection_prompt(90)
@@ -40,9 +42,14 @@ def test_rule_based_affection_caps_positive_and_negative():
     assert neutral.delta == 0
 
 
-def test_positive_feedback_requires_previous_bot_reply():
-    assert rule_based_affection("谢谢，回答得很好", "").delta == 0
-    assert rule_based_affection("谢谢，回答得很好", "上一轮回答").delta > 0
+def test_positive_feedback_can_progress_without_reply_segment():
+    assert rule_based_affection("谢谢，回答得很好", "").delta == 3
+    assert rule_based_affection("好可爱，晚安", "").delta == 1
+
+
+def test_more_realistic_insults_have_immediate_penalties():
+    assert rule_based_affection("你这个傻屌机器人", "").delta == -10
+    assert rule_based_affection("臭机器人，真蠢", "").delta <= -5
 
 
 def test_affection_change_text_reports_real_applied_delta():
