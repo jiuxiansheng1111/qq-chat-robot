@@ -177,9 +177,12 @@ def hostility_assessment(text: str) -> AffectionAssessment:
     compact = re.sub(r"\s+", "", str(text or "")).casefold()
     if not compact:
         return AffectionAssessment(0, "没有攻击性内容")
-    hostile = hostility_assessment(text)
-    if hostile.delta:
-        return hostile
+    if any(token in compact for token in _SEVERE_HOSTILITY):
+        return AffectionAssessment(-10, "明显恶意辱骂")
+    if any(token in compact for token in _MODERATE_HOSTILITY):
+        return AffectionAssessment(-5, "不友善或攻击性表达")
+    if any(token in compact for token in _MILD_HOSTILITY):
+        return AffectionAssessment(-2, "明显不满或轻度恶言")
     return AffectionAssessment(0, "没有攻击性内容")
 
 
@@ -188,12 +191,9 @@ def rule_based_affection(text: str, previous_bot_reply: str = "") -> AffectionAs
     if not compact:
         return AffectionAssessment(0, "没有可结算内容")
 
-    if any(token in compact for token in _SEVERE_HOSTILITY):
-        return AffectionAssessment(-10, "明显恶意辱骂")
-    if any(token in compact for token in _MODERATE_HOSTILITY):
-        return AffectionAssessment(-5, "不友善或攻击性表达")
-    if any(token in compact for token in _MILD_HOSTILITY):
-        return AffectionAssessment(-2, "明显不满或轻度恶言")
+    hostile = hostility_assessment(text)
+    if hostile.delta:
+        return hostile
 
     if any(token in compact for token in _STRONG_POSITIVE):
         return AffectionAssessment(5, "明确称赞或非常满意")
