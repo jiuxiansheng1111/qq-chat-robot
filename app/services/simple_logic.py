@@ -1,6 +1,3 @@
-import re
-
-
 _RPS_ALIASES = {
     "石头": "石头",
     "石": "石头",
@@ -32,8 +29,13 @@ def _extract_rps_choices(text: str) -> list[str]:
     lowered = str(text or "").casefold()
     matches: list[tuple[int, str]] = []
     for alias, normalized in _RPS_ALIASES.items():
-        for match in re.finditer(re.escape(alias), lowered):
-            matches.append((match.start(), normalized))
+        start = 0
+        while True:
+            index = lowered.find(alias, start)
+            if index < 0:
+                break
+            matches.append((index, normalized))
+            start = index + max(1, len(alias))
     matches.sort(key=lambda item: item[0])
 
     values: list[str] = []
@@ -45,7 +47,7 @@ def _extract_rps_choices(text: str) -> list[str]:
 
 def resolve_rps_logic(text: str) -> str | None:
     """Answer deterministic rock-paper-scissors comparison questions."""
-    compact = re.sub(r"\s+", "", str(text or "")).casefold()
+    compact = "".join(str(text or "").casefold().split())
     if not compact:
         return None
 
