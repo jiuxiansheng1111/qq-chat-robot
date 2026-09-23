@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import hashlib
 import hmac
 import logging
@@ -8,8 +9,11 @@ from collections import deque
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
+from io import BytesIO
+from pathlib import Path
 
 import httpx
+from PIL import Image
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from redis.exceptions import RedisError
@@ -1446,30 +1450,139 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
     )
 
 
-async def send_group_image(group_id: str, image_file: str, caption: str = "") -> None:
-    route = onebot_route(settings)
-    if not route.api_base:
-        logger.info("[dry-run] bot=%s group=%s image=%s", route.self_id, group_id, image_file[:80])
-        return
-    headers = {"Authorization": f"Bearer {route.access_token}"} if route.access_token else {}
-    message = [{"type": "image", "data": {"file": image_file}}]
-    if caption:
-        message.append(
-            {
-                "type": "text",
-                "data": {"text": f"\n{caption}"},
-            }
-        )
-    async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
+def _qq_safe_image_variant(image_file: str) -> str | None:
+    """Convert base64 media to a conservative JPEG for NapCat retry."""
+    if not image_file.startswith("base64://"):
+        return None
+    try:
+        raw = base64.b64decode(image_file.removeprefix("base64://"), validate=True)
+        with Image.open(BytesIO(raw)) as source:
+            try:
+                source.seek(0)
+            except EOFError:
+                pass
+            image = source.convert("RGB")
+            image.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
+            output = BytesIO()
+            image.save(output, format="JPEG", quality=82, optimize=True)
+            payload = output.getvalue()
+            if len(payload) > 2 * 1024 * 1024:
+                image.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+                output = BytesIO()
+                image.save(output, format="JPEG", quality=72, optimize=True)
+                payload = output.getvalue()
+    except (ValueError, OSError):
+        return None
+    return "base64://" + base64.b64encode(payload).decode()
+
+
+def _persist_outgoing_image(image_file: str) -> str | None:
+    """Persist a normalized base64 image so same-host NapCat can retry by file URI."""
+    if not image_file.startswith("base64://"):
+        return None
+    try:
+        raw = base64.b64decode(image_file.removeprefix("base64://"), validate=True)
+        digest = hashlib.sha256(raw).hexdigest()[:20]
+        base_dir = Path(settings.database_path).expanduser().resolve().parent
+        media_dir = base_dir / "outgoing_media"
+        media_dir.mkdir(parents=True, exist_ok=True)
+        path = media_dir / f"{digest}.jpg"
+        if not path.exists():
+            path.write_bytes(raw)
+        return path.as_uri()
+    except (ValueError, OSError):
+        return None
+
+
+async def _send_group_image_once(
+    group_id: str,
+    image_file: str,
+    *,
+    route,
+    headers: dict[str, str],
+) -> None:
+    async with httpx.AsyncClient(timeout=25, trust_env=False) as client:
         response = await client.post(
             f"{route.api_base.rstrip('/')}/send_group_msg",
             headers=headers,
-            json={"group_id": group_id, "message": message},
+            json={
+                "group_id": group_id,
+                "message": [{"type": "image", "data": {"file": image_file}}],
+            },
         )
         response.raise_for_status()
         payload = response.json()
     if payload.get("status") != "ok":
-        raise RuntimeError(payload.get("wording") or "OneBot image send failed")
+        detail = (
+            payload.get("wording")
+            or payload.get("message")
+            or "unknown OneBot image error"
+        )
+        raise RuntimeError(
+            "OneBot image send failed: "
+            f"retcode={payload.get('retcode')}, status={payload.get('status')}, "
+            f"detail={detail}"
+        )
+
+
+async def send_group_image(group_id: str, image_file: str, caption: str = "") -> None:
+    route = onebot_route(settings)
+    if not route.api_base:
+        logger.info(
+            "[dry-run] bot=%s group=%s image=%s",
+            route.self_id,
+            group_id,
+            image_file[:80],
+        )
+        return
+    headers = (
+        {"Authorization": f"Bearer {route.access_token}"}
+        if route.access_token
+        else {}
+    )
+
+    candidates = [image_file]
+    normalized = _qq_safe_image_variant(image_file)
+    if normalized and normalized != image_file:
+        candidates.append(normalized)
+        file_uri = _persist_outgoing_image(normalized)
+        if file_uri:
+            candidates.append(file_uri)
+
+    last_error: Exception | None = None
+    for index, candidate in enumerate(dict.fromkeys(candidates), start=1):
+        try:
+            await _send_group_image_once(
+                group_id,
+                candidate,
+                route=route,
+                headers=headers,
+            )
+            if index > 1:
+                logger.info(
+                    "image send recovered on fallback %s/%s for group %s",
+                    index,
+                    len(candidates),
+                    group_id,
+                )
+            if caption:
+                try:
+                    await send_group_message(group_id, caption)
+                except (RuntimeError, httpx.HTTPError) as exc:
+                    logger.warning("image caption send failed after image success: %s", exc)
+            return
+        except (RuntimeError, httpx.HTTPError) as exc:
+            last_error = exc
+            logger.warning(
+                "image send attempt %s/%s failed: %s",
+                index,
+                len(candidates),
+                exc,
+            )
+            if index < len(candidates):
+                await asyncio.sleep(0.35 * index)
+
+    raise RuntimeError(str(last_error or "OneBot image send failed after all fallbacks"))
 
 
 async def send_group_music_card(group_id: str, track: MusicTrack) -> None:
