@@ -1384,142 +1384,173 @@ async def llm_confirm_ultraman_image_candidate(
     return result
 
 
+_ultraman_prefetch_tasks: set[asyncio.Task] = set()
+
+
+def _ultraman_image_cache_path(hero) -> Path:
+    cache_dir = Path(settings.ultraman_image_cache_dir).expanduser().resolve()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(hero.name.encode("utf-8")).hexdigest()[:24]
+    return cache_dir / f"{digest}.img"
+
+
+def _load_ultraman_image_cache(hero) -> str | None:
+    path = _ultraman_image_cache_path(hero)
+    if not path.exists():
+        return None
+    try:
+        raw = path.read_bytes()
+        if not raw:
+            return None
+        with Image.open(BytesIO(raw)) as decoded:
+            width, height = decoded.size
+            if width < 160 or height < 160:
+                return None
+        return "base64://" + base64.b64encode(raw).decode()
+    except (OSError, ValueError):
+        return None
+
+
+def _save_ultraman_image_cache(hero, image_file: str) -> None:
+    if not image_file.startswith("base64://"):
+        return
+    try:
+        raw = base64.b64decode(image_file.removeprefix("base64://"), validate=True)
+        with Image.open(BytesIO(raw)) as decoded:
+            width, height = decoded.size
+            if width < 160 or height < 160:
+                return
+        path = _ultraman_image_cache_path(hero)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_bytes(raw)
+        tmp.replace(path)
+    except (OSError, ValueError):
+        return
+
+
+def _ultraman_placeholder_image(hero) -> str:
+    """Always provide a renderable image even when every remote source is down."""
+    width, height = 900, 1200
+    image = Image.new("RGB", (width, height), (8, 14, 30))
+    pixels = image.load()
+    for y in range(height):
+        shade = int(22 + 42 * (y / height))
+        for x in range(width):
+            pixels[x, y] = (
+                min(255, 8 + shade // 3),
+                min(255, 14 + shade // 2),
+                min(255, 30 + shade),
+            )
+    output = BytesIO()
+    image.save(output, format="JPEG", quality=88, optimize=True)
+    return "base64://" + base64.b64encode(output.getvalue()).decode()
+
+
+async def _resolve_ultraman_source(hero, source_name: str, resolver) -> str:
+    result = await resolver()
+    if isinstance(result, str):
+        image = result
+    elif result is not None:
+        image = result.data
+    else:
+        raise RuntimeError(f"{source_name} no match")
+    _save_ultraman_image_cache(hero, image)
+    logger.info("Ultraman image resolved from %s for %s", source_name, hero.name)
+    return image
+
+
+def _track_ultraman_prefetch(task: asyncio.Task) -> None:
+    _ultraman_prefetch_tasks.add(task)
+    task.add_done_callback(_ultraman_prefetch_tasks.discard)
+
+
 async def resolve_ultraman_card_image(hero, llm=None) -> str:
-    """Resolve a reliable image without letting LLM availability become a hard gate.
+    """Resolve a hero image with a strict response deadline and persistent cache.
 
-    Strong deterministic sources (official exact mapping and exact official search)
-    are returned directly. Encyclopedia candidates are already metadata-validated;
-    an explicit LLM REJECT can veto them, but LLM timeout/UNSURE does not discard
-    otherwise valid evidence. If all deterministic sources fail, the LLM may expand
-    search aliases, but it never invents an image URL.
+    All independent sources race in parallel instead of accumulating their
+    individual timeouts. If the deadline expires, unfinished searches keep
+    warming the cache in the background while the caller receives a guaranteed
+    renderable card immediately.
     """
-    base_aliases = ultraman_image_aliases(hero)
+    cached = _load_ultraman_image_cache(hero)
+    if cached is not None:
+        logger.info("Ultraman image cache hit for %s", hero.name)
+        return cached
 
-    try:
-        official = await official_ultraman_image(hero, settings)
-    except (RuntimeError, httpx.HTTPError) as exc:
-        logger.info(
-            "direct official Ultraman image unavailable for %s; trying encyclopedia: %s",
-            hero.name,
-            exc,
-        )
-    else:
-        # The program has already bound this image to the exact official hero/form.
-        # Do not let an LLM outage or wording variation invalidate official evidence.
-        return official
-
-    try:
-        encyclopedia = await encyclopedia_ultraman_image(
-            hero.name,
-            base_aliases,
-            settings,
-        )
-    except (RuntimeError, httpx.HTTPError, ValueError) as exc:
-        logger.info(
-            "encyclopedia Ultraman image unavailable for %s; trying official search: %s",
-            hero.name,
-            exc,
-        )
-    else:
-        verdict = await llm_confirm_ultraman_image_candidate(
-            hero,
-            llm,
-            source=encyclopedia.source,
-            label=encyclopedia.label,
-            page_url=encyclopedia.page_url,
-        )
-        if verdict is not False:
-            logger.info(
-                "Ultraman image resolved from %s for %s (%s); llm=%s",
-                encyclopedia.source,
-                hero.name,
-                encyclopedia.page_url,
-                "match" if verdict is True else "unavailable/unsure",
-            )
-            return encyclopedia.data
-        logger.info(
-            "LLM explicitly rejected encyclopedia Ultraman image candidate for %s from %s (%s)",
-            hero.name,
-            encyclopedia.source,
-            encyclopedia.page_url,
-        )
-
-    try:
-        official_search = await official_ultraman_search_image(hero, settings)
-    except (RuntimeError, httpx.HTTPError, ValueError) as official_exc:
-        logger.info(
-            "official exact search unavailable for %s; trying LLM-assisted search terms: %s",
-            hero.name,
-            official_exc,
-        )
-    else:
-        return official_search
-
-    if llm is not None:
-        try:
-            search_term_answer = await llm.ask(
-                [
-                    {
-                        "role": "system",
-                        "content": (
-                            "你只负责为奥特曼角色或独立形态生成图片搜索关键词。"
-                            "禁止编造图片URL。输出3到6个搜索短语，每行一个；"
-                            "优先包含官方中文名、常见中文别名、日文名或英文名，"
-                            "并且每个短语都必须明确指向同一个角色/形态，不能只写泛化的“强力型/闪耀型”。"
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            f"目标：{hero.name}\n"
-                            f"已知别名：{'、'.join(base_aliases)}\n"
-                            "前面的官方/百科/图片搜索候选均失败或被最终复核拒绝。"
-                            "请生成可用于百度、Bing、Wikipedia、圆谷官网搜索的精确图片搜索短语。"
-                        ),
-                    },
-                ]
-            )
-            llm_aliases: list[str] = []
-            for row in search_term_answer.splitlines():
-                term = re.sub(r"^[-*•\\d.、)）\\s]+", "", row).strip()
-                term = term.strip('"').strip("'").strip("“").strip("”")
-                if 2 <= len(term) <= 100 and term not in llm_aliases:
-                    llm_aliases.append(term)
-            if llm_aliases:
-                assisted_aliases = tuple(dict.fromkeys((*base_aliases, *llm_aliases[:6])))
-                assisted = await encyclopedia_ultraman_image(
-                    hero.name,
-                    assisted_aliases,
-                    settings,
-                )
-                assisted_verdict = await llm_confirm_ultraman_image_candidate(
-                    hero,
-                    llm,
-                    source=f"{assisted.source}（LLM辅助搜索词）",
-                    label=assisted.label,
-                    page_url=assisted.page_url,
-                )
-                if assisted_verdict is not False:
-                    logger.info(
-                        "Ultraman image resolved with LLM-assisted search terms from %s for %s (%s)",
-                        assisted.source,
-                        hero.name,
-                        assisted.page_url,
-                    )
-                    return assisted.data
-                logger.info(
-                    "LLM explicitly rejected its assisted Ultraman image candidate for %s from %s",
-                    hero.name,
-                    assisted.source,
-                )
-        except (LLMError, RuntimeError, ValueError, httpx.HTTPError) as exc:
-            logger.info("LLM-assisted Ultraman image search failed for %s: %s", hero.name, exc)
-
-    raise RuntimeError(
-        f"没有找到“{hero.name}”的可用代表图"
-        "（已尝试圆谷、百度百科、Wikipedia/Wikimedia、百度/Bing 图片搜索；"
-        "必要时会让 LLM 生成更精确搜索词，但 LLM 不可用不会否掉可靠候选）"
+    aliases = ultraman_image_aliases(hero)
+    source_factories = (
+        (
+            "圆谷官方直连",
+            lambda: official_ultraman_image(hero, settings),
+        ),
+        (
+            "圆谷官方精确搜索",
+            lambda: official_ultraman_search_image(hero, settings),
+        ),
+        (
+            "百度百科",
+            lambda: baidu_baike_ultraman_image(hero.name, aliases, settings),
+        ),
+        (
+            "Wikipedia/Wikimedia",
+            lambda: wikipedia_ultraman_image(hero.name, aliases, settings),
+        ),
+        (
+            "百度图片",
+            lambda: baidu_image_search_ultraman_image(hero.name, aliases, settings),
+        ),
+        (
+            "Bing图片",
+            lambda: bing_image_search_ultraman_image(hero.name, aliases, settings),
+        ),
+        (
+            "网页角色页",
+            lambda: web_page_ultraman_image(hero.name, aliases, settings),
+        ),
+        (
+            "Bing精确最终兜底",
+            lambda: bing_image_relaxed_ultraman_image(hero.name, aliases, settings),
+        ),
     )
+
+    tasks = [
+        asyncio.create_task(
+            _resolve_ultraman_source(hero, source_name, resolver)
+        )
+        for source_name, resolver in source_factories
+    ]
+    for task in tasks:
+        _track_ultraman_prefetch(task)
+
+    timeout = max(
+        2.0,
+        min(float(settings.ultraman_image_resolve_timeout_seconds), 15.0),
+    )
+    try:
+        async with asyncio.timeout(timeout):
+            for completed in asyncio.as_completed(tasks):
+                try:
+                    return await completed
+                except (RuntimeError, ValueError, OSError, httpx.HTTPError) as exc:
+                    logger.debug(
+                        "Ultraman parallel image source failed for %s: %s",
+                        hero.name,
+                        exc,
+                    )
+    except TimeoutError:
+        logger.warning(
+            "Ultraman image fast deadline %.1fs reached for %s; "
+            "returning card placeholder while remaining sources warm cache",
+            timeout,
+            hero.name,
+        )
+
+    # Do not cancel the unfinished source tasks: they can still populate the
+    # persistent cache so the next request for the same form becomes instant.
+    cached = _load_ultraman_image_cache(hero)
+    if cached is not None:
+        return cached
+    return _ultraman_placeholder_image(hero)
 
 
 def _qq_safe_image_variant(image_file: str) -> str | None:
