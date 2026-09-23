@@ -25,8 +25,12 @@ DIRECTIONAL_VERBS = (
 ROLE_WORDS = (
     "爸爸",
     "父亲",
+    "老爸",
+    "爸",
     "妈妈",
     "母亲",
+    "老妈",
+    "妈",
     "儿子",
     "女儿",
     "哥哥",
@@ -45,6 +49,14 @@ ROLE_WORDS = (
     "老婆",
     "老公",
 )
+ROLE_ALIASES = {
+    "父亲": "爸爸",
+    "老爸": "爸爸",
+    "爸": "爸爸",
+    "母亲": "妈妈",
+    "老妈": "妈妈",
+    "妈": "妈妈",
+}
 
 
 @dataclass(frozen=True)
@@ -73,21 +85,39 @@ def _key(value: str) -> str:
     return _clean(value).casefold()
 
 
-def parse_memory_relation(content: str) -> MemoryRelation | None:
+def _canonical_role(value: str) -> str:
+    role = _clean(value)
+    return ROLE_ALIASES.get(role, role)
+
+
+def _split_relation_entities(value: str) -> tuple[str, ...]:
+    parts = [
+        _clean(item)
+        for item in re.split(r"(?:跟|和|与|以及|及|、|/|＆|&)", _clean(value))
+    ]
+    return tuple(dict.fromkeys(item for item in parts if item))
+
+
+def parse_memory_relations(content: str) -> tuple[MemoryRelation, ...]:
     text = _clean(content, 300)
     if not text:
-        return None
+        return ()
+
+    role_match = re.match(
+        rf"^(.+?)是(.+?)的({'|'.join(ROLE_WORDS)})$",
+        text,
+    )
+    if role_match:
+        subject = _clean(role_match.group(1))
+        role = _canonical_role(role_match.group(3))
+        owners = _split_relation_entities(role_match.group(2))
+        if subject and owners:
+            return tuple(
+                MemoryRelation(subject, role, owner, "role")
+                for owner in owners
+            )
 
     patterns = (
-        (
-            rf"^(.+?)是(.+?)的({'|'.join(ROLE_WORDS)})$",
-            lambda m: MemoryRelation(
-                _clean(m.group(1)),
-                _clean(m.group(3)),
-                _clean(m.group(2)),
-                "role",
-            ),
-        ),
         (
             r"^(.+?)的名字是(.+)$",
             lambda m: MemoryRelation(
@@ -140,8 +170,13 @@ def parse_memory_relation(content: str) -> MemoryRelation | None:
             continue
         relation = factory(match)
         if relation.subject and relation.object:
-            return relation
-    return None
+            return (relation,)
+    return ()
+
+
+def parse_memory_relation(content: str) -> MemoryRelation | None:
+    relations = parse_memory_relations(content)
+    return relations[0] if relations else None
 
 
 def rewrite_first_person_identity_question(question: str, speaker_name: str) -> str:
@@ -219,7 +254,8 @@ def resolve_group_memory_question(
     relations = [
         relation
         for item in memories
-        if (relation := parse_memory_relation(item)) is not None
+        if not _clean(item).startswith(("我是", "我叫", "我的", "你是", "你叫", "你的"))
+        for relation in parse_memory_relations(item)
     ]
     if not relations:
         return None
@@ -269,16 +305,31 @@ def resolve_group_memory_question(
         text,
     )
     if match:
-        owner, role = _clean(match.group(1)), _clean(match.group(2))
-        answers = tuple(
-            relation.subject
-            for relation in relations
-            if relation.kind == "role"
-            and relation.predicate == role
-            and _key(relation.object) == _key(owner)
-        )
-        if answers:
-            return MemoryAnswer("role", "", role, owner, answers[:5])
+        owner_text = _clean(match.group(1))
+        owners = _split_relation_entities(owner_text) or (owner_text,)
+        role = _canonical_role(match.group(2))
+        candidate_sets: list[set[str]] = []
+        labels: dict[str, str] = {}
+        for owner in owners:
+            matches = {
+                _key(relation.subject)
+                for relation in relations
+                if relation.kind == "role"
+                and _canonical_role(relation.predicate) == role
+                and _key(relation.object) == _key(owner)
+            }
+            for relation in relations:
+                if relation.kind == "role" and _key(relation.subject) in matches:
+                    labels.setdefault(_key(relation.subject), relation.subject)
+            if not matches:
+                candidate_sets = []
+                break
+            candidate_sets.append(matches)
+        if candidate_sets:
+            common = set.intersection(*candidate_sets)
+            answers = tuple(labels[key] for key in sorted(common) if key in labels)
+            if answers:
+                return MemoryAnswer("role", "", role, owner_text, answers[:5])
 
     return None
 
@@ -341,25 +392,27 @@ def format_group_memory_answer(answer: MemoryAnswer, question: str) -> str:
 def group_memory_reasoning_hints(memories: list[str], limit: int = 20) -> str:
     hints: list[str] = []
     for item in memories:
-        relation = parse_memory_relation(item)
-        if relation is None:
+        if _clean(item).startswith(("我是", "我叫", "我的", "你是", "你叫", "你的")):
             continue
-        if relation.kind == "identity":
-            hints.append(
-                f"- 可逆对应：{relation.subject} ↔ {relation.object}。"
-                f"问“{relation.object}是谁/谁是{relation.object}”时可反推出{relation.subject}。"
-            )
-        elif relation.kind == "directional":
-            hints.append(
-                f"- 定向关系：{relation.subject}{relation.predicate}{relation.object}；"
-                f"可回答“谁{relation.predicate}{relation.object}”和"
-                f"“{relation.subject}{relation.predicate}谁/什么”。"
-            )
-        else:
-            hints.append(
-                f"- 关系方向：{relation.subject}是{relation.object}的{relation.predicate}；"
-                f"可回答“{relation.object}的{relation.predicate}是谁”，但不要颠倒亲属/关系方向。"
-            )
+        for relation in parse_memory_relations(item):
+            if relation.kind == "identity":
+                hints.append(
+                    f"- 可逆对应：{relation.subject} ↔ {relation.object}。"
+                    f"问“{relation.object}是谁/谁是{relation.object}”时可反推出{relation.subject}。"
+                )
+            elif relation.kind == "directional":
+                hints.append(
+                    f"- 定向关系：{relation.subject}{relation.predicate}{relation.object}；"
+                    f"可回答“谁{relation.predicate}{relation.object}”和"
+                    f"“{relation.subject}{relation.predicate}谁/什么”。"
+                )
+            else:
+                hints.append(
+                    f"- 关系方向：{relation.subject}是{relation.object}的{relation.predicate}；"
+                    f"可回答“{relation.object}的{relation.predicate}是谁”，但不要颠倒亲属/关系方向。"
+                )
+            if len(hints) >= max(1, limit):
+                break
         if len(hints) >= max(1, limit):
             break
     if not hints:
