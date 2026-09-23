@@ -1193,3 +1193,65 @@ def test_zero_affection_still_replies_coldly_and_allows_status(tmp_path):
         settings.database_path = previous_database_path
         settings.onebot_api_base = previous_onebot_api_base
         settings.onebot_self_id = previous_self_id
+
+
+
+def test_intimacy_actions_unlock_at_sixty_and_do_not_repeat_farm(tmp_path):
+    previous_database_path = settings.database_path
+    previous_onebot_api_base = settings.onebot_api_base
+    previous_self_id = settings.onebot_self_id
+    settings.database_path = str(tmp_path / "affection-actions.db")
+    settings.onebot_api_base = ""
+    settings.onebot_self_id = "bot-1"
+
+    def action_event(message_id: str):
+        payload = event("摸摸头", user_id="action-user")
+        payload["self_id"] = "bot-1"
+        payload["message_id"] = message_id
+        payload["message"] = [
+            {"type": "at", "data": {"qq": "bot-1"}},
+            {"type": "text", "data": {"text": "摸摸头"}},
+        ]
+        return payload
+
+    try:
+        with TestClient(app) as client:
+            client.portal.call(
+                client.app.state.db.reset_affection,
+                "integration-group",
+                "action-user",
+                59,
+            )
+            locked = post_event(client, action_event("action-locked")).json()
+            assert locked["source"] == "affection_action_locked"
+            assert client.portal.call(
+                client.app.state.db.affection_score,
+                "integration-group",
+                "action-user",
+            ) == 59
+
+            client.portal.call(
+                client.app.state.db.reset_affection,
+                "integration-group",
+                "action-user",
+                60,
+            )
+            unlocked = post_event(client, action_event("action-unlocked")).json()
+            assert unlocked["source"] == "affection_action"
+            assert client.portal.call(
+                client.app.state.db.affection_score,
+                "integration-group",
+                "action-user",
+            ) == 61
+
+            repeated = post_event(client, action_event("action-repeat")).json()
+            assert repeated["source"] == "affection_action"
+            assert client.portal.call(
+                client.app.state.db.affection_score,
+                "integration-group",
+                "action-user",
+            ) == 61
+    finally:
+        settings.database_path = previous_database_path
+        settings.onebot_api_base = previous_onebot_api_base
+        settings.onebot_self_id = previous_self_id
