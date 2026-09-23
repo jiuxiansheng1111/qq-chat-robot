@@ -1,6 +1,6 @@
 import pytest
 
-import app.services.slang as slang
+from app.services import slang
 from app.services.web_search import SearchResult
 
 
