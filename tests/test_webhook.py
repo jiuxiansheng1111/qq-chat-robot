@@ -1009,49 +1009,96 @@ def test_ultraman_followup_reuses_last_resolved_form(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_ultraman_image_resolution_uses_encyclopedia_after_official_failure(
+async def test_ultraman_image_resolution_returns_first_parallel_success(
     monkeypatch,
+    tmp_path,
 ):
     hero = type("Hero", (), {"name": "测试形态"})()
+    previous_cache_dir = settings.ultraman_image_cache_dir
+    previous_timeout = settings.ultraman_image_resolve_timeout_seconds
+    settings.ultraman_image_cache_dir = str(tmp_path / "ultra-cache")
+    settings.ultraman_image_resolve_timeout_seconds = 0.2
 
-    async def no_official_image(*args, **kwargs):
-        raise RuntimeError("no official artwork")
+    output = BytesIO()
+    Image.new("RGB", (640, 900), (50, 80, 120)).save(output, format="JPEG")
+    expected = "base64://" + base64.b64encode(output.getvalue()).decode()
 
-    async def encyclopedia_image(name, aliases, settings):
+    async def fail(*args, **kwargs):
+        raise RuntimeError("source unavailable")
+
+    async def success(name, aliases, runtime_settings):
         assert name == "测试形态"
         return EncyclopediaImage(
-            data="base64://ZW5jeWNsb3BlZGlh",
+            data=expected,
             source="百度百科",
             page_url="https://baike.baidu.com/item/test",
             label="测试形态",
         )
 
-    monkeypatch.setattr("app.main.official_ultraman_image", no_official_image)
-    monkeypatch.setattr("app.main.encyclopedia_ultraman_image", encyclopedia_image)
+    monkeypatch.setattr("app.main.official_ultraman_image", fail)
+    monkeypatch.setattr("app.main.official_ultraman_search_image", fail)
+    monkeypatch.setattr("app.main.baidu_baike_ultraman_image", success)
+    monkeypatch.setattr("app.main.wikipedia_ultraman_image", fail)
+    monkeypatch.setattr("app.main.baidu_image_search_ultraman_image", fail)
+    monkeypatch.setattr("app.main.bing_image_search_ultraman_image", fail)
+    monkeypatch.setattr("app.main.web_page_ultraman_image", fail)
+    monkeypatch.setattr("app.main.bing_image_relaxed_ultraman_image", fail)
     monkeypatch.setattr("app.main.ultraman_image_aliases", lambda hero: (hero.name,))
 
-    result = await resolve_ultraman_card_image(hero)
-    assert result == "base64://ZW5jeWNsb3BlZGlh"
+    try:
+        result = await resolve_ultraman_card_image(hero)
+        assert result == expected
+
+        async def should_not_run(*args, **kwargs):
+            raise AssertionError("cache hit should not call network sources")
+
+        monkeypatch.setattr("app.main.baidu_baike_ultraman_image", should_not_run)
+        cached = await resolve_ultraman_card_image(hero)
+        assert cached == expected
+    finally:
+        settings.ultraman_image_cache_dir = previous_cache_dir
+        settings.ultraman_image_resolve_timeout_seconds = previous_timeout
 
 
 @pytest.mark.asyncio
-async def test_ultraman_image_resolution_fails_when_official_and_encyclopedia_fail(
+async def test_ultraman_image_resolution_has_deadline_and_always_returns_image(
     monkeypatch,
+    tmp_path,
 ):
     hero = type("Hero", (), {"name": "测试形态"})()
+    previous_cache_dir = settings.ultraman_image_cache_dir
+    previous_timeout = settings.ultraman_image_resolve_timeout_seconds
+    settings.ultraman_image_cache_dir = str(tmp_path / "ultra-cache-timeout")
+    settings.ultraman_image_resolve_timeout_seconds = 0.05
 
-    async def no_official_image(*args, **kwargs):
-        raise RuntimeError("no official artwork")
+    async def slow(*args, **kwargs):
+        await __import__("asyncio").sleep(0.3)
+        raise RuntimeError("too slow")
 
-    async def no_encyclopedia_image(*args, **kwargs):
-        raise RuntimeError("no encyclopedia artwork")
-
-    monkeypatch.setattr("app.main.official_ultraman_image", no_official_image)
-    monkeypatch.setattr("app.main.encyclopedia_ultraman_image", no_encyclopedia_image)
+    for name in (
+        "official_ultraman_image",
+        "official_ultraman_search_image",
+        "baidu_baike_ultraman_image",
+        "wikipedia_ultraman_image",
+        "baidu_image_search_ultraman_image",
+        "bing_image_search_ultraman_image",
+        "web_page_ultraman_image",
+        "bing_image_relaxed_ultraman_image",
+    ):
+        monkeypatch.setattr(f"app.main.{name}", slow)
     monkeypatch.setattr("app.main.ultraman_image_aliases", lambda hero: (hero.name,))
 
-    with pytest.raises(RuntimeError, match="可用代表图"):
-        await resolve_ultraman_card_image(hero)
+    try:
+        result = await resolve_ultraman_card_image(hero)
+        assert result.startswith("base64://")
+        raw = base64.b64decode(result.removeprefix("base64://"))
+        with Image.open(BytesIO(raw)) as decoded:
+            assert decoded.width >= 160
+            assert decoded.height >= 160
+    finally:
+        settings.ultraman_image_cache_dir = previous_cache_dir
+        settings.ultraman_image_resolve_timeout_seconds = previous_timeout
+
 
 
 def test_low_affection_blocks_new_identity_memory(tmp_path):
