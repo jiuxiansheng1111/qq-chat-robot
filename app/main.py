@@ -448,9 +448,9 @@ def extract_group_memory(event: dict, text: str) -> str | None:
     # Natural variants such as “记住我是…” / “让你记住我是…”.
     # Keep the leading 我/你 so qualify_group_memory can bind it to the
     # speaker or current bot identity before persistence.
-    if text.startswith("记住我") or text.startswith("记住你"):
+    if text.startswith(("记住我", "记住你")):
         return text[len("记住") :].strip(" ，,：:")[:300]
-    if text.startswith("让你记住我") or text.startswith("让你记住你"):
+    if text.startswith(("让你记住我", "让你记住你")):
         return text[len("让你记住") :].strip(" ，,：:")[:300]
     return None
 
@@ -961,9 +961,7 @@ def affection_zero_allowed(text: str, event: dict) -> bool:
         "/记忆状态", "/memory status",
     }:
         return True
-    if extract_group_memory_deletion(event, text) is not None:
-        return True
-    return False
+    return extract_group_memory_deletion(event, text) is not None
 
 
 def webhook_token_valid(
