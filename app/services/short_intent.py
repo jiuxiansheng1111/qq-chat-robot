@@ -161,10 +161,10 @@ def canonicalize_short_command(text: str, *, addressed: bool) -> str:
     # the payload so existing extractors still receive the user's query.
     stripped = _strip_polite_prefix(raw.lstrip("/"))
     prefix_patterns = (
-        (r"^(?:搜一下|搜下|搜索一下|搜索下|查一下|查下|查|搜|帮我搜|帮我查)\s*(.+)$", "搜索"),
-        (r"^(?:翻译一下|翻译下|帮我翻译)\s*(.+)$", "翻译"),
-        (r"^(?:点一首|点首|来一首|来首|点歌一下)\s*(.+)$", "点歌"),
         (r"^(?:找个视频|找视频|搜个视频|搜视频|播放一下视频)\s*(.+)$", "播放视频"),
+        (r"^(?:点一首|点首|来一首|来首|点歌一下)\s*(.+)$", "点歌"),
+        (r"^(?:翻译一下|翻译下|帮我翻译)\s*(.+)$", "翻译"),
+        (r"^(?:搜一下|搜下|搜索一下|搜索下|查一下|查下|查|搜|帮我搜|帮我查)\s*(.+)$", "搜索"),
     )
     for pattern, command in prefix_patterns:
         match = re.match(pattern, stripped, re.IGNORECASE)
