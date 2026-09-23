@@ -1,3 +1,5 @@
+import pytest
+
 from app.services.affection import (
     AFFECTION_INITIAL,
     MEMORY_UNLOCK_SCORE,
@@ -6,6 +8,7 @@ from app.services.affection import (
     affection_prompt,
     affection_stage,
     affection_status_text,
+    assess_affection,
     rule_based_affection,
 )
 
@@ -57,3 +60,51 @@ def test_affection_change_text_reports_real_applied_delta():
     assert affection_change_text(98, 100, assessment) == (
         "♡ 好感度 +2（98→100）｜非常满意"
     )
+
+
+
+@pytest.mark.asyncio
+async def test_hostility_target_is_decided_by_llm():
+    class FakeLLM:
+        def __init__(self, verdict: str):
+            self.verdict = verdict
+
+        async def ask(self, messages):
+            return self.verdict
+
+    report = await assess_affection(
+        "小丛雨，有人骂你傻逼怎么办",
+        "",
+        FakeLLM("OTHER"),
+        check_hostility_target=True,
+        explicit_bot_mention=False,
+        persona_names=("小丛雨", "穗织幼刀姬"),
+    )
+    assert report.delta == 0
+
+    direct = await assess_affection(
+        "小丛雨你这个傻逼",
+        "",
+        FakeLLM("TARGET"),
+        check_hostility_target=True,
+        explicit_bot_mention=False,
+        persona_names=("小丛雨", "穗织幼刀姬"),
+    )
+    assert direct.delta == -10
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_named_hostility_does_not_penalize_when_llm_unavailable():
+    class BrokenLLM:
+        async def ask(self, messages):
+            raise RuntimeError("offline")
+
+    result = await assess_affection(
+        "小丛雨和别人说的那个傻逼到底是谁",
+        "",
+        BrokenLLM(),
+        check_hostility_target=True,
+        explicit_bot_mention=False,
+        persona_names=("小丛雨",),
+    )
+    assert result.delta == 0
