@@ -94,7 +94,12 @@ async def audit_one(hero, settings: Settings, semaphore: asyncio.Semaphore) -> A
             )
 
 
-async def run(report_path: Path, concurrency: int, require_all: bool) -> int:
+async def run(
+    report_path: Path,
+    concurrency: int,
+    require_all: bool,
+    forms_only: bool = False,
+) -> int:
     settings = Settings(_env_file=None)
     settings.media_timeout_seconds = min(float(settings.media_timeout_seconds), 12.0)
     settings.media_max_bytes = max(int(settings.media_max_bytes), 8 * 1024 * 1024)
@@ -167,9 +172,19 @@ def main() -> int:
     )
     parser.add_argument("--concurrency", type=int, default=3)
     parser.add_argument("--require-all", action="store_true")
+    parser.add_argument(
+        "--forms-only",
+        action="store_true",
+        help="Audit only independent form variants instead of the full roster",
+    )
     args = parser.parse_args()
     return asyncio.run(
-        run(Path(args.report), args.concurrency, args.require_all)
+        run(
+            Path(args.report),
+            args.concurrency,
+            args.require_all,
+            args.forms_only,
+        )
     )
 
 
