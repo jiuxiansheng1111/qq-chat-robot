@@ -212,6 +212,154 @@ class PluginContext:
     args: str = ""
 
 
+def _daily_news_timezone() -> ZoneInfo:
+    try:
+        return ZoneInfo(settings.daily_news_timezone)
+    except ZoneInfoNotFoundError:
+        logger.warning(
+            "Unknown daily news timezone %s; falling back to Asia/Shanghai",
+            settings.daily_news_timezone,
+        )
+        return ZoneInfo("Asia/Shanghai")
+
+
+async def build_daily_news_digest() -> str:
+    tz = _daily_news_timezone()
+    now = datetime.now(tz)
+    date_text = now.strftime("%Y年%m月%d日")
+    queries = (
+        f"{date_text} 今日热点 新闻 国内 国际",
+        f"{date_text} 科技 财经 社会 热点新闻",
+        f"{date_text} 国际 时事 热点 新闻",
+    )
+    jobs = [
+        search_web(query, limit=8, timeout=8)
+        for query in queries
+    ]
+    batches = await asyncio.gather(*jobs, return_exceptions=True)
+
+    unique: list[SearchResult] = []
+    seen_urls: set[str] = set()
+    seen_titles: set[str] = set()
+    for batch in batches:
+        if isinstance(batch, BaseException):
+            logger.info("daily news search source failed: %s", batch)
+            continue
+        for item in batch:
+            title_key = re.sub(r"\s+", "", item.title).casefold()
+            if (
+                not title_key
+                or item.url in seen_urls
+                or title_key in seen_titles
+            ):
+                continue
+            seen_urls.add(item.url)
+            seen_titles.add(title_key)
+            unique.append(item)
+            if len(unique) >= 5:
+                break
+        if len(unique) >= 5:
+            break
+
+    if len(unique) < 5:
+        try:
+            extra = await search_web(
+                f"{date_text} 新闻 热点",
+                limit=10,
+                timeout=8,
+            )
+        except (ValueError, RuntimeError, httpx.HTTPError):
+            extra = []
+        for item in extra:
+            title_key = re.sub(r"\s+", "", item.title).casefold()
+            if (
+                not title_key
+                or item.url in seen_urls
+                or title_key in seen_titles
+            ):
+                continue
+            seen_urls.add(item.url)
+            seen_titles.add(title_key)
+            unique.append(item)
+            if len(unique) >= 5:
+                break
+
+    if not unique:
+        raise RuntimeError("今日热点搜索没有返回可用结果")
+
+    lines = [
+        f"☀️ 小丛雨 · 今日热点｜{now.strftime('%Y-%m-%d')}",
+        "吾辈挑了 5 条今天值得扫一眼的消息：",
+    ]
+    for index, item in enumerate(unique[:5], 1):
+        host = (urlsplit(item.url).hostname or "来源").removeprefix("www.")
+        snippet = re.sub(r"\s+", " ", item.snippet).strip()
+        if len(snippet) > 90:
+            snippet = snippet[:87] + "..."
+        lines.append(
+            f"\n{index}. {item.title}\n"
+            f"   {snippet or '打开来源查看详情'}\n"
+            f"   来源：{host}\n"
+            f"   {item.url}"
+        )
+    return "\n".join(lines)
+
+
+async def broadcast_daily_news(app: FastAPI) -> None:
+    try:
+        digest = await build_daily_news_digest()
+    except (ValueError, RuntimeError, httpx.HTTPError) as exc:
+        logger.warning("daily noon news build failed: %s", exc)
+        return
+
+    groups = await app.state.db.active_group_ids(
+        settings.daily_news_group_lookback_days
+    )
+    if not groups:
+        logger.info("daily noon news skipped: no recently active groups")
+        return
+
+    for group_id in groups:
+        try:
+            await send_group_long_message(group_id, digest)
+        except (RuntimeError, httpx.HTTPError) as exc:
+            logger.warning(
+                "daily noon news send failed for group %s: %s",
+                group_id,
+                exc,
+            )
+        await asyncio.sleep(0.25)
+
+
+async def daily_news_loop(app: FastAPI) -> None:
+    tz = _daily_news_timezone()
+    hour = max(0, min(int(settings.daily_news_hour), 23))
+    minute = max(0, min(int(settings.daily_news_minute), 59))
+    while True:
+        now = datetime.now(tz)
+        next_run = now.replace(
+            hour=hour,
+            minute=minute,
+            second=0,
+            microsecond=0,
+        )
+        if next_run <= now:
+            next_run += timedelta(days=1)
+        sleep_seconds = max(1.0, (next_run - now).total_seconds())
+        logger.info(
+            "daily noon news scheduled for %s (%s)",
+            next_run.isoformat(),
+            settings.daily_news_timezone,
+        )
+        await asyncio.sleep(sleep_seconds)
+        try:
+            await broadcast_daily_news(app)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("daily noon news loop failed: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.validate_security()
@@ -266,6 +414,11 @@ async def lifespan(app: FastAPI):
         window_seconds=max(1, settings.rate_limit_notice_cooldown_seconds),
     )
     app.state.cat_cache_task = asyncio.create_task(maintain_cat_gif_cache(settings))
+    app.state.daily_news_task = (
+        asyncio.create_task(daily_news_loop(app))
+        if settings.daily_news_enabled
+        else None
+    )
     if settings.redis_url:
         try:
             redis_ingress_limiter = RedisRateLimiter(
@@ -322,6 +475,19 @@ async def lifespan(app: FastAPI):
             app.state.cat_cache_task.cancel()
             with suppress(asyncio.CancelledError):
                 await app.state.cat_cache_task
+        if (
+            app.state.daily_news_task is not None
+            and not app.state.daily_news_task.done()
+        ):
+            app.state.daily_news_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await app.state.daily_news_task
+        for task in list(_ultraman_prefetch_tasks):
+            if not task.done():
+                task.cancel()
+        for task in list(_ultraman_prefetch_tasks):
+            with suppress(asyncio.CancelledError, RuntimeError, ValueError, OSError):
+                await task
         await app.state.llm.aclose()
 
 
