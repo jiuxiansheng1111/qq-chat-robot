@@ -4,6 +4,7 @@ from app.services.group_memory_logic import (
     parse_memory_relation,
     resolve_group_memory_question,
     rewrite_first_person_identity_question,
+    rewrite_relation_pronouns,
 )
 
 
@@ -129,3 +130,30 @@ def test_legacy_unbound_first_person_memory_is_not_used_as_certain_fact():
         "drj跟hzh的老爸是谁",
         ["我是drj跟hzh的老爸"],
     ) is None
+
+
+
+def test_relation_pronouns_bind_to_speaker_and_bot_without_reversing():
+    assert rewrite_relation_pronouns("我的爸爸是谁", "狄", "小丛雨") == "狄的爸爸是谁"
+    assert rewrite_relation_pronouns("我喜欢谁", "狄", "小丛雨") == "狄喜欢谁"
+    assert rewrite_relation_pronouns("谁喜欢我", "狄", "小丛雨") == "谁喜欢狄"
+    assert rewrite_relation_pronouns("你的朋友是谁", "狄", "小丛雨") == "小丛雨的朋友是谁"
+    assert rewrite_relation_pronouns("谁讨厌你", "狄", "小丛雨") == "谁讨厌小丛雨"
+
+
+def test_bound_relation_question_resolves_correct_subject_object():
+    memories = ["小明是狄的爸爸", "狄喜欢猫", "小红喜欢狄"]
+    parent_q = rewrite_relation_pronouns("我的爸爸是谁", "狄", "小丛雨")
+    parent = resolve_group_memory_question(parent_q, memories)
+    assert parent is not None
+    assert parent.answers == ("小明",)
+
+    forward_q = rewrite_relation_pronouns("我喜欢谁", "狄", "小丛雨")
+    forward = resolve_group_memory_question(forward_q, memories)
+    assert forward is not None
+    assert forward.answers == ("猫",)
+
+    inverse_q = rewrite_relation_pronouns("谁喜欢我", "狄", "小丛雨")
+    inverse = resolve_group_memory_question(inverse_q, memories)
+    assert inverse is not None
+    assert inverse.answers == ("小红",)
