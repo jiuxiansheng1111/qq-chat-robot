@@ -31,6 +31,14 @@ from app.plugins.media import (
     random_real_pig_image,
 )
 from app.plugins.registry import registry
+from app.services.affection import (
+    AFFECTION_INITIAL,
+    MEMORY_UNLOCK_SCORE,
+    affection_change_text,
+    affection_prompt,
+    affection_status_text,
+    assess_affection,
+)
 from app.services.anime_character import (
     ANIME_CHARACTER_BY_NAME,
     ANIME_CHARACTER_ROSTER,
@@ -136,6 +144,15 @@ MEMBER_IDENTITY_CLEAR_COMMANDS = frozenset({
 MEMBER_IDENTITY_ADMIN_CLEAR_COMMANDS = frozenset({
     "/清除成员身份", "清除成员身份", "/删除成员身份", "删除成员身份"
 })
+AFFECTION_VIEW_COMMANDS = frozenset({
+    "/好感度", "好感度", "查看好感度", "/查看好感度", "小丛雨好感度", "/小丛雨好感度"
+})
+AFFECTION_HISTORY_COMMANDS = frozenset({
+    "/好感度记录", "好感度记录", "好感变化", "/好感变化"
+})
+AFFECTION_RESET_COMMANDS = frozenset({
+    "/重置好感度", "重置好感度"
+})
 POSSESSION_STYLE_CLEAR_COMMANDS = frozenset(
     {"/删除语气", "删除语气", "/清除语气", "清除语气", "忘记这个人的语气"}
 )
@@ -205,6 +222,7 @@ async def lifespan(app: FastAPI):
     app.state.group_history_bootstrapped = set()
     app.state.recent_ultraman_queries = {}
     app.state.recent_anime_character_queries = {}
+    app.state.last_murasame_replies = {}
     app.state.translation_cache = {}
     app.state.deduplicator = EventDeduplicator(settings.event_dedupe_ttl_seconds)
     registry.load_modules(settings.plugin_modules)
@@ -929,6 +947,18 @@ async def resolve_music_identity(
     return parse_music_identity(response), results
 
 
+def affection_zero_allowed(text: str, event: dict) -> bool:
+    if text in AFFECTION_VIEW_COMMANDS or text in AFFECTION_HISTORY_COMMANDS:
+        return True
+    if text in MEMBER_IDENTITY_CLEAR_COMMANDS or text in LONG_MEMORY_CLEAR_COMMANDS:
+        return True
+    if text in {"/记忆删除", "/memory clear", "/记忆关闭", "/memory off"}:
+        return True
+    if extract_group_memory_deletion(event, text) is not None:
+        return True
+    return False
+
+
 def webhook_token_valid(
     configured_token: str,
     x_onebot_token: str | None,
@@ -1465,6 +1495,88 @@ async def onebot_webhook(
         )
         return {"ok": True, "ignored": True, "reason": "group_ingress_rate_limited"}
 
+    current_affection = await request.app.state.db.affection_score(
+        group_id, user_id, AFFECTION_INITIAL
+    )
+    active_possession_for_affection = await request.app.state.db.daily_possession(
+        group_id, today
+    )
+
+    if text in AFFECTION_VIEW_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
+        await send_group_message(group_id, affection_status_text(current_affection))
+        return {"ok": True, "source": "affection"}
+
+    if text in AFFECTION_HISTORY_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
+        events = await request.app.state.db.affection_events(group_id, user_id, limit=5)
+        if not events:
+            await send_group_message(
+                group_id,
+                affection_status_text(current_affection) + "\n最近还没有好感度升降记录。",
+            )
+        else:
+            lines = []
+            for delta, score_after, reason, _ in events:
+                sign = "+" if delta > 0 else ""
+                lines.append(f"{sign}{delta} → {score_after}/100｜{reason}")
+            await send_group_message(
+                group_id,
+                affection_status_text(current_affection)
+                + "\n最近变化：\n"
+                + "\n".join(lines),
+            )
+        return {"ok": True, "source": "affection_history"}
+
+    if text in AFFECTION_RESET_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
+        if not is_admin:
+            await send_group_message(group_id, "重置其他人的好感度需要群管理员权限。")
+        else:
+            targets = mentioned_user_ids(event)
+            target_id = targets[0] if len(targets) == 1 else user_id
+            score = await request.app.state.db.reset_affection(
+                group_id, target_id, AFFECTION_INITIAL
+            )
+            await send_group_message(group_id, f"好感度已重置为 {score}/100。")
+        return {"ok": True, "source": "affection_reset"}
+
+    if (
+        current_affection == 0
+        and not is_admin
+        and not affection_zero_allowed(text, event)
+    ):
+        return {"ok": True, "ignored": True, "reason": "affection_zero"}
+
+    if (
+        bot_mentioned(event)
+        and not active_possession_for_affection
+        and text not in AFFECTION_VIEW_COMMANDS
+        and text not in AFFECTION_HISTORY_COMMANDS
+        and text not in AFFECTION_RESET_COMMANDS
+        and not affection_zero_allowed(text, event)
+    ):
+        previous_reply = request.app.state.last_murasame_replies.get(
+            (group_id, user_id), ""
+        )
+        assessment = await assess_affection(
+            text,
+            previous_reply,
+            request.app.state.llm,
+        )
+        if assessment.delta:
+            old_score, current_affection = await request.app.state.db.adjust_affection(
+                group_id,
+                user_id,
+                assessment.delta,
+                assessment.reason,
+                initial=AFFECTION_INITIAL,
+            )
+            change_notice = affection_change_text(
+                old_score, current_affection, assessment
+            )
+            if change_notice:
+                await send_group_message(group_id, change_notice)
+            if current_affection == 0 and not is_admin:
+                return {"ok": True, "ignored": True, "reason": "affection_reached_zero"}
+
     raw_message = event.get("message")
     plain_repeat_message = (
         isinstance(raw_message, str)
@@ -1520,8 +1632,15 @@ async def onebot_webhook(
         else:
             await send_group_message(group_id, "用法：/blacklist add QQ号 或 /blacklist remove QQ号")
     elif text in {"/记忆开启", "/memory on"}:
-        await request.app.state.db.set_memory_enabled(group_id, user_id, True)
-        await send_group_message(group_id, "已开启你的短期对话记忆。输入 /记忆关闭 可停止，输入 /记忆删除 可清除当前记忆。")
+        if current_affection < MEMORY_UNLOCK_SCORE:
+            await send_group_message(
+                group_id,
+                f"现在的好感度是 {current_affection}/100。等到 {MEMORY_UNLOCK_SCORE} 以上，"
+                "吾辈才愿意替汝开启记忆功能。(￣^￣)ゞ",
+            )
+        else:
+            await request.app.state.db.set_memory_enabled(group_id, user_id, True)
+            await send_group_message(group_id, "已开启你的短期对话记忆。输入 /记忆关闭 可停止，输入 /记忆删除 可清除当前记忆。")
     elif text in {"/记忆关闭", "/memory off"}:
         await request.app.state.db.set_memory_enabled(group_id, user_id, False)
         request.app.state.memory.clear(group_id, user_id)
@@ -1549,7 +1668,13 @@ async def onebot_webhook(
         await request.app.state.db.clear_long_term_memories(group_id, user_id)
         await send_group_message(group_id, "已经忘掉你在本群的全部长期记忆了。")
     elif (memory_content := extract_long_memory(event, text)) is not None:
-        if not memory_content:
+        if current_affection < MEMORY_UNLOCK_SCORE:
+            await send_group_message(
+                group_id,
+                f"好感度 {current_affection}/100，还没到 {MEMORY_UNLOCK_SCORE}。"
+                "这种要吾辈认真记住的事，等再熟一点再说吧。",
+            )
+        elif not memory_content:
             await send_group_message(group_id, "要记住什么呀？例如：@我 记住：我喜欢科幻电影")
         elif SENSITIVE_MEMORY_PATTERN.search(memory_content):
             await send_group_message(group_id, "这类内容可能包含敏感信息，我不帮你长期保存喔。")
@@ -1557,7 +1682,13 @@ async def onebot_webhook(
             await request.app.state.db.add_long_term_memory(group_id, user_id, memory_content)
             await send_group_message(group_id, "好，我长期记住了。需要删除时对我说“忘记我”。")
     elif (group_memory := extract_group_memory(event, text)) is not None:
-        if not group_memory:
+        if current_affection < MEMORY_UNLOCK_SCORE:
+            await send_group_message(
+                group_id,
+                f"好感度 {current_affection}/100。至少到 {MEMORY_UNLOCK_SCORE}，"
+                "吾辈才会把这种关系认真记进本群记忆里。",
+            )
+        elif not group_memory:
             await send_group_message(group_id, "要记住什么？例如：@我 记住，hzh 是 Cat#")
         elif SENSITIVE_MEMORY_PATTERN.search(group_memory):
             await send_group_message(group_id, "这段像是敏感信息，我就不存啦。")
@@ -2241,6 +2372,8 @@ async def onebot_webhook(
         style_hint = await request.app.state.db.group_style_hint(group_id)
         possession = active_possession
         persona_context: list[str] = []
+        if not active_possession:
+            persona_context.append(affection_prompt(current_affection))
         possession_name = ""
         imitate_current_possession = False
         sender_name = sender_display_name(event)
@@ -2487,6 +2620,8 @@ async def onebot_webhook(
                     prompt=prompt,
                 )
             request.app.state.memory.append(group_id, user_id, prompt, answer, memory_enabled)
+            if not possession_name:
+                request.app.state.last_murasame_replies[(group_id, user_id)] = answer[-1800:]
             await send_group_long_message(group_id, answer)
             if imitate_current_possession and possession:
                 target_id = possession[0]
