@@ -90,6 +90,9 @@ async def test_resolver_uses_llm_only_to_expand_search_terms(monkeypatch):
     character = anime.ANIME_CHARACTER_BY_NAME["阿尼亚·福杰"]
     calls: list[tuple[str, tuple[str, ...]]] = []
 
+    async def no_web_page(character, aliases, settings):
+        calls.append(("web", aliases))
+
     async def no_wikipedia(character, aliases, settings):
         calls.append(("wikipedia", aliases))
 
@@ -106,6 +109,7 @@ async def test_resolver_uses_llm_only_to_expand_search_terms(monkeypatch):
         async def ask(self, messages):
             return "Anya Forger SPY FAMILY\nアーニャ・フォージャー SPY×FAMILY"
 
+    monkeypatch.setattr(anime, "_web_page_character_image", no_web_page)
     monkeypatch.setattr(anime, "_wikipedia_image", no_wikipedia)
     monkeypatch.setattr(anime, "_baidu_image", no_baidu)
     monkeypatch.setattr(anime, "_bing_image", bing)
@@ -117,3 +121,29 @@ async def test_resolver_uses_llm_only_to_expand_search_terms(monkeypatch):
     )
     assert result == "base64://YW55YQ=="
     assert any("Anya Forger SPY FAMILY" in aliases for _, aliases in calls)
+
+
+
+@pytest.mark.asyncio
+async def test_resolver_uses_relaxed_bing_as_last_resort(monkeypatch):
+    character = anime.ANIME_CHARACTER_BY_NAME["阿尼亚·福杰"]
+
+    async def none(*args, **kwargs):
+        return None
+
+    async def relaxed(*args, **kwargs):
+        return "base64://cmVsYXhlZA=="
+
+    monkeypatch.setattr(anime, "_web_page_character_image", none)
+    monkeypatch.setattr(anime, "_wikipedia_image", none)
+    monkeypatch.setattr(anime, "_baidu_image", none)
+    monkeypatch.setattr(anime, "_bing_image", none)
+    monkeypatch.setattr(anime, "_llm_search_aliases", none)
+    monkeypatch.setattr(anime, "_bing_image_relaxed", relaxed)
+
+    result = await anime.resolve_anime_character_image(
+        character,
+        Settings(_env_file=None),
+        None,
+    )
+    assert result == "base64://cmVsYXhlZA=="
