@@ -357,8 +357,24 @@ async def assess_affection(
             return AffectionAssessment(0, "攻击内容并非指向小丛雨", "llm-target")
         if targeted is True:
             return AffectionAssessment(direct.delta, direct.reason, "llm-target")
-        if not explicit_bot_mention:
-            return AffectionAssessment(0, "辱骂目标不明确，未扣分", "fallback")
+        compact = re.sub(r"\s+", "", str(text or "")).casefold()
+        explanatory = any(
+            marker in compact
+            for marker in (
+                "什么意思",
+                "是什么",
+                "啥意思",
+                "怎么说",
+                "怎么读",
+                "日语",
+                "翻译",
+                "有人说",
+                "别人说",
+                "被骂",
+            )
+        )
+        if explanatory or not explicit_bot_mention:
+            return AffectionAssessment(0, "辱骂/低俗词目标不明确，未扣分", "fallback")
         return direct
     if direct.delta:
         return direct
