@@ -1740,53 +1740,6 @@ async def onebot_webhook(
                 f"吾辈目前只认得汝的群名片“{sender_display_name(event)}”；"
                 "若想固定一个身份，可以对吾辈说“记住，我是xxx”。",
             )
-    elif bot_mentioned(event) and (
-        (member_identity_target := extract_member_identity_lookup(text)) is not None
-    ):
-        matches = await request.app.state.db.find_group_member_identity(
-            group_id, member_identity_target
-        )
-        if matches:
-            _, matched_display_name, matched_alias = matches[0]
-            target_key = member_identity_target.casefold()
-            if target_key == matched_alias.casefold():
-                visible_name = matched_display_name or "这名群友"
-                await send_group_message(
-                    group_id,
-                    f"吾辈记得，“{member_identity_target}”对应的是“{visible_name}”。",
-                )
-            else:
-                aliases = []
-                for matched_user_id, _, alias in matches:
-                    for item in await request.app.state.db.group_member_identities(
-                        group_id, matched_user_id
-                    ):
-                        if item not in aliases:
-                            aliases.append(item)
-                await send_group_message(
-                    group_id,
-                    "吾辈记得，这名群友绑定的是"
-                    + "、".join(f"“{item}”" for item in aliases[:5])
-                    + "。QQ号就不拿出来念了。",
-                )
-        else:
-            # Fall through to the LLM/group-memory path instead of inventing an identity.
-            group_memories = await request.app.state.db.group_memories(group_id)
-            memory_answer = resolve_group_memory_question(text, group_memories)
-            if memory_answer is not None:
-                await send_group_message(
-                    group_id,
-                    ensure_default_murasame_voice(
-                        format_group_memory_answer(memory_answer, text),
-                        seed=f"group-memory:{group_id}:{user_id}:{text}",
-                        prompt=text,
-                    ),
-                )
-            else:
-                await send_group_message(
-                    group_id,
-                    "吾辈这里没有可靠的成员身份绑定，不能拿QQ号或昵称硬猜。",
-                )
     elif bot_mentioned(event) and is_identity_question(text):
         possession = await request.app.state.db.daily_possession(group_id, today)
         if possession:
@@ -2221,6 +2174,38 @@ async def onebot_webhook(
         prompt = text.split(" ", 1)[1].strip() if text.startswith(("/ai ", "/AI ")) else text
         group_memories = await request.app.state.db.group_memories(group_id)
         active_possession = await request.app.state.db.daily_possession(group_id, today)
+        member_identity_target = extract_member_identity_lookup(prompt)
+        if member_identity_target is not None and not active_possession:
+            member_matches = await request.app.state.db.find_group_member_identity(
+                group_id, member_identity_target
+            )
+            if member_matches:
+                _, matched_display_name, matched_alias = member_matches[0]
+                target_key = member_identity_target.casefold()
+                if target_key == matched_alias.casefold():
+                    visible_name = matched_display_name or "这名群友"
+                    reply = (
+                        f"吾辈记得，“{member_identity_target}”对应的是“{visible_name}”。"
+                    )
+                else:
+                    aliases: list[str] = []
+                    seen_users: set[str] = set()
+                    for matched_user_id, _, _ in member_matches:
+                        if matched_user_id in seen_users:
+                            continue
+                        seen_users.add(matched_user_id)
+                        for item in await request.app.state.db.group_member_identities(
+                            group_id, matched_user_id
+                        ):
+                            if item not in aliases:
+                                aliases.append(item)
+                    reply = (
+                        "吾辈记得，这名群友绑定的是"
+                        + "、".join(f"“{item}”" for item in aliases[:5])
+                        + "。QQ号就不拿出来念了。"
+                    )
+                await send_group_message(group_id, reply)
+                return {"ok": True, "source": "group_member_identity"}
         memory_lookup_prompt = rewrite_first_person_identity_question(
             prompt, sender_display_name(event)
         )
