@@ -2,8 +2,6 @@ import json
 import re
 from dataclasses import dataclass
 
-from app.llm.providers import LLMError
-
 
 AFFECTION_MIN = 0
 AFFECTION_MAX = 100
@@ -191,6 +189,11 @@ async def assess_affection(
     if llm is None or not previous_bot_reply:
         return direct
 
+    # Use the LLM mainly to judge the user's answer to Murasame's own follow-up
+    # question. Ordinary new questions should not consume an extra model call.
+    if "?" not in previous_bot_reply and "？" not in previous_bot_reply:
+        return direct
+
     # Commands should not accidentally farm affection merely because they are polite.
     compact = re.sub(r"\s+", "", str(text or ""))
     if any(hint in compact for hint in _AFFECTION_COMMAND_HINTS) or compact.startswith("/"):
@@ -220,7 +223,7 @@ async def assess_affection(
                 },
             ]
         )
-    except (LLMError, Exception):
+    except Exception:
         return direct
 
     parsed = _parse_llm_assessment(raw)
