@@ -31,6 +31,14 @@ from app.plugins.media import (
     random_real_pig_image,
 )
 from app.plugins.registry import registry
+from app.services.anime_character import (
+    ANIME_CHARACTER_BY_NAME,
+    ANIME_CHARACTER_ROSTER,
+    anime_character_catalog_text_pages,
+    anime_character_profile_text,
+    resolve_anime_character_image,
+    resolve_anime_character_query,
+)
 from app.services.bilibili import (
     bilibili_card_content,
     choose_bilibili_video,
@@ -95,6 +103,15 @@ NAILONG_IMAGE_COMMANDS = frozenset({"/奶龙", "奶龙", "随机奶龙", "来只
 DAILY_ULTRAMAN_COMMANDS = frozenset({"/今日奥特曼", "今日奥特曼", "抽奥特曼"})
 MY_ULTRAMAN_COMMANDS = frozenset({"/我的奥特曼", "我的奥特曼", "奥特曼收藏"})
 ULTRAMAN_CATALOG_COMMANDS = frozenset({"/奥特曼图鉴", "奥特曼图鉴", "全部奥特曼"})
+DAILY_ANIME_CHARACTER_COMMANDS = frozenset({
+    "/随机二次元角色", "随机二次元角色", "/今日二次元角色", "今日二次元角色", "抽二次元角色"
+})
+MY_ANIME_CHARACTER_COMMANDS = frozenset({
+    "/我的二次元角色", "我的二次元角色", "二次元角色收藏", "/查看本命二次元角色", "查看本命二次元角色", "本命二次元角色"
+})
+ANIME_CHARACTER_CATALOG_COMMANDS = frozenset({
+    "/二次元角色图鉴", "二次元角色图鉴", "全部二次元角色"
+})
 RANDOM_POSSESSION_COMMANDS = frozenset(
     {"/随机夺舍", "随机夺舍", "/今日夺舍", "今日夺舍", "今天夺舍谁", "今日附身"}
 )
@@ -169,6 +186,7 @@ async def lifespan(app: FastAPI):
     app.state.repeat_echo_state = {}
     app.state.group_history_bootstrapped = set()
     app.state.recent_ultraman_queries = {}
+    app.state.recent_anime_character_queries = {}
     app.state.translation_cache = {}
     app.state.deduplicator = EventDeduplicator(settings.event_dedupe_ttl_seconds)
     registry.load_modules(settings.plugin_modules)
@@ -1593,6 +1611,73 @@ async def onebot_webhook(
             await send_group_message(group_id, "今天还没有候选人：群友当天发言达到 15 条才会加入随机抽取。")
     elif text in {"/help", "/帮助", "help", "帮助"}:
         await send_group_message(group_id, registry.help_text())
+    elif text in DAILY_ANIME_CHARACTER_COMMANDS or mentioned_image_command(
+        event, DAILY_ANIME_CHARACTER_COMMANDS
+    ):
+        candidate = secrets.choice(ANIME_CHARACTER_ROSTER)
+        character_name, created = await request.app.state.db.get_or_create_daily_anime_character(
+            group_id, user_id, today, candidate.name
+        )
+        character = ANIME_CHARACTER_BY_NAME[character_name]
+        request.app.state.recent_anime_character_queries[(group_id, user_id)] = character.name
+        status = "今日首次获得" if created else "今天已经抽到过"
+        caption = (
+            f"✨ {sender_display_name(event)} 的今日二次元角色\n"
+            f"【{character.name}】\n"
+            f"{anime_character_profile_text(character)}\n\n"
+            f"{status}，已收入你的二次元角色收藏！"
+        )
+        try:
+            image = await resolve_anime_character_image(
+                character, settings, request.app.state.llm
+            )
+            await send_group_image(group_id, image, caption)
+        except (RuntimeError, httpx.HTTPError) as exc:
+            logger.warning("anime character image failed: %s", exc)
+            await send_group_message(
+                group_id,
+                caption + "\n图片暂时没找到可靠来源，已尝试 Wikipedia/Bing 和 LLM 辅助搜索词。",
+            )
+    elif text in MY_ANIME_CHARACTER_COMMANDS or (
+        bot_mentioned(event) and text in MY_ANIME_CHARACTER_COMMANDS
+    ):
+        stats = await request.app.state.db.anime_character_collection_stats(user_id)
+        if not stats:
+            await send_group_message(
+                group_id, "你还没有二次元角色收藏，发送“@我 随机二次元角色”抽第一位吧！"
+            )
+        else:
+            total, unique_count, favorite, favorite_count = stats
+            favorite_character = ANIME_CHARACTER_BY_NAME.get(favorite)
+            source = (
+                f"｜{favorite_character.series}" if favorite_character is not None else ""
+            )
+            await send_group_message(
+                group_id,
+                "✦ 我的二次元角色收藏 ✦\n"
+                f"累计获得：{total} 次\n"
+                f"已收集：{unique_count}/{len(ANIME_CHARACTER_ROSTER)} 位\n"
+                f"本命二次元角色：{favorite}{source}（出现 {favorite_count} 次）",
+            )
+    elif bot_mentioned(event) and text in ANIME_CHARACTER_CATALOG_COMMANDS:
+        for page in anime_character_catalog_text_pages():
+            await send_group_message(group_id, page)
+    elif bot_mentioned(event) and (anime_character := resolve_anime_character_query(text)):
+        request.app.state.recent_anime_character_queries[(group_id, user_id)] = anime_character.name
+        caption = (
+            "✦ 二次元角色图鉴 · 角色资料 ✦\n"
+            f"【{anime_character.name}】\n"
+            f"{anime_character_profile_text(anime_character)}\n\n"
+            "本次仅查看资料，不会增加收藏次数。"
+        )
+        try:
+            image = await resolve_anime_character_image(
+                anime_character, settings, request.app.state.llm
+            )
+            await send_group_image(group_id, image, caption)
+        except (RuntimeError, httpx.HTTPError) as exc:
+            logger.warning("anime character encyclopedia image failed: %s", exc)
+            await send_group_message(group_id, caption + "\n图片暂时没有找到可靠来源。")
     elif text in DAILY_ULTRAMAN_COMMANDS or mentioned_image_command(
         event, DAILY_ULTRAMAN_COMMANDS
     ):
