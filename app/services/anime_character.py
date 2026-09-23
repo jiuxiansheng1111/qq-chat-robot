@@ -785,7 +785,8 @@ async def _llm_search_aliases(
 
     values: list[str] = []
     for row in answer.splitlines():
-        term = re.sub(r"^[-*•\d.、)）\s]+", "", row).strip(" \t\"'“”")
+        term = re.sub(r"^[-*•\d.、)）\s]+", "", row).strip()
+        term = term.strip('"').strip("'").strip("“").strip("”")
         if 2 <= len(term) <= 100 and term not in values:
             values.append(term)
     return tuple(values[:8])
