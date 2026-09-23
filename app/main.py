@@ -13,9 +13,9 @@ from io import BytesIO
 from pathlib import Path
 
 import httpx
-from PIL import Image
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
+from PIL import Image
 from redis.exceptions import RedisError
 
 from app.api.admin import router as admin_router
