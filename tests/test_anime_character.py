@@ -92,11 +92,9 @@ async def test_resolver_uses_llm_only_to_expand_search_terms(monkeypatch):
 
     async def no_wikipedia(character, aliases, settings):
         calls.append(("wikipedia", aliases))
-        return None
 
     async def no_baidu(character, aliases, settings):
         calls.append(("baidu", aliases))
-        return None
 
     async def bing(character, aliases, settings):
         calls.append(("bing", aliases))
