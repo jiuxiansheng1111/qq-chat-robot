@@ -9,15 +9,16 @@ from app.services.affection import (
     affection_stage,
     affection_status_text,
     assess_affection,
+    intimate_action,
     rule_based_affection,
 )
 
 
 def test_affection_defaults_and_unlock_threshold():
-    assert AFFECTION_INITIAL == 40
-    assert MEMORY_UNLOCK_SCORE == 55
-    assert "40/100" in affection_status_text(40)
-    assert "55" in affection_status_text(40)
+    assert AFFECTION_INITIAL == 30
+    assert MEMORY_UNLOCK_SCORE == 60
+    assert "30/100" in affection_status_text(30)
+    assert "60" in affection_status_text(30)
 
 
 def test_affection_stage_changes_reply_behavior():
@@ -27,13 +28,13 @@ def test_affection_stage_changes_reply_behavior():
     assert affection_stage(90)[0] == "十分亲密"
     assert "2到8个汉字" in affection_prompt(5)
     assert "1到2句" in affection_prompt(30)
-    assert "主动接一个自然的小问题" in affection_prompt(65)
+    assert "自然的小问题" in affection_prompt(65)
     assert "排他" in affection_prompt(90)
 
 
 def test_rule_based_affection_caps_positive_and_negative():
     positive = rule_based_affection("你刚才回答得太好了，完美！", "上一轮回答")
-    assert positive.delta == 5
+    assert positive.delta == 4
 
     moderate = rule_based_affection("你真垃圾", "上一轮回答")
     assert moderate.delta == -5
@@ -46,7 +47,7 @@ def test_rule_based_affection_caps_positive_and_negative():
 
 
 def test_positive_feedback_can_progress_without_reply_segment():
-    assert rule_based_affection("谢谢，回答得很好", "").delta == 3
+    assert rule_based_affection("谢谢，回答得很好", "").delta == 2
     assert rule_based_affection("好可爱，晚安", "").delta == 1
 
 
@@ -108,3 +109,25 @@ async def test_ambiguous_named_hostility_does_not_penalize_when_llm_unavailable(
         persona_names=("小丛雨",),
     )
     assert result.delta == 0
+
+
+
+def test_sexual_slang_and_fake_score_claims_are_handled():
+    assert rule_based_affection("你吃到了美味的欧金金好感度+70", "").delta == -6
+    assert rule_based_affection("给你看看おちんちん", "").delta == -6
+    assert rule_based_affection("好感度+70", "").delta == 0
+    assert rule_based_affection("你感到好感度+10", "").delta == 0
+
+
+def test_intimate_actions_are_recognized_with_fixed_values():
+    assert intimate_action("摸摸头") == ("摸头", 1)
+    assert intimate_action("牵你的手") == ("牵手", 1)
+    assert intimate_action("抱抱") == ("拥抱", 2)
+    assert intimate_action("亲亲") == ("亲吻", 2)
+    assert intimate_action("普通聊天") is None
+
+
+def test_short_ascii_slang_does_not_match_inside_normal_words():
+    assert rule_based_affection("这是usb设备", "").delta == 0
+    assert rule_based_affection("sb", "").delta == -10
+    assert rule_based_affection("fw", "").delta == -5
