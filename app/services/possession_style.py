@@ -134,7 +134,11 @@ async def fetch_group_context(
         settings,
         group_id,
         "",
-        count=settings.group_context_history_count,
+        # NapCat resolves quoted messages while walking history; asking for the
+        # full 3000-message cache on every cold start is both slow and noisy.
+        # Bootstrap only a recent slice, then let the in-process cache grow up
+        # to group_context_history_count from live traffic.
+        count=min(settings.group_context_history_count, 300),
     )
     route = onebot_route(settings)
     excluded = {route.self_id} if route.self_id else set()
