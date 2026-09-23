@@ -2,6 +2,9 @@ import json
 import re
 from dataclasses import dataclass
 
+import httpx
+
+from app.llm.providers import LLMError
 
 AFFECTION_MIN = 0
 AFFECTION_MAX = 100
@@ -225,7 +228,7 @@ async def assess_affection(
                 },
             ]
         )
-    except Exception:
+    except (LLMError, httpx.HTTPError, ValueError):
         return direct
 
     parsed = _parse_llm_assessment(raw)
