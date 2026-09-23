@@ -2105,41 +2105,44 @@ async def onebot_webhook(
             )
             return {"ok": True, "source": "affection_action_locked"}
 
-        bonus, streak, count, bonus_reason = (
-            await request.app.state.db.record_affection_engagement(
-                group_id,
-                user_id,
-                today,
-            )
-        )
-        if bonus:
-            old_score, current_affection = await request.app.state.db.adjust_affection(
-                group_id,
-                user_id,
-                bonus,
-                bonus_reason,
-                initial=AFFECTION_INITIAL,
-            )
-            await send_group_message(
-                group_id,
-                affection_change_text(
-                    old_score,
-                    current_affection,
-                    AffectionAssessment(
-                        bonus,
-                        bonus_reason
-                        or f"持续互动：连续 {streak} 天 / 今日第 {count} 次",
-                        "streak",
-                    ),
-                ),
-            )
-
         granted = await request.app.state.db.claim_affection_action(
             group_id,
             user_id,
             today,
             action_name,
         )
+        if granted:
+            bonus, streak, count, bonus_reason = (
+                await request.app.state.db.record_affection_engagement(
+                    group_id,
+                    user_id,
+                    today,
+                )
+            )
+            if bonus:
+                old_score, current_affection = (
+                    await request.app.state.db.adjust_affection(
+                        group_id,
+                        user_id,
+                        bonus,
+                        bonus_reason,
+                        initial=AFFECTION_INITIAL,
+                    )
+                )
+                await send_group_message(
+                    group_id,
+                    affection_change_text(
+                        old_score,
+                        current_affection,
+                        AffectionAssessment(
+                            bonus,
+                            bonus_reason
+                            or f"持续互动：连续 {streak} 天 / 今日第 {count} 次",
+                            "streak",
+                        ),
+                    ),
+                )
+
         action_replies = {
             "摸头": "……只准摸一下，别把吾辈当小孩子。",
             "牵手": "手给汝了，苟修金可别乱跑。",
