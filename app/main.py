@@ -517,8 +517,11 @@ def group_memory_prompt(memories: list[str], current_identity: str) -> str:
             sections.append(reasoning_hints)
     if ambiguous:
         sections.append(
-            "旧版主语不明确的记忆（不能自动套到当前夺舍对象）：\n"
+            "旧版主语不明确的记忆：\n"
             + "\n".join(f"- {item}" for item in ambiguous)
+            + "\n这些旧记录里的“我/你”没有保存原说话者，禁止把“我”自动解释成当前提问者，"
+            "也禁止解释成机器人或当前夺舍对象。只有最近群聊明确显示是谁说了同一事实时，"
+            "才可把该说话者代回去；否则必须承认无法确定。"
         )
     return "\n".join(sections)
 
