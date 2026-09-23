@@ -1,9 +1,12 @@
+import base64
 import hashlib
 import hmac
+from io import BytesIO
 from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from app.core.rate_limit import LocalRateLimiter
 from app.main import (
@@ -42,6 +45,7 @@ from app.main import (
     qualify_group_memory,
     repeat_echo_candidate,
     resolve_ultraman_card_image,
+    send_group_image,
     send_group_message,
     send_group_share_card,
     sender_display_name,
@@ -752,6 +756,76 @@ async def test_share_card_uses_onebot_share_segment(monkeypatch):
     assert "BV1xx411c7mD" in segment["data"]["url"]
 
 
+def test_low_affection_voice_is_short_and_never_adds_tsundere():
+    reply = ensure_default_murasame_voice(
+        "苟修金，吾辈真的不想和汝多说任何话。杂鱼~杂鱼~",
+        seed="low-affection-test",
+        prompt="你好",
+        affection_score=5,
+    )
+    assert len(reply) <= 12
+    assert "杂鱼~杂鱼~" not in reply
+
+
+@pytest.mark.asyncio
+async def test_image_send_retries_with_normalized_jpeg(monkeypatch, tmp_path):
+    previous_api_base = settings.onebot_api_base
+    previous_database_path = settings.database_path
+    settings.onebot_api_base = "http://onebot.test"
+    settings.database_path = str(tmp_path / "bot.db")
+    calls: list[str] = []
+
+    output = BytesIO()
+    Image.new("RGB", (1600, 1200), (120, 180, 220)).save(
+        output,
+        format="PNG",
+    )
+    original = "base64://" + base64.b64encode(output.getvalue()).decode()
+
+    class FakeResponse:
+        def __init__(self, ok: bool):
+            self.ok = ok
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            if self.ok:
+                return {"status": "ok", "retcode": 0}
+            return {
+                "status": "failed",
+                "retcode": 1200,
+                "wording": "rich media transfer failed",
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, **kwargs):
+            file_value = kwargs["json"]["message"][0]["data"]["file"]
+            calls.append(file_value)
+            return FakeResponse(ok=len(calls) >= 2)
+
+    monkeypatch.setattr("app.main.httpx.AsyncClient", FakeClient)
+    try:
+        await send_group_image("group-1", original)
+    finally:
+        settings.onebot_api_base = previous_api_base
+        settings.database_path = previous_database_path
+
+    assert len(calls) == 2
+    assert calls[0] == original
+    assert calls[1].startswith("base64://")
+    assert calls[1] != original
+
+
 def test_default_murasame_voice_uses_chinese_markers():
     assert ensure_default_murasame_voice("这题答案是 42") == "苟修金，吾辈来说：这题答案是 42"
     assert ensure_default_murasame_voice("吾辈已经看过了") == "吾辈已经看过了"
@@ -1017,7 +1091,7 @@ def test_low_affection_blocks_new_identity_memory(tmp_path):
         settings.onebot_self_id = previous_self_id
 
 
-def test_zero_affection_ignores_normal_chat_but_allows_status(tmp_path):
+def test_zero_affection_still_replies_coldly_and_allows_status(tmp_path):
     previous_database_path = settings.database_path
     previous_onebot_api_base = settings.onebot_api_base
     previous_self_id = settings.onebot_self_id
@@ -1040,8 +1114,13 @@ def test_zero_affection_ignores_normal_chat_but_allows_status(tmp_path):
                 {"type": "at", "data": {"qq": "bot-1"}},
                 {"type": "text", "data": {"text": "你好"}},
             ]
+            client.app.state.llm.ask = AsyncMock(
+                return_value="吾辈不想搭理你。多说无益。"
+            )
             result = post_event(client, payload).json()
-            assert result["reason"] == "affection_zero"
+            assert result["ok"] is True
+            assert result.get("reason") != "affection_zero"
+            assert client.app.state.llm.ask.await_count == 1
 
             status = event("好感度", user_id="cold-user")
             status["self_id"] = "bot-1"
