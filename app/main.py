@@ -39,6 +39,7 @@ from app.plugins.media import (
 from app.plugins.registry import registry
 from app.services.affection import (
     AFFECTION_INITIAL,
+    AffectionAssessment,
     MEMORY_UNLOCK_SCORE,
     affection_change_text,
     affection_prompt,
@@ -1947,9 +1948,11 @@ async def onebot_webhook(
             notice = affection_change_text(
                 old_score,
                 current_affection,
-                type("_ActionAssessment", (), {
-                    "reason": f"解锁亲密互动：{action_name}",
-                })(),
+                AffectionAssessment(
+                    action_delta,
+                    f"解锁亲密互动：{action_name}",
+                    "action",
+                ),
             )
             reply = action_replies.get(action_name, "……行吧，这次就依汝。")
             if notice:
@@ -2038,10 +2041,12 @@ async def onebot_webhook(
                     affection_change_text(
                         old_score,
                         current_affection,
-                        type("_StreakAssessment", (), {
-                            "reason": bonus_reason
+                        AffectionAssessment(
+                            bonus,
+                            bonus_reason
                             or f"持续互动：连续 {streak} 天 / 今日第 {count} 次",
-                        })(),
+                            "streak",
+                        ),
                     ),
                 )
 
