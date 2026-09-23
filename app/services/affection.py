@@ -8,8 +8,8 @@ from app.llm.providers import LLMError
 
 AFFECTION_MIN = 0
 AFFECTION_MAX = 100
-AFFECTION_INITIAL = 30
-MEMORY_UNLOCK_SCORE = 60
+AFFECTION_INITIAL = 40
+MEMORY_UNLOCK_SCORE = 55
 
 _AFFECTION_COMMAND_HINTS = (
     "好感度",
@@ -76,6 +76,17 @@ _POSITIVE = (
     "满意",
     "喜欢这个回答",
     "可以的",
+)
+_WARM_POSITIVE = (
+    "喜欢你",
+    "好可爱",
+    "真可爱",
+    "辛苦了",
+    "早安",
+    "晚安",
+    "想你了",
+    "抱抱",
+    "陪我聊聊",
 )
 
 
@@ -154,11 +165,12 @@ def rule_based_affection(text: str, previous_bot_reply: str = "") -> AffectionAs
     if any(token in compact for token in _MILD_HOSTILITY):
         return AffectionAssessment(-2, "明显不满或轻度恶言")
 
-    if previous_bot_reply:
-        if any(token in compact for token in _STRONG_POSITIVE):
-            return AffectionAssessment(5, "对上一轮回答非常满意")
-        if any(token in compact for token in _POSITIVE):
-            return AffectionAssessment(2, "对上一轮回答表示满意")
+    if any(token in compact for token in _STRONG_POSITIVE):
+        return AffectionAssessment(5, "明确称赞或非常满意")
+    if any(token in compact for token in _POSITIVE):
+        return AffectionAssessment(3, "友好回应或明确肯定")
+    if any(token in compact for token in _WARM_POSITIVE):
+        return AffectionAssessment(1, "自然的友好互动")
 
     return AffectionAssessment(0, "普通互动")
 
@@ -211,10 +223,10 @@ async def assess_affection(
                         "你是恋爱模拟器式好感度结算器。上一轮可能是小丛雨的回答，也可能是她主动反问的日常问题。"
                         "输出严格JSON："
                         '{"delta":整数,"reason":"简短中文原因"}。'
-                        "delta只能是-10到5。普通回答、继续提问、中性或敷衍回复必须为0；"
-                        "如果用户明确觉得上一轮回答不错，可+1到+3；非常满意、明确称赞完美最多+5。"
+                        "delta只能是-10到5。继续提问、中性或敷衍回复通常为0；"
+                        "如果用户明确觉得上一轮回答不错，可+2到+3；非常满意、明确称赞完美最多+5。"
                         "如果上一轮是小丛雨主动问的问题，则根据用户回答是否认真、贴心、契合当时话题来判断："
-                        "普通如实回答仍为0，明显用心且让角色会高兴可+1到+3，极其契合且特别用心最多+5。"
+                        "正常认真回答可+1，明显用心且让角色会高兴可+2到+4，极其契合且特别用心最多+5。"
                         "轻度不满可-1到-3；明显辱骂/恶意可-4到-10。"
                         "不要因为用户只是多聊天、礼貌、顺从、使用亲昵称呼或迎合角色就自动加分。"
                     ),
