@@ -483,12 +483,24 @@ async def lifespan(app: FastAPI):
             app.state.daily_news_task.cancel()
             with suppress(asyncio.CancelledError):
                 await app.state.daily_news_task
-        for task in list(_ultraman_prefetch_tasks):
+        current_loop = asyncio.get_running_loop()
+        owned_prefetch_tasks = [
+            task
+            for task in list(_ultraman_prefetch_tasks)
+            if task.get_loop() is current_loop
+        ]
+        for task in owned_prefetch_tasks:
             if not task.done():
                 task.cancel()
-        for task in list(_ultraman_prefetch_tasks):
-            with suppress(asyncio.CancelledError, RuntimeError, ValueError, OSError):
+        for task in owned_prefetch_tasks:
+            with suppress(
+                asyncio.CancelledError,
+                RuntimeError,
+                ValueError,
+                OSError,
+            ):
                 await task
+        _ultraman_prefetch_tasks.difference_update(owned_prefetch_tasks)
         await app.state.llm.aclose()
 
 
