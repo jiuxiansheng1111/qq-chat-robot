@@ -1,6 +1,6 @@
 import pytest
 
-import app.main as main
+from app import main
 from app.services.web_search import SearchResult
 
 
