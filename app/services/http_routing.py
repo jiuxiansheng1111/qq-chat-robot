@@ -111,3 +111,20 @@ def reset_proxy_cache_for_tests() -> None:
     global _cached_proxy_key, _cached_proxy_value
     _cached_proxy_key = None
     _cached_proxy_value = None
+
+
+async def install_outbound_proxy_environment(settings: Settings) -> str | None:
+    """Install the resolved proxy into standard HTTP(S)_PROXY variables.
+
+    Most httpx clients in this project keep trust_env=True, so doing this once at
+    startup routes Bing/Baidu/Wikipedia/official media and LLM HTTP traffic
+    without invasive per-client changes. Local OneBot sends explicitly use
+    trust_env=False and therefore remain direct.
+    """
+    proxy = await resolve_web_proxy(settings)
+    if not proxy:
+        return None
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        if not os.environ.get(key):
+            os.environ[key] = proxy
+    return proxy
