@@ -1560,7 +1560,7 @@ async def onebot_webhook(
         and text not in AFFECTION_RESET_COMMANDS
         and not affection_zero_allowed(text, event)
     ):
-        previous_reply = request.app.state.last_murasame_replies.get(
+        previous_reply = request.app.state.last_murasame_replies.pop(
             (group_id, user_id), ""
         )
         assessment = await assess_affection(
