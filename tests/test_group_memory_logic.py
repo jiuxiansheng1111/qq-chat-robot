@@ -105,3 +105,27 @@ def test_sender_identity_question_can_resolve_group_alias():
     answer = resolve_group_memory_question(rewritten, ["狄是drj"])
     assert answer is not None
     assert answer.answers == ("drj",)
+
+
+def test_conjoined_parent_role_is_split_and_intersected():
+    relation = parse_memory_relation("狄是drj跟hzh的老爸")
+    assert relation is not None
+    assert relation.kind == "role"
+    assert relation.subject == "狄"
+    assert relation.object == "drj"
+    assert relation.predicate == "爸爸"
+
+    answer = resolve_group_memory_question(
+        "drj跟hzh的老爸是谁",
+        ["狄是drj跟hzh的老爸"],
+    )
+    assert answer is not None
+    assert answer.kind == "role"
+    assert answer.answers == ("狄",)
+
+
+def test_legacy_unbound_first_person_memory_is_not_used_as_certain_fact():
+    assert resolve_group_memory_question(
+        "drj跟hzh的老爸是谁",
+        ["我是drj跟hzh的老爸"],
+    ) is None
