@@ -138,6 +138,25 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_group_member_identities_owner
                     ON group_member_identities(group_id, user_id, id);
+                CREATE TABLE IF NOT EXISTS group_affection (
+                    group_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    score INTEGER NOT NULL DEFAULT 30 CHECK(score >= 0 AND score <= 100),
+                    interaction_count INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (group_id, user_id)
+                );
+                CREATE TABLE IF NOT EXISTS group_affection_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    group_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    delta INTEGER NOT NULL,
+                    score_after INTEGER NOT NULL,
+                    reason TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_group_affection_events_member
+                    ON group_affection_events(group_id, user_id, id);
                 CREATE TABLE IF NOT EXISTS group_style_stats (
                     group_id TEXT PRIMARY KEY,
                     sample_count INTEGER NOT NULL DEFAULT 0,
@@ -686,6 +705,84 @@ class Database:
             (user_id,),
         )
         return int(totals[0]), int(totals[1]), str(favorite[0]), int(favorite[1])
+
+    async def affection_score(
+        self, group_id: str, user_id: str, initial: int = 30
+    ) -> int:
+        initial = max(0, min(100, int(initial)))
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO group_affection(group_id, user_id, score) "
+                "VALUES (?, ?, ?)",
+                (group_id, user_id, initial),
+            )
+            row = await (
+                await db.execute(
+                    "SELECT score FROM group_affection WHERE group_id = ? AND user_id = ?",
+                    (group_id, user_id),
+                )
+            ).fetchone()
+            await db.commit()
+        return int(row[0]) if row else initial
+
+    async def adjust_affection(
+        self,
+        group_id: str,
+        user_id: str,
+        delta: int,
+        reason: str,
+        *,
+        initial: int = 30,
+    ) -> tuple[int, int]:
+        delta = max(-10, min(5, int(delta)))
+        old_score = await self.affection_score(group_id, user_id, initial)
+        new_score = max(0, min(100, old_score + delta))
+        applied = new_score - old_score
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "UPDATE group_affection SET score = ?, interaction_count = interaction_count + 1, "
+                "updated_at = CURRENT_TIMESTAMP WHERE group_id = ? AND user_id = ?",
+                (new_score, group_id, user_id),
+            )
+            if applied:
+                await db.execute(
+                    "INSERT INTO group_affection_events"
+                    "(group_id, user_id, delta, score_after, reason) VALUES (?, ?, ?, ?, ?)",
+                    (group_id, user_id, applied, new_score, str(reason)[:120]),
+                )
+            await db.commit()
+        return old_score, new_score
+
+    async def reset_affection(
+        self, group_id: str, user_id: str, score: int = 30
+    ) -> int:
+        score = max(0, min(100, int(score)))
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT INTO group_affection(group_id, user_id, score, interaction_count) "
+                "VALUES (?, ?, ?, 0) ON CONFLICT(group_id, user_id) DO UPDATE SET "
+                "score = excluded.score, interaction_count = 0, updated_at = CURRENT_TIMESTAMP",
+                (group_id, user_id, score),
+            )
+            await db.execute(
+                "DELETE FROM group_affection_events WHERE group_id = ? AND user_id = ?",
+                (group_id, user_id),
+            )
+            await db.commit()
+        return score
+
+    async def affection_events(
+        self, group_id: str, user_id: str, limit: int = 5
+    ) -> list[tuple[int, int, str, str]]:
+        rows = await self.fetchall(
+            "SELECT delta, score_after, reason, created_at FROM group_affection_events "
+            "WHERE group_id = ? AND user_id = ? ORDER BY id DESC LIMIT ?",
+            (group_id, user_id, max(1, min(limit, 20))),
+        )
+        return [
+            (int(delta), int(score_after), str(reason), str(created_at))
+            for delta, score_after, reason, created_at in rows
+        ]
 
     async def add_group_member_identity(
         self,
