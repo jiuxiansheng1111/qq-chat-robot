@@ -2286,6 +2286,8 @@ async def onebot_webhook(
                         {
                             "role": "system",
                             "content": settings.persona_prompt()
+                            + "\n"
+                            + affection_prompt(current_affection)
                             + "\n你正在根据联网搜索结果回答。只使用给定结果，无法确认的内容要说明；"
                             "回答简洁，不要编造网址。",
                         },
