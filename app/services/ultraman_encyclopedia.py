@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import html
 import json
@@ -19,7 +20,15 @@ BAIDU_BAIKE_HOSTS = {
     "bkso.baidu.com",
     "wapbaike.baidu.com",
 }
-BAIDU_IMAGE_TRUSTED_HOSTS = BAIDU_BAIKE_HOSTS | {
+OFFICIAL_MERCH_HOSTS = {
+    "tamashiiweb.com",
+    "www.tamashiiweb.com",
+    "toy.bandai.co.jp",
+    "www.toy.bandai.co.jp",
+    "p-bandai.jp",
+    "www.p-bandai.jp",
+}
+BAIDU_IMAGE_TRUSTED_HOSTS = BAIDU_BAIKE_HOSTS | OFFICIAL_MERCH_HOSTS | {
     "zh.wikipedia.org",
     "en.wikipedia.org",
     "ja.wikipedia.org",
@@ -1171,6 +1180,144 @@ async def bing_image_search_ultraman_image(
     return None
 
 
+async def official_merch_ultraman_image(
+    name: str,
+    aliases: tuple[str, ...],
+    settings: Settings,
+) -> EncyclopediaImage | None:
+    """Use official Bandai/TAMASHII product pages as a trusted form-image source.
+
+    Older or alternate Ultra forms often lack a dedicated Tsuburaya character
+    page but do have exact Bandai/TAMASHII product pages with official images.
+    """
+    terms = _specific_terms(name, aliases)
+    if not terms:
+        return None
+
+    values = [name]
+    values.extend(
+        alias
+        for alias in aliases
+        if alias and (
+            re.search(r"[A-Za-z]", alias)
+            or re.search(r"[\u3040-\u30ff]", alias)
+        )
+    )
+    values.extend(alias for alias in aliases if alias)
+    values = list(dict.fromkeys(values))[:6]
+
+    queries: list[str] = []
+    for value in values:
+        queries.extend(
+            (
+                f'site:tamashiiweb.com "{value}"',
+                f'site:toy.bandai.co.jp "{value}"',
+                f'site:p-bandai.jp "{value}"',
+            )
+        )
+    queries = list(dict.fromkeys(queries))[:12]
+    timeout = max(4.0, min(float(settings.media_timeout_seconds), 10.0))
+
+    batches = await asyncio.gather(
+        *(
+            search_web(query, limit=6, timeout=timeout)
+            for query in queries
+        ),
+        return_exceptions=True,
+    )
+
+    pages: list[SearchResult] = []
+    seen: set[str] = set()
+    for batch in batches:
+        if isinstance(batch, BaseException):
+            continue
+        for result in batch:
+            host = (urlparse(result.url).hostname or "").casefold()
+            if host not in OFFICIAL_MERCH_HOSTS or result.url in seen:
+                continue
+            descriptor = f"{result.title} {result.snippet} {result.url}"
+            if not _matches_specific(descriptor, terms):
+                continue
+            seen.add(result.url)
+            pages.append(result)
+
+    if not pages:
+        return None
+
+    headers = {
+        "User-Agent": ENCYCLOPEDIA_USER_AGENT,
+        "Accept-Language": "ja,en;q=0.9,zh-CN;q=0.8",
+    }
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        headers=headers,
+    ) as client:
+        for result in pages[:12]:
+            try:
+                page = await client.get(result.url)
+                page.raise_for_status()
+            except httpx.HTTPError:
+                continue
+
+            parser = _EncyclopediaPageParser()
+            parser.feed(page.text)
+            page_url = str(page.url)
+            descriptor = (
+                f"{result.title} {result.snippet} {parser.title} {page_url}"
+            )
+            if not _matches_specific(descriptor, terms):
+                continue
+
+            candidates: list[tuple[int, str, str]] = []
+            if parser.og_image:
+                image_url = _clean_image_url(parser.og_image, page_url)
+                if image_url:
+                    candidates.append(
+                        (220, image_url, parser.title or result.title)
+                    )
+
+            for source, label in parser.images:
+                image_url = _clean_image_url(source, page_url)
+                if not image_url:
+                    continue
+                score = 0
+                if _matches_specific(label, terms):
+                    score += 180
+                if _matches_specific(image_url, terms):
+                    score += 80
+                if score:
+                    candidates.append((score, image_url, label))
+
+            unique: dict[str, tuple[int, str, str]] = {}
+            for candidate in candidates:
+                current = unique.get(candidate[1])
+                if current is None or candidate[0] > current[0]:
+                    unique[candidate[1]] = candidate
+
+            for _, image_url, label in sorted(
+                unique.values(),
+                key=lambda item: item[0],
+                reverse=True,
+            )[:10]:
+                try:
+                    data = await _download_verified_image(
+                        client,
+                        image_url,
+                        page_url,
+                        settings,
+                    )
+                except (RuntimeError, httpx.HTTPError):
+                    continue
+                return EncyclopediaImage(
+                    data=data,
+                    source="Bandai/TAMASHII 官方商品页",
+                    page_url=page_url,
+                    label=label or parser.title or result.title,
+                )
+    return None
+
+
 async def web_page_ultraman_image(
     name: str,
     aliases: tuple[str, ...],
@@ -1434,6 +1581,9 @@ async def encyclopedia_ultraman_image(
     bing_image = await bing_image_search_ultraman_image(name, aliases, settings)
     if bing_image is not None:
         return bing_image
+    official_merch = await official_merch_ultraman_image(name, aliases, settings)
+    if official_merch is not None:
+        return official_merch
     web_page = await web_page_ultraman_image(name, aliases, settings)
     if web_page is not None:
         return web_page
