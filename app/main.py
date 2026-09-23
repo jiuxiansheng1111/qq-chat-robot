@@ -130,6 +130,7 @@ CAT_IMAGE_COMMANDS = frozenset({"/猫", "/cat", "猫图", "随机猫", "随机�
 PIG_IMAGE_COMMANDS = frozenset({"/小猪", "/pig", "猪图", "随机猪", "随机猪猪", "随机小猪"})
 NAILONG_IMAGE_COMMANDS = frozenset({"/奶龙", "奶龙", "随机奶龙", "来只奶龙", "龙来"})
 DAILY_ULTRAMAN_COMMANDS = frozenset({"/今日奥特曼", "今日奥特曼", "抽奥特曼"})
+DAILY_NEWS_COMMANDS = frozenset({"/今日热点", "今日热点", "/今日新闻", "今日新闻"})
 MY_ULTRAMAN_COMMANDS = frozenset({"/我的奥特曼", "我的奥特曼", "奥特曼收藏"})
 ULTRAMAN_CATALOG_COMMANDS = frozenset({"/奥特曼图鉴", "奥特曼图鉴", "全部奥特曼"})
 DAILY_ANIME_CHARACTER_COMMANDS = frozenset({
@@ -1597,17 +1598,7 @@ def _save_ultraman_image_cache(hero, image_file: str) -> None:
 
 def _ultraman_placeholder_image(hero) -> str:
     """Always provide a renderable image even when every remote source is down."""
-    width, height = 900, 1200
-    image = Image.new("RGB", (width, height), (8, 14, 30))
-    pixels = image.load()
-    for y in range(height):
-        shade = int(22 + 42 * (y / height))
-        for x in range(width):
-            pixels[x, y] = (
-                min(255, 8 + shade // 3),
-                min(255, 14 + shade // 2),
-                min(255, 30 + shade),
-            )
+    image = Image.new("RGB", (900, 1200), (12, 24, 52))
     output = BytesIO()
     image.save(output, format="JPEG", quality=88, optimize=True)
     return "base64://" + base64.b64encode(output.getvalue()).decode()
@@ -1628,7 +1619,17 @@ async def _resolve_ultraman_source(hero, source_name: str, resolver) -> str:
 
 def _track_ultraman_prefetch(task: asyncio.Task) -> None:
     _ultraman_prefetch_tasks.add(task)
-    task.add_done_callback(_ultraman_prefetch_tasks.discard)
+
+    def _consume(done: asyncio.Task) -> None:
+        _ultraman_prefetch_tasks.discard(done)
+        if done.cancelled():
+            return
+        try:
+            done.exception()
+        except (asyncio.CancelledError, RuntimeError):
+            return
+
+    task.add_done_callback(_consume)
 
 
 async def resolve_ultraman_card_image(hero, llm=None) -> str:
@@ -2641,6 +2642,18 @@ async def onebot_webhook(
         except (RuntimeError, httpx.HTTPError) as exc:
             logger.warning("anime character encyclopedia image failed: %s", exc)
             await send_group_message(group_id, caption + "\n图片暂时没有找到可靠来源。")
+    elif text in DAILY_NEWS_COMMANDS or (
+        bot_mentioned(event) and text in DAILY_NEWS_COMMANDS
+    ):
+        try:
+            digest = await build_daily_news_digest()
+            await send_group_long_message(group_id, digest)
+        except (ValueError, RuntimeError, httpx.HTTPError) as exc:
+            logger.warning("manual daily news failed: %s", exc)
+            await send_group_message(
+                group_id,
+                "今天的热点抓取暂时失败了，过一会儿再试。",
+            )
     elif text in DAILY_ULTRAMAN_COMMANDS or mentioned_image_command(
         event, DAILY_ULTRAMAN_COMMANDS
     ):
