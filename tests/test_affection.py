@@ -131,3 +131,21 @@ def test_short_ascii_slang_does_not_match_inside_normal_words():
     assert rule_based_affection("这是usb设备", "").delta == 0
     assert rule_based_affection("sb", "").delta == -10
     assert rule_based_affection("fw", "").delta == -5
+
+
+
+@pytest.mark.asyncio
+async def test_slang_definition_question_is_not_penalized_when_target_is_unclear():
+    class BrokenLLM:
+        async def ask(self, messages):
+            raise RuntimeError("offline")
+
+    result = await assess_affection(
+        "小丛雨，欧金金是什么意思？",
+        "",
+        BrokenLLM(),
+        check_hostility_target=True,
+        explicit_bot_mention=True,
+        persona_names=("小丛雨",),
+    )
+    assert result.delta == 0
