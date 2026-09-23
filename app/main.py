@@ -832,17 +832,27 @@ MURASAME_SERIOUS_HINTS = (
 
 
 def should_add_murasame_tsundere(seed: str, prompt: str = "") -> bool:
-    """Use a stable low-frequency tsundere flourish only in light conversation."""
+    """Use a stable, rare tsundere flourish only in light conversation."""
     if not seed or any(hint in prompt for hint in MURASAME_SERIOUS_HINTS):
         return False
-    return hashlib.sha256(seed.encode("utf-8")).digest()[0] % 8 == 0
+    return hashlib.sha256(seed.encode("utf-8")).digest()[0] % 20 == 0
 
 
-def ensure_default_murasame_voice(answer: str, *, seed: str = "", prompt: str = "") -> str:
+def ensure_default_murasame_voice(
+    answer: str,
+    *,
+    seed: str = "",
+    prompt: str = "",
+    affection_score: int | None = None,
+) -> str:
     if not answer:
         return answer
     if answer.startswith(("```", "<WEB_SEARCH>")):
         return answer
+    if affection_score is not None and affection_score < 10:
+        compact = re.sub(r"\s+", " ", answer).strip()
+        first = re.split(r"[。！？!?\n]", compact, maxsplit=1)[0].strip()
+        return (first or "不想说")[:12]
     if not any(marker in answer for marker in ("吾辈", "苟修金", "汝")):
         answer = "苟修金，吾辈来说：" + answer
     if should_add_murasame_tsundere(seed, prompt) and "杂鱼~杂鱼~" not in answer:
@@ -1675,13 +1685,6 @@ async def onebot_webhook(
         return {"ok": True, "source": "affection_reset"}
 
     if (
-        current_affection == 0
-        and not is_admin
-        and not affection_zero_allowed(text, event)
-    ):
-        return {"ok": True, "ignored": True, "reason": "affection_zero"}
-
-    if (
         bot_mentioned(event)
         and not active_possession_for_affection
         and text not in AFFECTION_VIEW_COMMANDS
@@ -1714,8 +1717,6 @@ async def onebot_webhook(
             )
             if change_notice:
                 await send_group_message(group_id, change_notice)
-            if current_affection == 0 and not is_admin:
-                return {"ok": True, "ignored": True, "reason": "affection_reached_zero"}
 
     raw_message = event.get("message")
     plain_repeat_message = (
@@ -2757,6 +2758,7 @@ async def onebot_webhook(
                     answer,
                     seed=f"chat:{group_id}:{user_id}:{prompt}",
                     prompt=prompt,
+                    affection_score=current_affection,
                 )
             request.app.state.memory.append(group_id, user_id, prompt, answer, memory_enabled)
             if not possession_name:
