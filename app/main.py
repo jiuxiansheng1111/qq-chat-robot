@@ -1418,9 +1418,9 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
             logger.info("LLM-assisted Ultraman image search failed for %s: %s", hero.name, exc)
 
     raise RuntimeError(
-        f"没有找到“{hero.name}”通过最终身份复核的可靠代表图"
-        "（已尝试圆谷、百度百科、Wikipedia/Wikimedia、百度/Bing 图片搜索，"
-        "并在每次返回前进行 LLM 身份复核；必要时还会让 LLM 生成更精确搜索词）"
+        f"没有找到“{hero.name}”的可用代表图"
+        "（已尝试圆谷、百度百科、Wikipedia/Wikimedia、百度/Bing 图片搜索；"
+        "必要时会让 LLM 生成更精确搜索词，但 LLM 不可用不会否掉可靠候选）"
     )
 
 
