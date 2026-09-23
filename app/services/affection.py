@@ -245,10 +245,10 @@ def hostility_assessment(text: str) -> AffectionAssessment:
     compact = re.sub(r"\s+", "", str(text or "")).casefold()
     if not compact:
         return AffectionAssessment(0, "没有攻击性内容")
-    if any(_contains_slang(compact, token) for token in _SEXUAL_HARASSMENT):
-        return AffectionAssessment(-6, "低俗性骚扰或露骨性暗示")
     if any(_contains_slang(compact, token) for token in _SEVERE_HOSTILITY):
         return AffectionAssessment(-10, "明显恶意辱骂")
+    if any(_contains_slang(compact, token) for token in _SEXUAL_HARASSMENT):
+        return AffectionAssessment(-6, "低俗性骚扰或露骨性暗示")
     if any(_contains_slang(compact, token) for token in _MODERATE_HOSTILITY):
         return AffectionAssessment(-5, "不友善或攻击性表达")
     if any(_contains_slang(compact, token) for token in _MILD_HOSTILITY):
