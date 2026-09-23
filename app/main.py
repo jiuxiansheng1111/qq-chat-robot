@@ -70,6 +70,7 @@ from app.services.music import (
     search_netease_music,
 )
 from app.services.onebot_routing import onebot_route, set_current_onebot_self_id
+from app.services.short_intent import canonicalize_short_command
 from app.services.possession_style import (
     fetch_group_context,
     fetch_member_recall_samples,
@@ -1425,6 +1426,10 @@ async def onebot_webhook(
         return {"ok": True, "ignored": True}
 
     text = message_text(event)
+    text = canonicalize_short_command(
+        text,
+        addressed=bot_mentioned(event) or text.startswith("/"),
+    )
     music_query = extract_music_query(event, text)
     translation_query = extract_translation_query(event, text)
     bilibili_query = extract_bilibili_video_query(event, text)
