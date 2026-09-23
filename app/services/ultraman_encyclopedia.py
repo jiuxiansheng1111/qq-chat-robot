@@ -978,7 +978,7 @@ async def baidu_image_search_ultraman_image(
         for alias in aliases
         if alias and (re.search(r"[A-Za-z]", alias) or re.search(r"[\u3400-\u9fff]", alias))
     )
-    searches = list(dict.fromkeys(searches))[:3]
+    searches = list(dict.fromkeys(searches))[:8]
     timeout = max(4.0, min(float(settings.media_timeout_seconds), 7.0))
     headers = {
         "User-Agent": ENCYCLOPEDIA_USER_AGENT,
@@ -1111,7 +1111,7 @@ async def bing_image_search_ultraman_image(
                     params={
                         "q": query,
                         "first": "1",
-                        "count": "35",
+                        "count": "50",
                         "adlt": "strict",
                         "scenario": "ImageBasicHover",
                     },
@@ -1122,7 +1122,7 @@ async def bing_image_search_ultraman_image(
 
             parser = _BingImageResultParser()
             parser.feed(response.text)
-            for item in parser.items[:35]:
+            for item in parser.items[:50]:
                 title = html.unescape(str(item.get("t") or ""))
                 description = html.unescape(str(item.get("desc") or ""))
                 original_url = html.unescape(str(item.get("murl") or "")).strip()
@@ -1171,6 +1171,127 @@ async def bing_image_search_ultraman_image(
     return None
 
 
+async def bing_image_relaxed_ultraman_image(
+    name: str,
+    aliases: tuple[str, ...],
+    settings: Settings,
+) -> EncyclopediaImage | None:
+    """Final exact-query fallback when strict metadata is too sparse.
+
+    The search query contains the exact hero/form name. For form variants we
+    still require Bing metadata to mention the parent hero, which avoids using
+    a totally unrelated Ultra image while preventing sparse titles from causing
+    a false "no image" result.
+    """
+    strict_terms = _specific_terms(name, aliases)
+    if not strict_terms:
+        return None
+
+    parent_name = name.split("·", 1)[0] if "·" in name else name
+    parent_terms = _specific_terms(parent_name, tuple())
+    query_values = [name]
+    query_values.extend(alias for alias in aliases if alias)
+    searches = [
+        f'"{value}" 奥特曼 角色 形态 官方 设定'
+        for value in tuple(dict.fromkeys(query_values))[:8]
+    ]
+
+    timeout = max(5.0, min(float(settings.media_timeout_seconds), 12.0))
+    headers = {
+        "User-Agent": ENCYCLOPEDIA_USER_AGENT,
+        "Referer": "https://www.bing.com/images/",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,ja;q=0.7",
+    }
+    endpoints = (
+        ("https://www.bing.com/images/async", {"scenario": "ImageBasicHover"}),
+        ("https://www.bing.com/images/search", {}),
+    )
+
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        headers=headers,
+    ) as client:
+        for query in searches:
+            for endpoint, extras in endpoints:
+                try:
+                    response = await client.get(
+                        endpoint,
+                        params={
+                            "q": query,
+                            "first": "1",
+                            "count": "50",
+                            "adlt": "strict",
+                            **extras,
+                        },
+                    )
+                    response.raise_for_status()
+                except httpx.HTTPError:
+                    continue
+
+                parser = _BingImageResultParser()
+                parser.feed(response.text)
+                for item in parser.items[:50]:
+                    title = html.unescape(str(item.get("t") or ""))
+                    description = html.unescape(str(item.get("desc") or ""))
+                    original_url = html.unescape(
+                        str(item.get("murl") or "")
+                    ).strip()
+                    thumb_url = html.unescape(
+                        str(item.get("turl") or item.get("turl2") or "")
+                    ).strip()
+                    page_url = html.unescape(
+                        str(item.get("purl") or "")
+                    ).strip()
+                    descriptor = (
+                        f"{title} {description} {original_url} {page_url}"
+                    )
+                    exact_hit = _matches_specific(descriptor, strict_terms)
+                    parent_hit = (
+                        bool(parent_terms)
+                        and _matches_specific(descriptor, parent_terms)
+                    )
+                    if not exact_hit and not parent_hit:
+                        continue
+
+                    referer = (
+                        page_url
+                        if page_url.startswith(("https://", "http://"))
+                        else "https://www.bing.com/images/"
+                    )
+                    referer = quote(referer, safe=":/?&=%#")
+                    # Prefer Bing's thumbnail on the relaxed fallback because
+                    # original hosts often block hotlink downloads.
+                    image_urls = tuple(
+                        dict.fromkeys(
+                            url
+                            for url in (thumb_url, original_url)
+                            if url.startswith(("https://", "http://"))
+                        )
+                    )
+                    for image_url in image_urls:
+                        try:
+                            data_b64 = await _download_verified_image(
+                                client,
+                                image_url,
+                                referer,
+                                settings,
+                            )
+                        except (RuntimeError, httpx.HTTPError):
+                            continue
+                        return EncyclopediaImage(
+                            data=data_b64,
+                            source="Bing 精确查询最终兜底",
+                            page_url=page_url
+                            or (
+                                "https://www.bing.com/images/search?q="
+                                + quote(query)
+                            ),
+                            label=title or description or query,
+                        )
+    return None
+
+
 async def encyclopedia_ultraman_image(
     name: str,
     aliases: tuple[str, ...],
@@ -1190,4 +1311,7 @@ async def encyclopedia_ultraman_image(
     bing_image = await bing_image_search_ultraman_image(name, aliases, settings)
     if bing_image is not None:
         return bing_image
+    relaxed = await bing_image_relaxed_ultraman_image(name, aliases, settings)
+    if relaxed is not None:
+        return relaxed
     raise RuntimeError(f"没有找到“{name}”的可靠百科/图片搜索代表图")
