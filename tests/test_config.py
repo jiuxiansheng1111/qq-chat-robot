@@ -27,3 +27,11 @@ def test_default_persona_does_not_seed_unrelated_group_tokens():
     assert "乐乐" not in prompt
     assert "有地将臣" in prompt
     assert "似乎有印象" not in prompt
+
+
+
+def test_persona_encourages_topic_relevant_casual_questions():
+    prompt = Settings(_env_file=None).persona_prompt()
+    assert "闲聊" in prompt
+    assert "自然反问一个" in prompt
+    assert "网络黑话" in prompt
