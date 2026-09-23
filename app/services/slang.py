@@ -20,8 +20,10 @@ def needs_slang_check(text: str) -> bool:
         return False
     # Short Latin acronyms are common in Chinese online slang (e.g. sb/fw/nt)
     # and short Chinese phrases with insult-like morphemes are worth checking.
-    if re.fullmatch(r"[A-Za-z0-9]{2,10}", compact):
-        return True
+    if re.fullmatch(r"[A-Za-z0-9]{2,6}", compact):
+        lowered = compact.casefold()
+        if compact.isupper() or not re.search(r"[aeiou]", lowered):
+            return True
     return any(
         token in compact.casefold()
         for token in (
