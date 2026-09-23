@@ -234,9 +234,9 @@ def affection_prompt(score: int) -> str:
 def affection_status_text(score: int) -> str:
     stage, _ = affection_stage(score)
     unlock = (
-        "已解锁记住功能"
+        "已解锁记住与亲密互动"
         if score >= MEMORY_UNLOCK_SCORE
-        else f"记住功能将在 {MEMORY_UNLOCK_SCORE} 解锁"
+        else f"记住/摸头/牵手/拥抱/亲吻将在 {MEMORY_UNLOCK_SCORE} 解锁"
     )
     return f"小丛雨好感度：{clamp_affection(score)}/100｜{stage}｜{unlock}"
 
