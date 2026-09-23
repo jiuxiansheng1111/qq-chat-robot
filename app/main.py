@@ -1550,7 +1550,11 @@ async def onebot_webhook(
     if not group_id:
         return {"ok": True, "ignored": True}
     display_name = sender_display_name(event)
-    if text and not text.startswith(("/", "http://", "https://")):
+    if (
+        text
+        and user_id != event_bot_self_id(event)
+        and not text.startswith(("/", "http://", "https://"))
+    ):
         group_cache = request.app.state.recent_group_messages.setdefault(
             group_id,
             deque(maxlen=max(50, settings.group_context_history_count)),
@@ -2491,7 +2495,6 @@ async def onebot_webhook(
             return {"ok": True, "ignored": True, "reason": "group_llm_rate_limited"}
         memory_enabled = await request.app.state.db.memory_enabled(group_id, user_id)
         long_memories = await request.app.state.db.long_term_memories(group_id, user_id)
-        style_hint = await request.app.state.db.group_style_hint(group_id)
         possession = active_possession
         persona_context: list[str] = []
         if not active_possession:
@@ -2526,11 +2529,6 @@ async def onebot_webhook(
             persona_context.append(
                 "用户明确要求长期记住的信息：\n"
                 + "\n".join(f"- {item}" for item in long_memories)
-            )
-        if style_hint and not possession:
-            persona_context.append(
-                "本群匿名聚合出的表达风格：" + style_hint
-                + "。自然参考即可，不要照搬某个成员，也不要强行使用网络用语。"
             )
         if possession:
             target_id, name, mode = possession
@@ -2664,10 +2662,13 @@ async def onebot_webhook(
                         if row and row not in existing:
                             group_cache.appendleft(row)
                             existing.add(row)
+        # Keep the large history cache for continuity, but do not dump thousands
+        # of raw chat lines into every model call. A bounded recent window avoids
+        # stale bot replies and unrelated catchphrases overpowering the persona.
         recent_group_context = group_context_from_lines(
             list(group_cache),
-            message_limit=settings.group_context_message_limit,
-            char_limit=settings.group_context_char_limit,
+            message_limit=min(settings.group_context_message_limit, 120),
+            char_limit=min(settings.group_context_char_limit, 18_000),
         )
         if recent_group_context:
             messages[1:1] = [{"role": "system", "content": recent_group_context}]
