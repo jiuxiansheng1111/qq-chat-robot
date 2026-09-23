@@ -839,7 +839,8 @@ class Database:
             ).fetchone()
 
             if row:
-                count = int(row[0]) + 1
+                previous_count = int(row[0])
+                count = previous_count + 1
                 streak = max(1, int(row[1]))
                 bonus_awarded = int(row[2])
                 await db.execute(
@@ -848,7 +849,7 @@ class Database:
                     "WHERE group_id = ? AND user_id = ? AND activity_date = ?",
                     (count, group_id, user_id, activity_date),
                 )
-                first_today = False
+                first_today = previous_count == 0
             else:
                 previous = await (
                     await db.execute(
@@ -915,11 +916,26 @@ class Database:
                 )
             ).fetchone()
             if row is None:
+                today = date.fromisoformat(activity_date)
+                yesterday = (today - timedelta(days=1)).isoformat()
+                previous = await (
+                    await db.execute(
+                        "SELECT activity_date, streak_days FROM group_affection_daily "
+                        "WHERE group_id = ? AND user_id = ? "
+                        "ORDER BY activity_date DESC LIMIT 1",
+                        (group_id, user_id),
+                    )
+                ).fetchone()
+                streak = (
+                    int(previous[1]) + 1
+                    if previous and str(previous[0]) == yesterday
+                    else 1
+                )
                 await db.execute(
                     "INSERT INTO group_affection_daily"
-                    "(group_id, user_id, activity_date, action_keys) "
-                    "VALUES (?, ?, ?, '')",
-                    (group_id, user_id, activity_date),
+                    "(group_id, user_id, activity_date, action_keys, streak_days) "
+                    "VALUES (?, ?, ?, '', ?)",
+                    (group_id, user_id, activity_date, streak),
                 )
                 keys: list[str] = []
             else:
