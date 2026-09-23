@@ -17,3 +17,13 @@ def test_persona_examples_are_loaded(tmp_path):
     prompt = settings.persona_prompt()
     assert "你是测试机器人" in prompt
     assert "你好呀" in prompt
+
+
+
+def test_default_persona_does_not_seed_unrelated_group_tokens():
+    prompt = Settings(_env_file=None).persona_prompt()
+    assert "drj" not in prompt.casefold()
+    assert "hzh" not in prompt.casefold()
+    assert "乐乐" not in prompt
+    assert "有地将臣" in prompt
+    assert "似乎有印象" not in prompt
