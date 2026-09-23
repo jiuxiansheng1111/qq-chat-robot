@@ -74,6 +74,21 @@ def anime_character_profile_text(character: AnimeCharacter) -> str:
     return f"作品来源：{character.series}\n角色简介：{character.description}"
 
 
+def anime_character_catalog_text_pages(max_chars: int = 1700) -> list[str]:
+    pages: list[str] = []
+    current = f"✦ 二次元角色图鉴 · 共 {len(ANIME_CHARACTER_ROSTER)} 位 ✦\n"
+    for index, character in enumerate(ANIME_CHARACTER_ROSTER, start=1):
+        line = f"{index:03d}. {character.name}｜{character.series}\n"
+        if len(current) + len(line) > max_chars:
+            pages.append(current.rstrip())
+            current = "✦ 二次元角色图鉴 · 续 ✦\n" + line
+        else:
+            current += line
+    if current.strip():
+        pages.append(current.rstrip())
+    return pages
+
+
 def _normalize(value: str) -> str:
     value = unicodedata.normalize("NFKC", value or "").casefold()
     return re.sub(r"[^0-9a-z\u3040-\u30ff\u3400-\u9fff]+", "", value)
