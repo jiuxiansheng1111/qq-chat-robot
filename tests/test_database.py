@@ -268,3 +268,23 @@ async def test_database_migrates_audited_ultraman_form_names(tmp_path):
     assert migrated == set(migrations.values())
 
 
+
+
+async def test_group_member_identity_memory_is_private_keyed_and_clearable(tmp_path):
+    db = Database(Settings(_env_file=None, database_path=str(tmp_path / "member-id.db")))
+    await db.init()
+    await db.add_group_member_identity("100", "184573813", "狄", "drj")
+    await db.add_group_member_identity("100", "184573813", "狄", "猫猫")
+
+    assert await db.group_member_identities("100", "184573813") == ["猫猫", "drj"]
+
+    by_qq = await db.find_group_member_identity("100", "184573813")
+    assert by_qq[0] == ("184573813", "狄", "猫猫")
+
+    by_alias = await db.find_group_member_identity("100", "drj")
+    assert by_alias == [("184573813", "狄", "drj")]
+
+    assert await db.latest_group_member_display_name("100", "184573813") == "狄"
+
+    await db.clear_group_member_identities("100", "184573813")
+    assert await db.group_member_identities("100", "184573813") == []
