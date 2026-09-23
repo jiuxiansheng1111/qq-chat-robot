@@ -93,6 +93,7 @@ from app.services.possession_style import (
 )
 from app.services.short_intent import canonicalize_short_command
 from app.services.simple_logic import resolve_rps_logic
+from app.services.slang import classify_unknown_slang
 from app.services.translation import (
     TranslationResult,
     format_translation_reply,
@@ -2104,6 +2105,35 @@ async def onebot_webhook(
             )
             return {"ok": True, "source": "affection_action_locked"}
 
+        bonus, streak, count, bonus_reason = (
+            await request.app.state.db.record_affection_engagement(
+                group_id,
+                user_id,
+                today,
+            )
+        )
+        if bonus:
+            old_score, current_affection = await request.app.state.db.adjust_affection(
+                group_id,
+                user_id,
+                bonus,
+                bonus_reason,
+                initial=AFFECTION_INITIAL,
+            )
+            await send_group_message(
+                group_id,
+                affection_change_text(
+                    old_score,
+                    current_affection,
+                    AffectionAssessment(
+                        bonus,
+                        bonus_reason
+                        or f"持续互动：连续 {streak} 天 / 今日第 {count} 次",
+                        "streak",
+                    ),
+                ),
+            )
+
         granted = await request.app.state.db.claim_affection_action(
             group_id,
             user_id,
@@ -2161,22 +2191,35 @@ async def onebot_webhook(
         # a previous message, preventing stale replies from unrelated topics
         # being scored as if they were direct answers.
         hostile = hostility_assessment(text)
-        assessment = await assess_affection(
-            text,
-            previous_reply if has_reply_segment(event) else "",
-            request.app.state.llm,
-            check_hostility_target=hostile.delta < 0,
-            explicit_bot_mention=bot_mentioned(event) or reply_to_murasame,
-            persona_names=tuple(
-                dict.fromkeys(
-                    (
-                        settings.persona_name,
-                        "小丛雨",
-                        "穗织幼刀姬",
+        slang_verdict = None
+        if hostile.delta == 0:
+            slang_verdict = await classify_unknown_slang(
+                text,
+                request.app.state.llm,
+            )
+        if slang_verdict is not None and slang_verdict.delta < 0:
+            assessment = AffectionAssessment(
+                slang_verdict.delta,
+                slang_verdict.reason,
+                "slang",
+            )
+        else:
+            assessment = await assess_affection(
+                text,
+                previous_reply if has_reply_segment(event) else "",
+                request.app.state.llm,
+                check_hostility_target=hostile.delta < 0,
+                explicit_bot_mention=bot_mentioned(event) or reply_to_murasame,
+                persona_names=tuple(
+                    dict.fromkeys(
+                        (
+                            settings.persona_name,
+                            "小丛雨",
+                            "穗织幼刀姬",
+                        )
                     )
-                )
-            ),
-        )
+                ),
+            )
         if assessment.delta:
             old_score, current_affection = await request.app.state.db.adjust_affection(
                 group_id,
