@@ -950,3 +950,92 @@ async def test_ultraman_image_resolution_fails_when_official_and_encyclopedia_fa
 
     with pytest.raises(RuntimeError, match="可靠官方或百科代表图"):
         await resolve_ultraman_card_image(hero)
+
+
+def test_low_affection_blocks_new_identity_memory(tmp_path):
+    previous_database_path = settings.database_path
+    previous_onebot_api_base = settings.onebot_api_base
+    previous_self_id = settings.onebot_self_id
+    settings.database_path = str(tmp_path / "affection-memory-gate.db")
+    settings.onebot_api_base = ""
+    settings.onebot_self_id = "bot-1"
+    try:
+        with TestClient(app) as client:
+            payload = event("记住，我是drj", user_id="affection-user")
+            payload["self_id"] = "bot-1"
+            payload["message_id"] = "affection-memory-low"
+            payload["sender"]["card"] = "狄"
+            payload["message"] = [
+                {"type": "at", "data": {"qq": "bot-1"}},
+                {"type": "text", "data": {"text": " 记住，我是drj"}},
+            ]
+            result = post_event(client, payload).json()
+            assert result["ok"] is True
+
+            aliases = client.portal.call(
+                client.app.state.db.group_member_identities,
+                "integration-group",
+                "affection-user",
+            )
+            assert aliases == []
+
+            client.portal.call(
+                client.app.state.db.reset_affection,
+                "integration-group",
+                "affection-user",
+                60,
+            )
+            payload["message_id"] = "affection-memory-unlocked"
+            result = post_event(client, payload).json()
+            assert result["ok"] is True
+            aliases = client.portal.call(
+                client.app.state.db.group_member_identities,
+                "integration-group",
+                "affection-user",
+            )
+            assert aliases == ["drj"]
+    finally:
+        settings.database_path = previous_database_path
+        settings.onebot_api_base = previous_onebot_api_base
+        settings.onebot_self_id = previous_self_id
+
+
+def test_zero_affection_ignores_normal_chat_but_allows_status(tmp_path):
+    previous_database_path = settings.database_path
+    previous_onebot_api_base = settings.onebot_api_base
+    previous_self_id = settings.onebot_self_id
+    settings.database_path = str(tmp_path / "affection-zero.db")
+    settings.onebot_api_base = ""
+    settings.onebot_self_id = "bot-1"
+    try:
+        with TestClient(app) as client:
+            client.portal.call(
+                client.app.state.db.reset_affection,
+                "integration-group",
+                "cold-user",
+                0,
+            )
+
+            payload = event("你好", user_id="cold-user")
+            payload["self_id"] = "bot-1"
+            payload["message_id"] = "affection-zero-chat"
+            payload["message"] = [
+                {"type": "at", "data": {"qq": "bot-1"}},
+                {"type": "text", "data": {"text": "你好"}},
+            ]
+            result = post_event(client, payload).json()
+            assert result["reason"] == "affection_zero"
+
+            status = event("好感度", user_id="cold-user")
+            status["self_id"] = "bot-1"
+            status["message_id"] = "affection-zero-status"
+            status["message"] = [
+                {"type": "at", "data": {"qq": "bot-1"}},
+                {"type": "text", "data": {"text": "好感度"}},
+            ]
+            result = post_event(client, status).json()
+            assert result["source"] == "affection"
+    finally:
+        settings.database_path = previous_database_path
+        settings.onebot_api_base = previous_onebot_api_base
+        settings.onebot_self_id = previous_self_id
