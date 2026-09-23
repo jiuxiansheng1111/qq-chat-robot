@@ -6,13 +6,14 @@ import unicodedata
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from io import BytesIO
-from urllib.parse import quote
+from urllib.parse import quote, urljoin
 
 import httpx
 from PIL import Image
 
 from app.config import Settings
 from app.llm.providers import LLMError
+from app.services.web_search import search_web
 
 
 @dataclass(frozen=True)
@@ -331,6 +332,248 @@ class _BingImageParser(HTMLParser):
             self.items.append(payload)
 
 
+class _CharacterPageImageParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.title = ""
+        self.og_image = ""
+        self.images: list[tuple[str, str]] = []
+        self._in_title = False
+        self._title_parts: list[str] = []
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        values = {key.casefold(): value or "" for key, value in attrs}
+        lowered = tag.casefold()
+        if lowered == "title":
+            self._in_title = True
+            return
+        if lowered == "meta":
+            prop = (values.get("property") or values.get("name") or "").casefold()
+            if prop in {"og:image", "twitter:image"} and not self.og_image:
+                self.og_image = values.get("content", "")
+            return
+        if lowered != "img":
+            return
+        source = (
+            values.get("data-src")
+            or values.get("data-original")
+            or values.get("src")
+            or ""
+        )
+        label = " ".join(
+            value
+            for value in (
+                values.get("alt", ""),
+                values.get("title", ""),
+                values.get("aria-label", ""),
+            )
+            if value
+        )
+        if source:
+            self.images.append((source, label))
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.casefold() == "title":
+            self._in_title = False
+            if not self.title:
+                self.title = " ".join(self._title_parts).strip()
+
+    def handle_data(self, data: str) -> None:
+        if self._in_title:
+            self._title_parts.append(data)
+
+
+async def _web_page_character_image(
+    character: AnimeCharacter,
+    aliases: tuple[str, ...],
+    settings: Settings,
+) -> str | None:
+    series = character.series.strip("《》 ")
+    query_names = tuple(dict.fromkeys((character.name, *character.aliases, *aliases)))
+    queries = [
+        f'"{query_names[0]}" "{series}" 公式 character',
+        f'"{query_names[0]}" "{series}" 角色 官网',
+    ]
+    for alias in query_names[1:5]:
+        queries.append(f'"{alias}" "{series}" official character')
+
+    seen_urls: set[str] = set()
+    timeout = max(5.0, min(float(settings.media_timeout_seconds), 15.0))
+    headers = {
+        "User-Agent": "Mozilla/5.0 qq-chatrobot/0.1",
+        "Accept-Language": "zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7",
+    }
+
+    for query in tuple(dict.fromkeys(queries))[:6]:
+        try:
+            results = await search_web(query, limit=8, timeout=timeout)
+        except (httpx.HTTPError, ValueError):
+            continue
+        for result in results:
+            if result.url in seen_urls:
+                continue
+            seen_urls.add(result.url)
+            evidence_score = _candidate_score(
+                character,
+                aliases,
+                f"{result.title} {result.snippet} {result.url}",
+            )
+            if evidence_score <= 0:
+                continue
+
+            try:
+                async with httpx.AsyncClient(
+                    timeout=timeout,
+                    follow_redirects=True,
+                    headers=headers,
+                ) as client:
+                    response = await client.get(result.url)
+                    response.raise_for_status()
+                    parser = _CharacterPageImageParser()
+                    parser.feed(response.text)
+                    page_descriptor = (
+                        f"{result.title} {result.snippet} {parser.title} {response.url}"
+                    )
+                    page_score = _candidate_score(
+                        character,
+                        aliases,
+                        page_descriptor,
+                    )
+                    if page_score <= 0:
+                        continue
+
+                    candidates: list[tuple[int, str, str]] = []
+                    for source, label in parser.images:
+                        image_url = urljoin(str(response.url), html.unescape(source))
+                        score = _candidate_score(
+                            character,
+                            aliases,
+                            f"{label} {image_url}",
+                        )
+                        if score > 0:
+                            candidates.append((score + 20, image_url, label))
+                    if parser.og_image:
+                        og_url = urljoin(
+                            str(response.url),
+                            html.unescape(parser.og_image),
+                        )
+                        candidates.append(
+                            (page_score, og_url, parser.title or result.title)
+                        )
+
+                    for _, image_url, _ in sorted(
+                        candidates,
+                        key=lambda item: item[0],
+                        reverse=True,
+                    ):
+                        if not image_url.startswith(("https://", "http://")):
+                            continue
+                        try:
+                            return await _download_image(
+                                client,
+                                image_url,
+                                str(response.url),
+                                settings,
+                            )
+                        except (
+                            httpx.HTTPError,
+                            RuntimeError,
+                            OSError,
+                            ValueError,
+                        ):
+                            continue
+            except (httpx.HTTPError, ValueError):
+                continue
+    return None
+
+
+async def _bing_image_relaxed(
+    character: AnimeCharacter,
+    aliases: tuple[str, ...],
+    settings: Settings,
+) -> str | None:
+    """Last-resort exact-query image search.
+
+    The exact character + series query is strong evidence by itself. We still
+    require either the character identity or the series to appear in Bing tile
+    metadata, but do not require both.
+    """
+    timeout = max(5.0, min(float(settings.media_timeout_seconds), 15.0))
+    headers = {
+        "User-Agent": "Mozilla/5.0 qq-chatrobot/0.1",
+        "Referer": "https://www.bing.com/images/",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,ja;q=0.7",
+    }
+    name_terms = _name_terms(character, aliases)
+    series_terms = _series_terms(character)
+    queries = _search_queries(character, aliases)
+
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        headers=headers,
+    ) as client:
+        for query in queries[:10]:
+            try:
+                response = await client.get(
+                    "https://www.bing.com/images/search",
+                    params={
+                        "q": query,
+                        "first": "1",
+                        "count": "50",
+                        "adlt": "strict",
+                    },
+                )
+                response.raise_for_status()
+            except httpx.HTTPError:
+                continue
+
+            parser = _BingImageParser()
+            parser.feed(response.text)
+            for item in parser.items[:50]:
+                descriptor = _normalize(
+                    " ".join(
+                        str(item.get(key) or "")
+                        for key in ("t", "desc", "purl", "murl")
+                    )
+                )
+                has_name = any(term in descriptor for term in name_terms)
+                has_series = any(term in descriptor for term in series_terms)
+                if not has_name and not has_series:
+                    continue
+                page_url = html.unescape(
+                    str(item.get("purl") or "https://www.bing.com/images/")
+                )
+                image_urls = tuple(
+                    dict.fromkeys(
+                        html.unescape(str(item.get(key) or ""))
+                        for key in ("turl", "turl2", "murl")
+                    )
+                )
+                for image_url in image_urls:
+                    if not image_url.startswith(("https://", "http://")):
+                        continue
+                    try:
+                        return await _download_image(
+                            client,
+                            image_url,
+                            page_url,
+                            settings,
+                        )
+                    except (
+                        httpx.HTTPError,
+                        RuntimeError,
+                        OSError,
+                        ValueError,
+                    ):
+                        continue
+    return None
+
+
 async def _baidu_image(
     character: AnimeCharacter,
     aliases: tuple[str, ...],
@@ -563,6 +806,7 @@ async def resolve_anime_character_image(
     errors: list[str] = []
 
     for source_name, resolver in (
+        ("角色/官方网页", _web_page_character_image),
         ("Wikipedia", _wikipedia_image),
         ("百度图片", _baidu_image),
         ("Bing图片", _bing_image),
@@ -582,6 +826,7 @@ async def resolve_anime_character_image(
             dict.fromkeys((*aliases, *generated))
         )
         for source_name, resolver in (
+            ("角色/官方网页+LLM", _web_page_character_image),
             ("Wikipedia+LLM", _wikipedia_image),
             ("百度图片+LLM", _baidu_image),
             ("Bing图片+LLM", _bing_image),
@@ -595,7 +840,16 @@ async def resolve_anime_character_image(
                 return image
             errors.append(f"{source_name}: no-match")
 
-    detail = "; ".join(errors[-6:])
+    try:
+        relaxed = await _bing_image_relaxed(character, aliases, settings)
+    except (httpx.HTTPError, RuntimeError, OSError, ValueError) as exc:
+        errors.append(f"Bing放宽兜底: {type(exc).__name__}: {exc}")
+    else:
+        if relaxed is not None:
+            return relaxed
+        errors.append("Bing放宽兜底: no-match")
+
+    detail = "; ".join(errors[-8:])
     raise RuntimeError(
         f"没有找到“{character.name}”的可用角色图片"
         + (f"；{detail}" if detail else "")
