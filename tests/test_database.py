@@ -294,3 +294,39 @@ async def test_group_member_identity_memory_is_private_keyed_and_clearable(tmp_p
 
     await db.clear_group_member_identities("100", "184573813")
     assert await db.group_member_identities("100", "184573813") == []
+
+
+async def test_affection_is_persistent_clamped_and_auditable(tmp_path):
+    path = tmp_path / "affection.db"
+    db = Database(Settings(_env_file=None, database_path=str(path)))
+    await db.init()
+
+    assert await db.affection_score("100", "200") == 30
+
+    old_score, new_score = await db.adjust_affection(
+        "100", "200", 5, "完美回答"
+    )
+    assert (old_score, new_score) == (30, 35)
+
+    for _ in range(20):
+        await db.adjust_affection("100", "200", 5, "持续满意")
+    assert await db.affection_score("100", "200") == 100
+
+    old_score, new_score = await db.adjust_affection(
+        "100", "200", -10, "恶意辱骂"
+    )
+    assert (old_score, new_score) == (100, 90)
+
+    events = await db.affection_events("100", "200", limit=3)
+    assert events
+    assert events[0][0] == -10
+    assert events[0][1] == 90
+    assert events[0][2] == "恶意辱骂"
+
+    reopened = Database(Settings(_env_file=None, database_path=str(path)))
+    await reopened.init()
+    assert await reopened.affection_score("100", "200") == 90
+
+    assert await reopened.reset_affection("100", "200") == 30
+    assert await reopened.affection_score("100", "200") == 30
+    assert await reopened.affection_events("100", "200") == []
