@@ -751,6 +751,143 @@ async def _bing_image(
     return None
 
 
+async def _search_engine_first_image(
+    character: AnimeCharacter,
+    aliases: tuple[str, ...],
+    settings: Settings,
+) -> str | None:
+    """Return the first downloadable exact-query image without source filtering.
+
+    This is deliberately permissive: if strict matching fails, a Tencent Video,
+    iQIYI, Bilibili, article, wiki, or other search-result source is acceptable.
+    """
+    queries = [
+        f"{character.name} {character.series}",
+        character.name,
+    ]
+    queries.extend(
+        f"{alias} {character.series}"
+        for alias in aliases
+        if alias
+    )
+    queries = list(dict.fromkeys(query.strip() for query in queries if query.strip()))[:6]
+    timeout = max(3.0, min(float(settings.media_timeout_seconds), 6.0))
+
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        headers={"User-Agent": "Mozilla/5.0 qq-chatrobot/0.1"},
+    ) as client:
+        for query in queries:
+            try:
+                response = await client.get(
+                    "https://image.baidu.com/search/acjson",
+                    params={
+                        "tn": "resultjson_com",
+                        "ipn": "rj",
+                        "ct": "201326592",
+                        "fp": "result",
+                        "queryWord": query,
+                        "word": query,
+                        "ie": "utf-8",
+                        "oe": "utf-8",
+                        "pn": "0",
+                        "rn": "10",
+                        "newReq": "1",
+                    },
+                    headers={"Referer": "https://image.baidu.com/"},
+                )
+                response.raise_for_status()
+                payload = response.json()
+            except (httpx.HTTPError, ValueError):
+                continue
+
+            items = payload.get("data", [])
+            if isinstance(items, list):
+                for item in items[:10]:
+                    if not isinstance(item, dict):
+                        continue
+                    page_url = html.unescape(
+                        str(item.get("fromURL") or "https://image.baidu.com/")
+                    )
+                    image_urls = tuple(
+                        dict.fromkeys(
+                            html.unescape(str(item.get(key) or ""))
+                            for key in (
+                                "middleURL",
+                                "thumbURL",
+                                "hoverURL",
+                                "objURL",
+                            )
+                        )
+                    )
+                    for image_url in image_urls:
+                        if not image_url.startswith(("https://", "http://")):
+                            continue
+                        try:
+                            return await _download_image(
+                                client,
+                                image_url,
+                                page_url,
+                                settings,
+                            )
+                        except (
+                            httpx.HTTPError,
+                            RuntimeError,
+                            OSError,
+                            ValueError,
+                        ):
+                            continue
+
+        for query in queries:
+            try:
+                response = await client.get(
+                    "https://www.bing.com/images/async",
+                    params={
+                        "q": query,
+                        "first": "1",
+                        "count": "20",
+                        "adlt": "strict",
+                        "scenario": "ImageBasicHover",
+                    },
+                    headers={"Referer": "https://www.bing.com/images/"},
+                )
+                response.raise_for_status()
+            except httpx.HTTPError:
+                continue
+
+            parser = _BingImageParser()
+            parser.feed(response.text)
+            for item in parser.items[:20]:
+                page_url = html.unescape(
+                    str(item.get("purl") or "https://www.bing.com/images/")
+                )
+                image_urls = tuple(
+                    dict.fromkeys(
+                        html.unescape(str(item.get(key) or ""))
+                        for key in ("turl", "turl2", "murl")
+                    )
+                )
+                for image_url in image_urls:
+                    if not image_url.startswith(("https://", "http://")):
+                        continue
+                    try:
+                        return await _download_image(
+                            client,
+                            image_url,
+                            page_url,
+                            settings,
+                        )
+                    except (
+                        httpx.HTTPError,
+                        RuntimeError,
+                        OSError,
+                        ValueError,
+                    ):
+                        continue
+    return None
+
+
 async def _llm_search_aliases(
     character: AnimeCharacter,
     llm,
@@ -850,9 +987,22 @@ async def resolve_anime_character_image(
             return relaxed
         errors.append("Bing放宽兜底: no-match")
 
+    try:
+        first_image = await _search_engine_first_image(
+            character,
+            aliases,
+            settings,
+        )
+    except (httpx.HTTPError, RuntimeError, OSError, ValueError) as exc:
+        errors.append(f"搜索引擎首图: {type(exc).__name__}: {exc}")
+    else:
+        if first_image is not None:
+            return first_image
+        errors.append("搜索引擎首图: no-match")
+
     detail = "; ".join(errors[-8:])
     raise RuntimeError(
-        f"没有找到“{character.name}”的可用角色图片"
+        f"没有找到“{character.name}”的可下载角色图片"
         + (f"；{detail}" if detail else "")
     )
 
