@@ -173,6 +173,16 @@ def affection_status_text(score: int) -> str:
     return f"小丛雨好感度：{clamp_affection(score)}/100｜{stage}｜{unlock}"
 
 
+def hostility_assessment(text: str) -> AffectionAssessment:
+    compact = re.sub(r"\s+", "", str(text or "")).casefold()
+    if not compact:
+        return AffectionAssessment(0, "没有攻击性内容")
+    hostile = hostility_assessment(text)
+    if hostile.delta:
+        return hostile
+    return AffectionAssessment(0, "没有攻击性内容")
+
+
 def rule_based_affection(text: str, previous_bot_reply: str = "") -> AffectionAssessment:
     compact = re.sub(r"\s+", "", str(text or "")).casefold()
     if not compact:
@@ -213,12 +223,71 @@ def _parse_llm_assessment(raw: str) -> AffectionAssessment | None:
     return AffectionAssessment(delta, reason, "llm")
 
 
+async def _llm_hostility_targets_murasame(
+    text: str,
+    llm,
+    *,
+    persona_names: tuple[str, ...],
+) -> bool | None:
+    if llm is None:
+        return None
+    try:
+        raw = await llm.ask(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "你只判断一句群聊里的攻击/辱骂主要指向谁。"
+                        "当前机器人角色名字会单独给出。"
+                        "如果脏话是在直接骂机器人，输出 TARGET；"
+                        "如果是在转述别人说的话、举例、问'有人这样骂你怎么办'、"
+                        "骂第三个人或骂某件事，输出 OTHER；"
+                        "无法判断输出 UNCLEAR。只能输出这三个词之一。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"机器人角色名：{'、'.join(persona_names)}\n"
+                        f"当前消息：{text[:700]}"
+                    ),
+                },
+            ]
+        )
+    except (LLMError, httpx.HTTPError, RuntimeError, ValueError):
+        return None
+
+    verdict = re.sub(r"[^A-Z]", "", str(raw or "").upper())
+    if verdict.startswith("TARGET"):
+        return True
+    if verdict.startswith("OTHER"):
+        return False
+    return None
+
+
 async def assess_affection(
     text: str,
     previous_bot_reply: str,
     llm=None,
+    *,
+    check_hostility_target: bool = False,
+    explicit_bot_mention: bool = False,
+    persona_names: tuple[str, ...] = (),
 ) -> AffectionAssessment:
     direct = rule_based_affection(text, previous_bot_reply)
+    if direct.delta < 0 and check_hostility_target:
+        targeted = await _llm_hostility_targets_murasame(
+            text,
+            llm,
+            persona_names=persona_names,
+        )
+        if targeted is False:
+            return AffectionAssessment(0, "攻击内容并非指向小丛雨", "llm-target")
+        if targeted is True:
+            return AffectionAssessment(direct.delta, direct.reason, "llm-target")
+        if not explicit_bot_mention:
+            return AffectionAssessment(0, "辱骂目标不明确，未扣分", "fallback")
+        return direct
     if direct.delta:
         return direct
     if llm is None or not previous_bot_reply:
