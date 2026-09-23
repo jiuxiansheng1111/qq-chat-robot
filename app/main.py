@@ -42,6 +42,7 @@ from app.services.affection import (
     affection_prompt,
     affection_status_text,
     assess_affection,
+    hostility_assessment,
 )
 from app.services.anime_character import (
     ANIME_CHARACTER_BY_NAME,
@@ -1825,10 +1826,22 @@ async def onebot_webhook(
         # may interpret nuanced affection only when the user explicitly quoted
         # a previous message, preventing stale replies from unrelated topics
         # being scored as if they were direct answers.
+        hostile = hostility_assessment(text)
         assessment = await assess_affection(
             text,
             previous_reply if has_reply_segment(event) else "",
-            request.app.state.llm if has_reply_segment(event) else None,
+            request.app.state.llm,
+            check_hostility_target=hostile.delta < 0,
+            explicit_bot_mention=bot_mentioned(event),
+            persona_names=tuple(
+                dict.fromkeys(
+                    (
+                        settings.persona_name,
+                        "小丛雨",
+                        "穗织幼刀姬",
+                    )
+                )
+            ),
         )
         if assessment.delta:
             old_score, current_affection = await request.app.state.db.adjust_affection(
@@ -2646,11 +2659,19 @@ async def onebot_webhook(
         imitate_current_possession = False
         sender_name = sender_display_name(event)
         persona_context.append(
-            "【当前发言者】QQ 群名片/昵称是“"
-            + sender_name
-            + "”。当前消息里的第一人称“我/我的/本人”默认都指这位发言者，"
-            "第二人称“你/你自己”才指机器人。"
-            "因此“你知道我是谁吗”是在问发言者是谁，绝不能解释成机器人是谁。"
+            "【当前对话角色表】\n"
+            f"- 当前发言者：{sender_name}\n"
+            f"- 当前机器人：{settings.persona_name}\n"
+            "【指代解析硬规则】"
+            "先在心里确定主语、宾语和关系方向，再回答，不要把关系倒置。"
+            "当前发言者消息中的“我/我的/本人”默认指当前发言者；"
+            "“你/你的/你自己”默认指当前机器人。"
+            "“他/她/它/这个人/那个人/前者/后者”必须优先指向当前句或紧邻上文里"
+            "最近被明确点名且语法一致的第三方，不得随意指向机器人或当前发言者。"
+            "引号、转述、‘某人说……’里面的我/你属于被转述的话语，不能套用外层说话者。"
+            "遇到‘A是B的父亲/儿子/朋友/主人’等关系，必须保持 A 与 B 的方向；"
+            "回答前先检查一次有没有把谁是谁说反。"
+            "例如‘你知道我是谁吗’是在问当前发言者是谁，不是在问机器人是谁。"
         )
         if needs_translation(sender_name):
             try:
