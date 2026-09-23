@@ -950,9 +950,16 @@ async def resolve_music_identity(
 def affection_zero_allowed(text: str, event: dict) -> bool:
     if text in AFFECTION_VIEW_COMMANDS or text in AFFECTION_HISTORY_COMMANDS:
         return True
+    if text in LONG_MEMORY_LIST_COMMANDS or text in MEMBER_IDENTITY_LIST_COMMANDS:
+        return True
+    if text in GROUP_MEMORY_LIST_COMMANDS:
+        return True
     if text in MEMBER_IDENTITY_CLEAR_COMMANDS or text in LONG_MEMORY_CLEAR_COMMANDS:
         return True
-    if text in {"/记忆删除", "/memory clear", "/记忆关闭", "/memory off"}:
+    if text in {
+        "/记忆删除", "/memory clear", "/记忆关闭", "/memory off",
+        "/记忆状态", "/memory status",
+    }:
         return True
     if extract_group_memory_deletion(event, text) is not None:
         return True
