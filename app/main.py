@@ -62,6 +62,7 @@ from app.services.group_memory_logic import (
     group_memory_reasoning_hints,
     resolve_group_memory_question,
     rewrite_first_person_identity_question,
+    rewrite_relation_pronouns,
 )
 from app.services.http_routing import install_outbound_proxy_environment
 from app.services.music import (
@@ -2631,10 +2632,19 @@ async def onebot_webhook(
                     )
                 await send_group_message(group_id, reply)
                 return {"ok": True, "source": "group_member_identity"}
+        speaker_display = sender_display_name(event)
         memory_lookup_prompt = rewrite_first_person_identity_question(
-            prompt, sender_display_name(event)
+            prompt, speaker_display
         )
-        memory_answer = resolve_group_memory_question(memory_lookup_prompt, group_memories)
+        memory_lookup_prompt = rewrite_relation_pronouns(
+            memory_lookup_prompt,
+            speaker_display,
+            settings.persona_name,
+        )
+        memory_answer = resolve_group_memory_question(
+            memory_lookup_prompt,
+            group_memories,
+        )
         if memory_answer is not None and not active_possession:
             memory_reply = ensure_default_murasame_voice(
                 format_group_memory_answer(memory_answer, prompt),
