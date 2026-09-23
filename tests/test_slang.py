@@ -7,6 +7,7 @@ from app.services.web_search import SearchResult
 def test_unknown_slang_heuristic_targets_acronyms_not_normal_words():
     assert slang.needs_slang_check("CCB")
     assert slang.needs_slang_check("ccb")
+    assert slang.needs_slang_check("小丛雨，CCB")
     assert slang.needs_slang_check("欧金金")
     assert not slang.needs_slang_check("hello")
     assert not slang.needs_slang_check("今天一起吃饭吗")
