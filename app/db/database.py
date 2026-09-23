@@ -1,4 +1,5 @@
 import secrets
+from datetime import date, timedelta
 from pathlib import Path
 
 import aiosqlite
@@ -157,6 +158,24 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_group_affection_events_member
                     ON group_affection_events(group_id, user_id, id);
+                CREATE TABLE IF NOT EXISTS group_affection_daily (
+                    group_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    activity_date TEXT NOT NULL,
+                    addressed_count INTEGER NOT NULL DEFAULT 0,
+                    streak_days INTEGER NOT NULL DEFAULT 1,
+                    bonus_awarded INTEGER NOT NULL DEFAULT 0,
+                    action_keys TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (group_id, user_id, activity_date)
+                );
+                CREATE INDEX IF NOT EXISTS idx_group_affection_daily_member
+                    ON group_affection_daily(group_id, user_id, activity_date);
+                CREATE TABLE IF NOT EXISTS app_meta (
+                    meta_key TEXT PRIMARY KEY,
+                    meta_value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
                 CREATE TABLE IF NOT EXISTS group_style_stats (
                     group_id TEXT PRIMARY KEY,
                     sample_count INTEGER NOT NULL DEFAULT 0,
@@ -227,6 +246,26 @@ class Database:
                 "UPDATE daily_ultraman SET ultraman_name = ? WHERE ultraman_name = ?",
                 ((new_name, old_name) for old_name, new_name in ultraman_name_migrations),
             )
+
+            # One-time v2 affection rebalance requested for the live bot:
+            # everyone starts again from 30 and old event/daily bonus history is cleared.
+            reset_marker = await (
+                await db.execute(
+                    "SELECT meta_value FROM app_meta WHERE meta_key = ?",
+                    ("affection_v2_reset_to_30",),
+                )
+            ).fetchone()
+            if reset_marker is None:
+                await db.execute(
+                    "UPDATE group_affection SET score = 30, interaction_count = 0, "
+                    "updated_at = CURRENT_TIMESTAMP"
+                )
+                await db.execute("DELETE FROM group_affection_events")
+                await db.execute("DELETE FROM group_affection_daily")
+                await db.execute(
+                    "INSERT INTO app_meta(meta_key, meta_value) VALUES (?, ?)",
+                    ("affection_v2_reset_to_30", "done"),
+                )
             await db.commit()
 
     async def execute(self, sql: str, params: tuple = ()) -> None:
@@ -770,6 +809,140 @@ class Database:
             )
             await db.commit()
         return score
+
+    async def record_affection_engagement(
+        self,
+        group_id: str,
+        user_id: str,
+        activity_date: str,
+    ) -> tuple[int, int, int, str]:
+        """Record a meaningful addressed interaction and return a bounded bonus.
+
+        Bonuses reward sustained conversation instead of one-shot farming:
+        - first meaningful interaction after 2+ consecutive days: +1..+3
+        - 3rd and 8th meaningful interaction of the day: +1 each
+        """
+        today = date.fromisoformat(activity_date)
+        yesterday = (today - timedelta(days=1)).isoformat()
+        async with aiosqlite.connect(self.path) as db:
+            row = await (
+                await db.execute(
+                    "SELECT addressed_count, streak_days, bonus_awarded "
+                    "FROM group_affection_daily "
+                    "WHERE group_id = ? AND user_id = ? AND activity_date = ?",
+                    (group_id, user_id, activity_date),
+                )
+            ).fetchone()
+
+            if row:
+                count = int(row[0]) + 1
+                streak = max(1, int(row[1]))
+                bonus_awarded = int(row[2])
+                await db.execute(
+                    "UPDATE group_affection_daily SET addressed_count = ?, "
+                    "updated_at = CURRENT_TIMESTAMP "
+                    "WHERE group_id = ? AND user_id = ? AND activity_date = ?",
+                    (count, group_id, user_id, activity_date),
+                )
+                first_today = False
+            else:
+                previous = await (
+                    await db.execute(
+                        "SELECT activity_date, streak_days FROM group_affection_daily "
+                        "WHERE group_id = ? AND user_id = ? "
+                        "ORDER BY activity_date DESC LIMIT 1",
+                        (group_id, user_id),
+                    )
+                ).fetchone()
+                streak = (
+                    int(previous[1]) + 1
+                    if previous and str(previous[0]) == yesterday
+                    else 1
+                )
+                count = 1
+                bonus_awarded = 0
+                first_today = True
+                await db.execute(
+                    "INSERT INTO group_affection_daily"
+                    "(group_id, user_id, activity_date, addressed_count, streak_days) "
+                    "VALUES (?, ?, ?, 1, ?)",
+                    (group_id, user_id, activity_date, streak),
+                )
+
+            bonus = 0
+            reasons: list[str] = []
+            if first_today and streak >= 2:
+                streak_bonus = 1 if streak < 7 else 2 if streak < 14 else 3
+                bonus += streak_bonus
+                reasons.append(f"连续 {streak} 天来找小丛雨")
+            if count in {3, 8}:
+                bonus += 1
+                reasons.append(f"今日第 {count} 次认真互动")
+
+            # Cap consistency bonuses at +5 per day even if rules expand later.
+            bonus = max(0, min(bonus, 5 - bonus_awarded))
+            if bonus:
+                await db.execute(
+                    "UPDATE group_affection_daily SET bonus_awarded = bonus_awarded + ?, "
+                    "updated_at = CURRENT_TIMESTAMP "
+                    "WHERE group_id = ? AND user_id = ? AND activity_date = ?",
+                    (bonus, group_id, user_id, activity_date),
+                )
+            await db.commit()
+        return bonus, streak, count, "、".join(reasons)
+
+    async def claim_affection_action(
+        self,
+        group_id: str,
+        user_id: str,
+        activity_date: str,
+        action_key: str,
+    ) -> bool:
+        """Allow each unlocked intimate action to grant points once per day."""
+        clean = str(action_key).strip().replace(",", "")[:24]
+        if not clean:
+            return False
+        async with aiosqlite.connect(self.path) as db:
+            row = await (
+                await db.execute(
+                    "SELECT action_keys FROM group_affection_daily "
+                    "WHERE group_id = ? AND user_id = ? AND activity_date = ?",
+                    (group_id, user_id, activity_date),
+                )
+            ).fetchone()
+            if row is None:
+                await db.execute(
+                    "INSERT INTO group_affection_daily"
+                    "(group_id, user_id, activity_date, action_keys) "
+                    "VALUES (?, ?, ?, '')",
+                    (group_id, user_id, activity_date),
+                )
+                keys: list[str] = []
+            else:
+                keys = [item for item in str(row[0] or "").split(",") if item]
+            if clean in keys:
+                await db.commit()
+                return False
+            keys.append(clean)
+            await db.execute(
+                "UPDATE group_affection_daily SET action_keys = ?, "
+                "updated_at = CURRENT_TIMESTAMP "
+                "WHERE group_id = ? AND user_id = ? AND activity_date = ?",
+                (",".join(keys), group_id, user_id, activity_date),
+            )
+            await db.commit()
+        return True
+
+    async def active_group_ids(self, lookback_days: int = 30) -> list[str]:
+        days = max(1, min(int(lookback_days), 365))
+        rows = await self.fetchall(
+            "SELECT DISTINCT d.group_id FROM daily_activity d "
+            "LEFT JOIN group_settings g ON g.group_id = d.group_id "
+            "WHERE d.activity_date >= date('now', ?) "
+            "AND COALESCE(g.enabled, 1) = 1 ORDER BY d.group_id",
+            (f"-{days} day",),
+        )
+        return [str(row[0]) for row in rows if row and row[0]]
 
     async def affection_events(
         self, group_id: str, user_id: str, limit: int = 5
