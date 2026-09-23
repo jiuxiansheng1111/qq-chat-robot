@@ -410,6 +410,13 @@ def extract_group_memory(event: dict, text: str) -> str | None:
     for prefix in ("记住，", "记住,", "记住 ", "群里记住：", "群里记住:"):
         if text.startswith(prefix):
             return text[len(prefix) :].strip(" ，,：:")[:300]
+    # Natural variants such as “记住我是…” / “让你记住我是…”.
+    # Keep the leading 我/你 so qualify_group_memory can bind it to the
+    # speaker or current bot identity before persistence.
+    if text.startswith("记住我") or text.startswith("记住你"):
+        return text[len("记住") :].strip(" ，,：:")[:300]
+    if text.startswith("让你记住我") or text.startswith("让你记住你"):
+        return text[len("让你记住") :].strip(" ，,：:")[:300]
     return None
 
 
@@ -452,14 +459,27 @@ def extract_group_memory_deletion(event: dict, text: str) -> str | None:
     return None
 
 
-def qualify_group_memory(content: str, current_identity: str) -> str:
-    """Replace ambiguous bot-directed pronouns with the identity active at save time."""
+def qualify_group_memory(
+    content: str,
+    current_identity: str,
+    speaker_name: str = "",
+) -> str:
+    """Bind first/second-person group facts to identities at save time."""
     content = re.sub(r"\s+", " ", content).strip()
-    replacements = (
+    speaker = re.sub(r"[\r\n\t]", " ", speaker_name or "").strip()[:40]
+    replacements = [
         ("你是", f"{current_identity}是"),
         ("你叫", f"{current_identity}叫"),
         ("你的", f"{current_identity}的"),
-    )
+    ]
+    if speaker:
+        replacements.extend(
+            (
+                ("我是", f"{speaker}是"),
+                ("我叫", f"{speaker}叫"),
+                ("我的", f"{speaker}的"),
+            )
+        )
     for prefix, replacement in replacements:
         if content.startswith(prefix):
             return replacement + content[len(prefix) :]
@@ -470,7 +490,7 @@ def group_memory_prompt(memories: list[str], current_identity: str) -> str:
     reliable: list[str] = []
     ambiguous: list[str] = []
     for item in memories:
-        if item.startswith(("你是", "你叫", "你的")):
+        if item.startswith(("你是", "你叫", "你的", "我是", "我叫", "我的")):
             ambiguous.append(item)
         else:
             reliable.append(item)
@@ -1474,7 +1494,11 @@ async def onebot_webhook(
             current_identity = (
                 current_possession[1] if current_possession else settings.persona_name
             )
-            qualified_memory = qualify_group_memory(group_memory, current_identity)
+            qualified_memory = qualify_group_memory(
+                group_memory,
+                current_identity,
+                sender_display_name(event),
+            )
             await request.app.state.db.add_group_memory(group_id, qualified_memory)
             await send_group_message(group_id, f"记住了：{qualified_memory}")
     elif text in GROUP_MEMORY_LIST_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
