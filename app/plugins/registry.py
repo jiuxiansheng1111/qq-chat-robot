@@ -3,6 +3,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from app.services.anime_character import ANIME_CHARACTER_ROSTER
 from app.services.ultraman import ULTRAMAN_ROSTER
 
 PluginHandler = Callable[[Any], Awaitable[str | None]]
@@ -57,6 +58,7 @@ class PluginRegistry:
 
     def help_text(self) -> str:
         roster_count = len(ULTRAMAN_ROSTER)
+        anime_character_count = len(ANIME_CHARACTER_ROSTER)
         return (
             "┏ 小丛雨 · 功能菜单 ┓\n"
             "│\n"
@@ -73,6 +75,13 @@ class PluginRegistry:
             "│  @我 我的奥特曼\n"
             "│  @我 奥特曼图鉴\n"
             "│  @我 贝利亚 / 奥特之父（查看资料）\n"
+            "│\n"
+            f"│  🌸 二次元角色（{anime_character_count} 位）\n"
+            "│  @我 随机二次元角色\n"
+            "│  @我 我的二次元角色\n"
+            "│  @我 查看本命二次元角色\n"
+            "│  @我 二次元角色图鉴\n"
+            "│  @我 角色名（查看角色资料）\n"
             "│\n"
             "│  🌐 翻译\n"
             "│  @我 翻译 外语内容\n"
@@ -166,6 +175,25 @@ registry.register(
             "奥特曼图鉴",
         ),
         "每日抽取、收藏统计、完整图鉴与角色资料",
+    )
+)
+
+registry.register(
+    PluginSpec(
+        "anime_character",
+        (
+            "/随机二次元角色",
+            "随机二次元角色",
+            "/今日二次元角色",
+            "今日二次元角色",
+            "/我的二次元角色",
+            "我的二次元角色",
+            "/查看本命二次元角色",
+            "查看本命二次元角色",
+            "/二次元角色图鉴",
+            "二次元角色图鉴",
+        ),
+        "随机抽取、收藏统计、本命角色、角色图鉴与角色资料",
     )
 )
 registry.register(
