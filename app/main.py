@@ -1065,8 +1065,15 @@ def schedule_possession_style_learning(
     task.add_done_callback(remember_examples)
 
 
-async def resolve_ultraman_card_image(hero) -> str:
-    """Resolve a reliable image without silently falling back to another form."""
+async def resolve_ultraman_card_image(hero, llm=None) -> str:
+    """Resolve a reliable image without silently falling back to another form.
+
+    The final fallback asks the configured LLM only for precise search aliases.
+    Those aliases are then passed back through the normal encyclopedia/image
+    search pipeline, which still validates labels, image bytes and dimensions.
+    The LLM is never trusted to invent or directly return an image URL.
+    """
+    base_aliases = ultraman_image_aliases(hero)
     try:
         return await official_ultraman_image(hero, settings)
     except (RuntimeError, httpx.HTTPError) as exc:
@@ -1079,7 +1086,7 @@ async def resolve_ultraman_card_image(hero) -> str:
     try:
         encyclopedia = await encyclopedia_ultraman_image(
             hero.name,
-            ultraman_image_aliases(hero),
+            base_aliases,
             settings,
         )
     except (RuntimeError, httpx.HTTPError, ValueError) as exc:
@@ -1099,11 +1106,63 @@ async def resolve_ultraman_card_image(hero) -> str:
 
     try:
         return await official_ultraman_search_image(hero, settings)
-    except (RuntimeError, httpx.HTTPError, ValueError) as exc:
-        raise RuntimeError(
-            f"没有找到“{hero.name}”的可靠官方或百科代表图"
-            "（已尝试百度百科、Wikipedia/Wikimedia 与圆谷站内搜索）"
-        ) from exc
+    except (RuntimeError, httpx.HTTPError, ValueError) as official_exc:
+        logger.info(
+            "official exact search unavailable for %s; trying LLM-assisted search terms: %s",
+            hero.name,
+            official_exc,
+        )
+
+    if llm is not None:
+        try:
+            search_term_answer = await llm.ask(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "你只负责为奥特曼角色或独立形态生成图片搜索关键词。"
+                            "禁止编造图片URL。输出3到6个搜索短语，每行一个；"
+                            "优先包含官方中文名、常见中文别名、日文名或英文名，"
+                            "并且每个短语都必须明确指向同一个角色/形态，不能只写泛化的“强力型/闪耀型”。"
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"目标：{hero.name}\n"
+                            f"已知别名：{'、'.join(base_aliases)}\n"
+                            "请生成可用于百度、Bing、Wikipedia、圆谷官网搜索的精确图片搜索短语。"
+                        ),
+                    },
+                ]
+            )
+            llm_aliases: list[str] = []
+            for row in search_term_answer.splitlines():
+                term = re.sub(r"^[-*•\d.、)）\s]+", "", row).strip(" \t\"'“”")
+                if 2 <= len(term) <= 100 and term not in llm_aliases:
+                    llm_aliases.append(term)
+            if llm_aliases:
+                assisted_aliases = tuple(dict.fromkeys((*base_aliases, *llm_aliases[:6])))
+                assisted = await encyclopedia_ultraman_image(
+                    hero.name,
+                    assisted_aliases,
+                    settings,
+                )
+                logger.info(
+                    "Ultraman image resolved with LLM-assisted search terms from %s for %s (%s)",
+                    assisted.source,
+                    hero.name,
+                    assisted.page_url,
+                )
+                return assisted.data
+        except (LLMError, RuntimeError, ValueError, httpx.HTTPError) as exc:
+            logger.info("LLM-assisted Ultraman image search failed for %s: %s", hero.name, exc)
+
+    raise RuntimeError(
+        f"没有找到“{hero.name}”的可靠官方或百科代表图"
+        "（已尝试圆谷、百度百科、Wikipedia/Wikimedia、百度/Bing 图片搜索"
+        "以及可用时的 LLM 辅助精确搜索词）"
+    )
 
 
 async def send_group_image(group_id: str, image_file: str, caption: str = "") -> None:
@@ -1551,7 +1610,7 @@ async def onebot_webhook(
             f"{status}，已收入你的奥特曼收藏！"
         )
         try:
-            image = await resolve_ultraman_card_image(hero)
+            image = await resolve_ultraman_card_image(hero, request.app.state.llm)
             card = render_ultraman_card(hero, image)
             await send_group_image(group_id, card, caption)
         except (RuntimeError, httpx.HTTPError) as exc:
@@ -1595,7 +1654,7 @@ async def onebot_webhook(
             "本次仅查看图鉴，不会加入“我的奥特曼”。"
         )
         try:
-            image = await resolve_ultraman_card_image(catalog_hero)
+            image = await resolve_ultraman_card_image(catalog_hero, request.app.state.llm)
             card = render_ultraman_card(catalog_hero, image, heading="奥特曼图鉴")
             await send_group_image(group_id, card, caption)
         except (RuntimeError, httpx.HTTPError) as exc:
@@ -1617,7 +1676,7 @@ async def onebot_webhook(
                 f"{ultraman_profile_text(recent_ultraman)}"
             )
             try:
-                image = await resolve_ultraman_card_image(recent_ultraman)
+                image = await resolve_ultraman_card_image(recent_ultraman, request.app.state.llm)
                 card = render_ultraman_card(
                     recent_ultraman,
                     image,
