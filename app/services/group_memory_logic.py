@@ -201,6 +201,41 @@ def rewrite_first_person_identity_question(question: str, speaker_name: str) -> 
     return text
 
 
+def rewrite_relation_pronouns(
+    question: str,
+    speaker_name: str,
+    bot_name: str,
+) -> str:
+    """Bind simple first/second-person relation questions to concrete entities.
+
+    Only well-defined relation-question shapes are rewritten. Quoted or free-form
+    prose is left untouched for the LLM, avoiding destructive global replacement.
+    """
+    text = _clean(question, 160)
+    speaker = _clean(speaker_name, 80)
+    bot = _clean(bot_name, 80)
+    if not text:
+        return text
+
+    if speaker:
+        if text.startswith("我的"):
+            text = speaker + "的" + text[2:]
+        elif re.match(rf"^我(?:{'|'.join(DIRECTIONAL_VERBS)})", text):
+            text = speaker + text[1:]
+        elif re.fullmatch(rf"谁(?:{'|'.join(DIRECTIONAL_VERBS)})我", text):
+            text = text[:-1] + speaker
+
+    if bot:
+        if text.startswith("你的"):
+            text = bot + "的" + text[2:]
+        elif re.match(rf"^你(?:{'|'.join(DIRECTIONAL_VERBS)})", text):
+            text = bot + text[1:]
+        elif re.fullmatch(rf"谁(?:{'|'.join(DIRECTIONAL_VERBS)})你", text):
+            text = text[:-1] + bot
+
+    return text
+
+
 def _identity_target(question: str) -> str:
     text = _clean(question, 120)
     for suffix in IDENTITY_QUERY_SUFFIXES:
