@@ -39,8 +39,8 @@ from app.plugins.media import (
 from app.plugins.registry import registry
 from app.services.affection import (
     AFFECTION_INITIAL,
-    AffectionAssessment,
     MEMORY_UNLOCK_SCORE,
+    AffectionAssessment,
     affection_change_text,
     affection_prompt,
     affection_status_text,
@@ -358,8 +358,8 @@ async def daily_news_loop(app: FastAPI) -> None:
             await broadcast_daily_news(app)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
-            logger.exception("daily noon news loop failed: %s", exc)
+        except Exception:
+            logger.exception("daily noon news loop failed")
 
 
 @asynccontextmanager
