@@ -8,9 +8,11 @@ import secrets
 from collections import deque
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -43,6 +45,7 @@ from app.services.affection import (
     affection_status_text,
     assess_affection,
     hostility_assessment,
+    intimate_action,
 )
 from app.services.anime_character import (
     ANIME_CHARACTER_BY_NAME,
@@ -108,7 +111,14 @@ from app.services.ultraman import (
     ultraman_image_aliases,
     ultraman_profile_text,
 )
-from app.services.ultraman_encyclopedia import encyclopedia_ultraman_image
+from app.services.ultraman_encyclopedia import (
+    baidu_baike_ultraman_image,
+    baidu_image_search_ultraman_image,
+    bing_image_relaxed_ultraman_image,
+    bing_image_search_ultraman_image,
+    web_page_ultraman_image,
+    wikipedia_ultraman_image,
+)
 from app.services.web_search import SearchResult, search_web
 
 settings = get_settings()
