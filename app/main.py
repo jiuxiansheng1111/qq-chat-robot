@@ -1214,23 +1214,95 @@ def schedule_possession_style_learning(
     task.add_done_callback(remember_examples)
 
 
-async def resolve_ultraman_card_image(hero, llm=None) -> str:
-    """Resolve a reliable image without silently falling back to another form.
+async def llm_confirm_ultraman_image_candidate(
+    hero,
+    llm,
+    *,
+    source: str,
+    label: str = "",
+    page_url: str = "",
+) -> bool:
+    """Ask the configured LLM for a final metadata-level identity check.
 
-    The final fallback asks the configured LLM only for precise search aliases.
-    Those aliases are then passed back through the normal encyclopedia/image
-    search pipeline, which still validates labels, image bytes and dimensions.
-    The LLM is never trusted to invent or directly return an image URL.
+    The model does not invent or fetch an image URL here. It only checks whether
+    the evidence attached to the already-found candidate is specific enough for
+    the requested Ultraman/independent form. Ambiguous evidence is rejected.
+    """
+    if llm is None:
+        return True
+
+    aliases = ultraman_image_aliases(hero)
+    try:
+        answer = await llm.ask(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是奥特曼图片候选的最终身份复核器。"
+                        "你不能看图，也不能编造新事实，只能依据目标名称、已知别名、"
+                        "候选来源、候选标题/标签、页面URL线索判断该候选是否明确对应目标。"
+                        "如果是独立形态，只有明确出现完整形态名、可靠别名，"
+                        "或“圆谷官方精确角色/形态映射”这类已经由程序精确绑定的证据才可通过。"
+                        "仅出现“强力型、闪耀型、奥特曼”等泛化词必须拒绝。"
+                        "证据不足、同名歧义、疑似其他形态时都拒绝。"
+                        "只允许输出 MATCH 或 REJECT，不要解释。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"目标：{hero.name}\n"
+                        f"已知别名：{'、'.join(aliases)}\n"
+                        f"候选来源：{source}\n"
+                        f"候选标题/标签：{label or '（无）'}\n"
+                        f"候选页面：{page_url or '（无）'}"
+                    ),
+                },
+            ]
+        )
+    except (LLMError, RuntimeError, ValueError, httpx.HTTPError) as exc:
+        logger.info("LLM final Ultraman image confirmation unavailable for %s: %s", hero.name, exc)
+        return False
+
+    verdict = re.sub(r"[^A-Z]", "", answer.upper())
+    matched = verdict.startswith("MATCH")
+    logger.info(
+        "LLM final Ultraman image confirmation for %s from %s: %s",
+        hero.name,
+        source,
+        "MATCH" if matched else "REJECT",
+    )
+    return matched
+
+
+async def resolve_ultraman_card_image(hero, llm=None) -> str:
+    """Resolve an image, then require one final LLM identity confirmation.
+
+    Search remains deterministic and source-validated. The LLM is used twice
+    when needed: first as a final metadata-level gate for every candidate that
+    would be returned, and finally to generate better search aliases if all
+    deterministic searches fail or are rejected.
     """
     base_aliases = ultraman_image_aliases(hero)
+
     try:
-        return await official_ultraman_image(hero, settings)
+        official = await official_ultraman_image(hero, settings)
     except (RuntimeError, httpx.HTTPError) as exc:
         logger.info(
             "direct official Ultraman image unavailable for %s; trying encyclopedia: %s",
             hero.name,
             exc,
         )
+    else:
+        if await llm_confirm_ultraman_image_candidate(
+            hero,
+            llm,
+            source="圆谷官方精确角色/形态映射",
+            label=hero.name,
+            page_url="https://tsuburaya-prod.com/",
+        ):
+            return official
+        logger.info("LLM rejected direct official Ultraman image candidate for %s", hero.name)
 
     try:
         encyclopedia = await encyclopedia_ultraman_image(
@@ -1245,22 +1317,45 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
             exc,
         )
     else:
+        if await llm_confirm_ultraman_image_candidate(
+            hero,
+            llm,
+            source=encyclopedia.source,
+            label=encyclopedia.label,
+            page_url=encyclopedia.page_url,
+        ):
+            logger.info(
+                "Ultraman image resolved from %s for %s (%s)",
+                encyclopedia.source,
+                hero.name,
+                encyclopedia.page_url,
+            )
+            return encyclopedia.data
         logger.info(
-            "Ultraman image resolved from %s for %s (%s)",
-            encyclopedia.source,
+            "LLM rejected encyclopedia Ultraman image candidate for %s from %s (%s)",
             hero.name,
+            encyclopedia.source,
             encyclopedia.page_url,
         )
-        return encyclopedia.data
 
     try:
-        return await official_ultraman_search_image(hero, settings)
+        official_search = await official_ultraman_search_image(hero, settings)
     except (RuntimeError, httpx.HTTPError, ValueError) as official_exc:
         logger.info(
             "official exact search unavailable for %s; trying LLM-assisted search terms: %s",
             hero.name,
             official_exc,
         )
+    else:
+        if await llm_confirm_ultraman_image_candidate(
+            hero,
+            llm,
+            source="圆谷官网站内精确图片搜索",
+            label=hero.name,
+            page_url="https://tsuburaya-prod.com/",
+        ):
+            return official_search
+        logger.info("LLM rejected official-search Ultraman image candidate for %s", hero.name)
 
     if llm is not None:
         try:
@@ -1280,6 +1375,7 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
                         "content": (
                             f"目标：{hero.name}\n"
                             f"已知别名：{'、'.join(base_aliases)}\n"
+                            "前面的官方/百科/图片搜索候选均失败或被最终复核拒绝。"
                             "请生成可用于百度、Bing、Wikipedia、圆谷官网搜索的精确图片搜索短语。"
                         ),
                     },
@@ -1287,7 +1383,7 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
             )
             llm_aliases: list[str] = []
             for row in search_term_answer.splitlines():
-                term = re.sub(r"^[-*•\d.、)）\s]+", "", row).strip(" \t\"'“”")
+                term = re.sub(r"^[-*•\\d.、)）\\s]+", "", row).strip(" \\t\\\"'“”")
                 if 2 <= len(term) <= 100 and term not in llm_aliases:
                     llm_aliases.append(term)
             if llm_aliases:
@@ -1297,20 +1393,32 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
                     assisted_aliases,
                     settings,
                 )
+                if await llm_confirm_ultraman_image_candidate(
+                    hero,
+                    llm,
+                    source=f"{assisted.source}（LLM辅助搜索词）",
+                    label=assisted.label,
+                    page_url=assisted.page_url,
+                ):
+                    logger.info(
+                        "Ultraman image resolved with LLM-assisted search terms from %s for %s (%s)",
+                        assisted.source,
+                        hero.name,
+                        assisted.page_url,
+                    )
+                    return assisted.data
                 logger.info(
-                    "Ultraman image resolved with LLM-assisted search terms from %s for %s (%s)",
-                    assisted.source,
+                    "LLM rejected its assisted Ultraman image candidate for %s from %s",
                     hero.name,
-                    assisted.page_url,
+                    assisted.source,
                 )
-                return assisted.data
         except (LLMError, RuntimeError, ValueError, httpx.HTTPError) as exc:
             logger.info("LLM-assisted Ultraman image search failed for %s: %s", hero.name, exc)
 
     raise RuntimeError(
-        f"没有找到“{hero.name}”的可靠官方或百科代表图"
-        "（已尝试圆谷、百度百科、Wikipedia/Wikimedia、百度/Bing 图片搜索"
-        "以及可用时的 LLM 辅助精确搜索词）"
+        f"没有找到“{hero.name}”通过最终身份复核的可靠代表图"
+        "（已尝试圆谷、百度百科、Wikipedia/Wikimedia、百度/Bing 图片搜索，"
+        "并在每次返回前进行 LLM 身份复核；必要时还会让 LLM 生成更精确搜索词）"
     )
 
 
