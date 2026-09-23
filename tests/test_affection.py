@@ -1,5 +1,3 @@
-import json
-
 from app.services.affection import (
     AFFECTION_INITIAL,
     MEMORY_UNLOCK_SCORE,
