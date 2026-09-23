@@ -118,6 +118,7 @@ from app.services.ultraman_encyclopedia import (
     baidu_image_search_ultraman_image,
     bing_image_relaxed_ultraman_image,
     bing_image_search_ultraman_image,
+    official_merch_ultraman_image,
     web_page_ultraman_image,
     wikipedia_ultraman_image,
 )
@@ -1683,6 +1684,10 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
         (
             "Bing图片",
             lambda: bing_image_search_ultraman_image(hero.name, aliases, settings),
+        ),
+        (
+            "Bandai/TAMASHII官方商品页",
+            lambda: official_merch_ultraman_image(hero.name, aliases, settings),
         ),
         (
             "网页角色页",
