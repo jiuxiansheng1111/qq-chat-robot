@@ -1889,7 +1889,7 @@ async def onebot_webhook(
             previous_reply if has_reply_segment(event) else "",
             request.app.state.llm,
             check_hostility_target=hostile.delta < 0,
-            explicit_bot_mention=bot_mentioned(event),
+            explicit_bot_mention=bot_mentioned(event) or reply_to_murasame,
             persona_names=tuple(
                 dict.fromkeys(
                     (
