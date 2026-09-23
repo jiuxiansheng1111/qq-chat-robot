@@ -23,6 +23,8 @@ from app.main import (
     extract_group_memory,
     extract_group_memory_deletion,
     extract_long_memory,
+    extract_member_identity_binding,
+    extract_member_identity_lookup,
     extract_music_query,
     extract_possession_alias,
     extract_search_query,
@@ -363,7 +365,29 @@ def test_automatic_web_search_detects_current_or_model_deferred_questions():
 def test_sender_name_question_is_distinct_from_bot_identity():
     assert asks_for_sender_name("say my name")
     assert asks_for_sender_name("我叫什么名字？")
+    assert asks_for_sender_name("你知道我是谁吗")
     assert not asks_for_sender_name("你叫什么名字？")
+
+
+def test_member_identity_binding_uses_qq_id_but_rejects_family_relation():
+    assert extract_member_identity_binding("我是drj", "184573813") == (
+        "184573813",
+        "drj",
+    )
+    assert extract_member_identity_binding("184573813是猫猫", "999") == (
+        "184573813",
+        "猫猫",
+    )
+    assert extract_member_identity_binding(
+        "我是drj跟hzh的老爸", "184573813"
+    ) is None
+
+
+def test_member_identity_lookup_does_not_steal_bot_or_self_identity():
+    assert extract_member_identity_lookup("184573813是谁") == "184573813"
+    assert extract_member_identity_lookup("drj是谁") == "drj"
+    assert extract_member_identity_lookup("我是谁") is None
+    assert extract_member_identity_lookup("你是谁") is None
 
 
 def test_comma_remember_command_creates_group_memory():
@@ -383,6 +407,9 @@ def test_comma_remember_command_creates_group_memory():
 def test_group_memory_binds_you_to_identity_active_when_saved():
     assert qualify_group_memory("你是一只猫娘", "羽入") == "羽入是一只猫娘"
     assert qualify_group_memory("你的名字是 hzh", "羽入") == "羽入的名字是 hzh"
+    assert qualify_group_memory("我是drj跟hzh的老爸", "小丛雨", "狄") == (
+        "狄是drj跟hzh的老爸"
+    )
     assert qualify_group_memory("hzh 是 Cat#", "羽入") == "hzh 是 Cat#"
 
 
