@@ -50,6 +50,7 @@ from app.services.group_memory_logic import (
     resolve_group_memory_question,
     rewrite_first_person_identity_question,
 )
+from app.services.http_routing import install_outbound_proxy_environment
 from app.services.music import (
     MusicIdentity,
     MusicTrack,
@@ -168,6 +169,12 @@ class PluginContext:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.validate_security()
+    try:
+        proxy = await install_outbound_proxy_environment(settings)
+        if proxy:
+            logger.info("Outbound web route ready via proxy: %s", proxy)
+    except (OSError, RuntimeError, ValueError) as exc:
+        logger.warning("Outbound proxy auto-routing unavailable: %s", exc)
     db = Database(settings)
     await db.init()
     auth = AuthService(settings, db)
