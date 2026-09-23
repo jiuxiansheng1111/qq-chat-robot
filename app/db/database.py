@@ -328,6 +328,11 @@ class Database:
                 (group_id, user_id, activity_date, display_name),
             )
             await db.execute(
+                "UPDATE group_member_identities SET display_name = ? "
+                "WHERE group_id = ? AND user_id = ?",
+                (display_name, group_id, user_id),
+            )
+            await db.execute(
                 "INSERT INTO group_style_stats(group_id, sample_count, total_chars, question_count, "
                 "exclamation_count, kaomoji_count) VALUES (?, 1, ?, ?, ?, ?) "
                 "ON CONFLICT(group_id) DO UPDATE SET sample_count = sample_count + 1, "
