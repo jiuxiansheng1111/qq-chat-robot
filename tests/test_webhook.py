@@ -861,7 +861,7 @@ def test_ultraman_followup_reuses_last_resolved_form(monkeypatch, tmp_path):
     settings.onebot_self_id = "bot-1"
     sent: list[tuple[str, str]] = []
 
-    async def fake_resolve_image(hero):
+    async def fake_resolve_image(hero, llm=None):
         return "base64://ZmFrZQ=="
 
     def fake_render_card(hero, image, heading="今日奥特曼"):
