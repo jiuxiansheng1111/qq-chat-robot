@@ -1691,7 +1691,7 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
         _track_ultraman_prefetch(task)
 
     timeout = max(
-        2.0,
+        0.05,
         min(float(settings.ultraman_image_resolve_timeout_seconds), 15.0),
     )
     try:
