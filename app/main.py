@@ -70,7 +70,6 @@ from app.services.music import (
     search_netease_music,
 )
 from app.services.onebot_routing import onebot_route, set_current_onebot_self_id
-from app.services.short_intent import canonicalize_short_command
 from app.services.possession_style import (
     fetch_group_context,
     fetch_member_recall_samples,
@@ -82,6 +81,7 @@ from app.services.possession_style import (
     style_reference_examples,
     summarize_possession_recall,
 )
+from app.services.short_intent import canonicalize_short_command
 from app.services.translation import (
     TranslationResult,
     format_translation_reply,
