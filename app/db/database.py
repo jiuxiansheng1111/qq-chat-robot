@@ -260,6 +260,10 @@ class Database:
                     "UPDATE group_affection SET score = 30, interaction_count = 0, "
                     "updated_at = CURRENT_TIMESTAMP"
                 )
+                await db.execute(
+                    "UPDATE user_preferences SET memory_enabled = 0, "
+                    "updated_at = CURRENT_TIMESTAMP"
+                )
                 await db.execute("DELETE FROM group_affection_events")
                 await db.execute("DELETE FROM group_affection_daily")
                 await db.execute(
