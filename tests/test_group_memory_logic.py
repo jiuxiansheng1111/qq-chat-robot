@@ -3,6 +3,7 @@ from app.services.group_memory_logic import (
     group_memory_reasoning_hints,
     parse_memory_relation,
     resolve_group_memory_question,
+    rewrite_first_person_identity_question,
 )
 
 
@@ -90,3 +91,17 @@ def test_reasoning_hints_explain_inverse_lookup_without_reversing_roles():
     assert "谁喜欢猫" in hints
     assert "小明的儿子是谁" in hints
     assert "不要颠倒亲属/关系方向" in hints
+
+
+def test_first_person_identity_question_uses_sender_name():
+    assert rewrite_first_person_identity_question("你知道我是谁吗", "狄") == "狄是谁"
+    assert rewrite_first_person_identity_question("我是谁", "狄") == "狄是谁"
+    assert rewrite_first_person_identity_question("你是谁", "狄") == "你是谁"
+    assert rewrite_first_person_identity_question("我喜欢猫", "狄") == "我喜欢猫"
+
+
+def test_sender_identity_question_can_resolve_group_alias():
+    rewritten = rewrite_first_person_identity_question("你知道我是谁吗", "狄")
+    answer = resolve_group_memory_question(rewritten, ["狄是drj"])
+    assert answer is not None
+    assert answer.answers == ("drj",)
