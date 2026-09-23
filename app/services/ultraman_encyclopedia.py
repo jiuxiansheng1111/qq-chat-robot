@@ -1171,6 +1171,129 @@ async def bing_image_search_ultraman_image(
     return None
 
 
+async def web_page_ultraman_image(
+    name: str,
+    aliases: tuple[str, ...],
+    settings: Settings,
+) -> EncyclopediaImage | None:
+    """Search normal web pages and extract a page-specific image.
+
+    This bypasses image-search throttling. A result page must itself identify
+    the requested hero/form before its OG image can be accepted.
+    """
+    terms = _specific_terms(name, aliases)
+    if not terms:
+        return None
+
+    searches = [f'"{name}" 奥特曼 形态']
+    searches.extend(
+        f'"{alias}" Ultraman form'
+        for alias in aliases[:6]
+        if alias
+    )
+    searches.extend(
+        (
+            f'"{name}" 百度百科',
+            f'"{name}" 円谷 公式',
+            f'"{name}" official',
+        )
+    )
+
+    timeout = max(5.0, min(float(settings.media_timeout_seconds), 15.0))
+    headers = {
+        "User-Agent": ENCYCLOPEDIA_USER_AGENT,
+        "Accept-Language": "zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7",
+    }
+    seen: set[str] = set()
+
+    for query in tuple(dict.fromkeys(searches))[:10]:
+        try:
+            results = await search_web(query, limit=10, timeout=timeout)
+        except (ValueError, httpx.HTTPError):
+            continue
+
+        for result in results:
+            if result.url in seen:
+                continue
+            seen.add(result.url)
+            search_descriptor = f"{result.title} {result.snippet} {result.url}"
+            if not _matches_specific(search_descriptor, terms):
+                continue
+
+            try:
+                async with httpx.AsyncClient(
+                    timeout=timeout,
+                    follow_redirects=True,
+                    headers=headers,
+                ) as client:
+                    page = await client.get(result.url)
+                    page.raise_for_status()
+                    parser = _EncyclopediaPageParser()
+                    parser.feed(page.text)
+                    page_url = str(page.url)
+                    page_descriptor = (
+                        f"{result.title} {result.snippet} "
+                        f"{parser.title} {page_url}"
+                    )
+                    page_specific = _matches_specific(page_descriptor, terms)
+                    if not page_specific:
+                        continue
+
+                    candidates: list[tuple[int, str, str]] = []
+                    for source, label in parser.images:
+                        image_url = _clean_image_url(source, page_url)
+                        if not image_url:
+                            continue
+                        score = 0
+                        if _matches_specific(label, terms):
+                            score += 140
+                        if _matches_specific(image_url, terms):
+                            score += 60
+                        if score:
+                            candidates.append((score, image_url, label))
+
+                    candidates.extend(
+                        _raw_image_candidates(page.text, page_url, terms)
+                    )
+
+                    if parser.og_image:
+                        og_url = _clean_image_url(parser.og_image, page_url)
+                        if og_url:
+                            candidates.append(
+                                (80, og_url, parser.title or result.title)
+                            )
+
+                    unique: dict[str, tuple[int, str, str]] = {}
+                    for item in candidates:
+                        current = unique.get(item[1])
+                        if current is None or item[0] > current[0]:
+                            unique[item[1]] = item
+
+                    for _, image_url, label in sorted(
+                        unique.values(),
+                        key=lambda item: item[0],
+                        reverse=True,
+                    )[:12]:
+                        try:
+                            data = await _download_verified_image(
+                                client,
+                                image_url,
+                                page_url,
+                                settings,
+                            )
+                        except (RuntimeError, httpx.HTTPError):
+                            continue
+                        return EncyclopediaImage(
+                            data=data,
+                            source="网页精确角色页",
+                            page_url=page_url,
+                            label=label or parser.title or result.title,
+                        )
+            except (ValueError, httpx.HTTPError):
+                continue
+    return None
+
+
 async def bing_image_relaxed_ultraman_image(
     name: str,
     aliases: tuple[str, ...],
@@ -1311,6 +1434,9 @@ async def encyclopedia_ultraman_image(
     bing_image = await bing_image_search_ultraman_image(name, aliases, settings)
     if bing_image is not None:
         return bing_image
+    web_page = await web_page_ultraman_image(name, aliases, settings)
+    if web_page is not None:
+        return web_page
     relaxed = await bing_image_relaxed_ultraman_image(name, aliases, settings)
     if relaxed is not None:
         return relaxed
