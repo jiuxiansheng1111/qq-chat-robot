@@ -30,6 +30,7 @@ from app.main import (
     extract_search_query,
     extract_translation_query,
     group_memory_prompt,
+    has_reply_segment,
     is_identity_question,
     is_targeted_possession_command,
     mentioned_image_command,
@@ -116,6 +117,21 @@ def test_at_message_is_detected():
         assert message_text(payload) == "你好"
     finally:
         settings.onebot_self_id = previous
+
+
+def test_reply_segment_detection_supports_array_and_cq_string():
+    array_payload = event("继续")
+    array_payload["message"] = [
+        {"type": "reply", "data": {"id": "123"}},
+        {"type": "text", "data": {"text": "继续"}},
+    ]
+    assert has_reply_segment(array_payload)
+
+    cq_payload = event("unused")
+    cq_payload["message"] = "[CQ:reply,id=123] 继续"
+    assert has_reply_segment(cq_payload)
+
+    assert not has_reply_segment(event("普通新话题"))
 
 
 def test_at_image_commands_are_detected_without_triggering_ai():
