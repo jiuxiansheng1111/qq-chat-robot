@@ -48,6 +48,7 @@ from app.services.group_memory_logic import (
     format_group_memory_answer,
     group_memory_reasoning_hints,
     resolve_group_memory_question,
+    rewrite_first_person_identity_question,
 )
 from app.services.music import (
     MusicIdentity,
@@ -1992,7 +1993,10 @@ async def onebot_webhook(
         prompt = text.split(" ", 1)[1].strip() if text.startswith(("/ai ", "/AI ")) else text
         group_memories = await request.app.state.db.group_memories(group_id)
         active_possession = await request.app.state.db.daily_possession(group_id, today)
-        memory_answer = resolve_group_memory_question(prompt, group_memories)
+        memory_lookup_prompt = rewrite_first_person_identity_question(
+            prompt, sender_display_name(event)
+        )
+        memory_answer = resolve_group_memory_question(memory_lookup_prompt, group_memories)
         if memory_answer is not None and not active_possession:
             memory_reply = ensure_default_murasame_voice(
                 format_group_memory_answer(memory_answer, prompt),
@@ -2027,6 +2031,13 @@ async def onebot_webhook(
         possession_name = ""
         imitate_current_possession = False
         sender_name = sender_display_name(event)
+        persona_context.append(
+            "【当前发言者】QQ 群名片/昵称是“"
+            + sender_name
+            + "”。当前消息里的第一人称“我/我的/本人”默认都指这位发言者，"
+            "第二人称“你/你自己”才指机器人。"
+            "因此“你知道我是谁吗”是在问发言者是谁，绝不能解释成机器人是谁。"
+        )
         if needs_translation(sender_name):
             try:
                 translated_sender = await cached_translation(
