@@ -286,5 +286,11 @@ async def test_group_member_identity_memory_is_private_keyed_and_clearable(tmp_p
 
     assert await db.latest_group_member_display_name("100", "184573813") == "狄"
 
+    await db.record_group_activity(
+        "100", "184573813", "狄·新群名片", "测试消息", "2026-09-23"
+    )
+    refreshed = await db.find_group_member_identity("100", "drj")
+    assert refreshed == [("184573813", "狄·新群名片", "drj")]
+
     await db.clear_group_member_identities("100", "184573813")
     assert await db.group_member_identities("100", "184573813") == []
