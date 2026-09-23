@@ -87,6 +87,7 @@ from app.services.possession_style import (
     summarize_possession_recall,
 )
 from app.services.short_intent import canonicalize_short_command
+from app.services.simple_logic import resolve_rps_logic
 from app.services.translation import (
     TranslationResult,
     format_translation_reply,
@@ -1856,6 +1857,17 @@ async def onebot_webhook(
             )
             if change_notice:
                 await send_group_message(group_id, change_notice)
+
+    deterministic_logic = resolve_rps_logic(text)
+    if deterministic_logic is not None and murasame_addressed(event, text):
+        reply = ensure_default_murasame_voice(
+            deterministic_logic,
+            seed=f"logic:{group_id}:{user_id}:{text}",
+            prompt=text,
+            affection_score=current_affection,
+        )
+        await send_group_message(group_id, reply)
+        return {"ok": True, "source": "simple_logic"}
 
     raw_message = event.get("message")
     plain_repeat_message = (
