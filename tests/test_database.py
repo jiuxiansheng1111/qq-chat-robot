@@ -330,3 +330,81 @@ async def test_affection_is_persistent_clamped_and_auditable(tmp_path):
     assert await reopened.reset_affection("100", "200") == 30
     assert await reopened.affection_score("100", "200") == 30
     assert await reopened.affection_events("100", "200") == []
+
+
+
+async def test_affection_engagement_rewards_repeated_and_multi_day_activity(tmp_path):
+    db = Database(Settings(_env_file=None, database_path=str(tmp_path / "affection-streak.db")))
+    await db.init()
+
+    bonus, streak, count, reason = await db.record_affection_engagement(
+        "100", "200", "2026-09-20"
+    )
+    assert (bonus, streak, count) == (0, 1, 1)
+    assert reason == ""
+
+    await db.record_affection_engagement("100", "200", "2026-09-20")
+    bonus, streak, count, reason = await db.record_affection_engagement(
+        "100", "200", "2026-09-20"
+    )
+    assert (bonus, streak, count) == (1, 1, 3)
+    assert "今日第 3 次" in reason
+
+    bonus, streak, count, reason = await db.record_affection_engagement(
+        "100", "200", "2026-09-21"
+    )
+    assert (bonus, streak, count) == (1, 2, 1)
+    assert "连续 2 天" in reason
+
+    for day in range(22, 27):
+        await db.record_affection_engagement(
+            "100", "200", f"2026-09-{day:02d}"
+        )
+    bonus, streak, count, reason = await db.record_affection_engagement(
+        "100", "200", "2026-09-27"
+    )
+    assert streak == 8
+    assert bonus == 2
+    assert "连续 8 天" in reason
+
+
+async def test_affection_intimate_action_only_scores_once_per_day(tmp_path):
+    db = Database(Settings(_env_file=None, database_path=str(tmp_path / "affection-action.db")))
+    await db.init()
+
+    assert await db.claim_affection_action("100", "200", "2026-09-20", "摸头")
+    assert not await db.claim_affection_action("100", "200", "2026-09-20", "摸头")
+    assert await db.claim_affection_action("100", "200", "2026-09-20", "拥抱")
+    assert await db.claim_affection_action("100", "200", "2026-09-21", "摸头")
+
+
+async def test_affection_v2_reset_marker_resets_existing_scores_once(tmp_path):
+    path = tmp_path / "affection-reset.db"
+    db = Database(Settings(_env_file=None, database_path=str(path)))
+    await db.init()
+    await db.reset_affection("100", "200", 88)
+    await db.execute(
+        "DELETE FROM app_meta WHERE meta_key = ?",
+        ("affection_v2_reset_to_30",),
+    )
+
+    reopened = Database(Settings(_env_file=None, database_path=str(path)))
+    await reopened.init()
+    assert await reopened.affection_score("100", "200") == 30
+
+    await reopened.reset_affection("100", "200", 77)
+    again = Database(Settings(_env_file=None, database_path=str(path)))
+    await again.init()
+    assert await again.affection_score("100", "200") == 77
+
+
+async def test_active_group_ids_excludes_disabled_groups(tmp_path):
+    db = Database(Settings(_env_file=None, database_path=str(tmp_path / "active-groups.db")))
+    await db.init()
+    await db.record_group_activity("100", "200", "甲", "测试", "2026-09-23")
+    await db.record_group_activity("101", "201", "乙", "测试", "2026-09-23")
+    await db.set_group_enabled("101", False)
+
+    groups = await db.active_group_ids(lookback_days=365)
+    assert "100" in groups
+    assert "101" not in groups
