@@ -1221,7 +1221,7 @@ async def llm_confirm_ultraman_image_candidate(
     source: str,
     label: str = "",
     page_url: str = "",
-) -> bool:
+) -> bool | None:
     """Ask the configured LLM for a final metadata-level identity check.
 
     The model does not invent or fetch an image URL here. It only checks whether
@@ -1244,8 +1244,8 @@ async def llm_confirm_ultraman_image_candidate(
                         "如果是独立形态，只有明确出现完整形态名、可靠别名，"
                         "或“圆谷官方精确角色/形态映射”这类已经由程序精确绑定的证据才可通过。"
                         "仅出现“强力型、闪耀型、奥特曼”等泛化词必须拒绝。"
-                        "证据不足、同名歧义、疑似其他形态时都拒绝。"
-                        "只允许输出 MATCH 或 REJECT，不要解释。"
+                        "证据不足、同名歧义、疑似其他形态时输出 UNSURE。"
+                        "只允许输出 MATCH、REJECT 或 UNSURE，不要解释。"
                     ),
                 },
                 {
@@ -1261,27 +1261,40 @@ async def llm_confirm_ultraman_image_candidate(
             ]
         )
     except (LLMError, RuntimeError, ValueError, httpx.HTTPError) as exc:
-        logger.info("LLM final Ultraman image confirmation unavailable for %s: %s", hero.name, exc)
-        return False
+        logger.info(
+            "LLM final Ultraman image confirmation unavailable for %s: %s",
+            hero.name,
+            exc,
+        )
+        return None
 
     verdict = re.sub(r"[^A-Z]", "", answer.upper())
-    matched = verdict.startswith("MATCH")
+    if verdict.startswith("MATCH"):
+        result: bool | None = True
+        text = "MATCH"
+    elif verdict.startswith("REJECT"):
+        result = False
+        text = "REJECT"
+    else:
+        result = None
+        text = "UNSURE"
     logger.info(
         "LLM final Ultraman image confirmation for %s from %s: %s",
         hero.name,
         source,
-        "MATCH" if matched else "REJECT",
+        text,
     )
-    return matched
+    return result
 
 
 async def resolve_ultraman_card_image(hero, llm=None) -> str:
-    """Resolve an image, then require one final LLM identity confirmation.
+    """Resolve a reliable image without letting LLM availability become a hard gate.
 
-    Search remains deterministic and source-validated. The LLM is used twice
-    when needed: first as a final metadata-level gate for every candidate that
-    would be returned, and finally to generate better search aliases if all
-    deterministic searches fail or are rejected.
+    Strong deterministic sources (official exact mapping and exact official search)
+    are returned directly. Encyclopedia candidates are already metadata-validated;
+    an explicit LLM REJECT can veto them, but LLM timeout/UNSURE does not discard
+    otherwise valid evidence. If all deterministic sources fail, the LLM may expand
+    search aliases, but it never invents an image URL.
     """
     base_aliases = ultraman_image_aliases(hero)
 
@@ -1294,15 +1307,9 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
             exc,
         )
     else:
-        if await llm_confirm_ultraman_image_candidate(
-            hero,
-            llm,
-            source="圆谷官方精确角色/形态映射",
-            label=hero.name,
-            page_url="https://tsuburaya-prod.com/",
-        ):
-            return official
-        logger.info("LLM rejected direct official Ultraman image candidate for %s", hero.name)
+        # The program has already bound this image to the exact official hero/form.
+        # Do not let an LLM outage or wording variation invalidate official evidence.
+        return official
 
     try:
         encyclopedia = await encyclopedia_ultraman_image(
@@ -1317,22 +1324,24 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
             exc,
         )
     else:
-        if await llm_confirm_ultraman_image_candidate(
+        verdict = await llm_confirm_ultraman_image_candidate(
             hero,
             llm,
             source=encyclopedia.source,
             label=encyclopedia.label,
             page_url=encyclopedia.page_url,
-        ):
+        )
+        if verdict is not False:
             logger.info(
-                "Ultraman image resolved from %s for %s (%s)",
+                "Ultraman image resolved from %s for %s (%s); llm=%s",
                 encyclopedia.source,
                 hero.name,
                 encyclopedia.page_url,
+                "match" if verdict is True else "unavailable/unsure",
             )
             return encyclopedia.data
         logger.info(
-            "LLM rejected encyclopedia Ultraman image candidate for %s from %s (%s)",
+            "LLM explicitly rejected encyclopedia Ultraman image candidate for %s from %s (%s)",
             hero.name,
             encyclopedia.source,
             encyclopedia.page_url,
@@ -1347,15 +1356,7 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
             official_exc,
         )
     else:
-        if await llm_confirm_ultraman_image_candidate(
-            hero,
-            llm,
-            source="圆谷官网站内精确图片搜索",
-            label=hero.name,
-            page_url="https://tsuburaya-prod.com/",
-        ):
-            return official_search
-        logger.info("LLM rejected official-search Ultraman image candidate for %s", hero.name)
+        return official_search
 
     if llm is not None:
         try:
@@ -1393,13 +1394,14 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
                     assisted_aliases,
                     settings,
                 )
-                if await llm_confirm_ultraman_image_candidate(
+                assisted_verdict = await llm_confirm_ultraman_image_candidate(
                     hero,
                     llm,
                     source=f"{assisted.source}（LLM辅助搜索词）",
                     label=assisted.label,
                     page_url=assisted.page_url,
-                ):
+                )
+                if assisted_verdict is not False:
                     logger.info(
                         "Ultraman image resolved with LLM-assisted search terms from %s for %s (%s)",
                         assisted.source,
@@ -1408,7 +1410,7 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
                     )
                     return assisted.data
                 logger.info(
-                    "LLM rejected its assisted Ultraman image candidate for %s from %s",
+                    "LLM explicitly rejected its assisted Ultraman image candidate for %s from %s",
                     hero.name,
                     assisted.source,
                 )
