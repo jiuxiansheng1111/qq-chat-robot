@@ -144,6 +144,28 @@ def parse_memory_relation(content: str) -> MemoryRelation | None:
     return None
 
 
+def rewrite_first_person_identity_question(question: str, speaker_name: str) -> str:
+    """Bind first-person identity questions to the actual QQ sender.
+
+    This prevents prompts such as "你知道我是谁吗" from being misread as
+    "你是谁". Only identity-style questions are rewritten; ordinary first-person
+    chat remains untouched.
+    """
+    text = _clean(question, 120)
+    speaker = _clean(speaker_name, 80)
+    if not text or not speaker:
+        return text
+    patterns = (
+        r"^(?:你(?:还)?(?:知道|记得|认识))?我是谁(?:吗|嘛|呢)?$",
+        r"^(?:知道|记得|认识)我是谁(?:吗|嘛|呢)?$",
+        r"^我是谁(?:啊|呀|呢|吗|嘛)?$",
+        r"^(?:你)?猜猜我是谁(?:吧|啊|呀|呢)?$",
+    )
+    if any(re.fullmatch(pattern, text) for pattern in patterns):
+        return f"{speaker}是谁"
+    return text
+
+
 def _identity_target(question: str) -> str:
     text = _clean(question, 120)
     for suffix in IDENTITY_QUERY_SUFFIXES:
