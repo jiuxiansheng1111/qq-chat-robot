@@ -28,11 +28,24 @@ _SEVERE_HOSTILITY = (
     "垃圾机器人",
     "傻逼",
     "煞笔",
+    "傻屌",
+    "沙雕机器人",
     "脑残",
+    "脑瘫",
     "弱智",
+    "畜生",
+    "出生",
+    "狗东西",
+    "死机器人",
     "妈的",
     "操你",
     "草你",
+    "操你妈",
+    "草你妈",
+    "cnm",
+    "nmsl",
+    "司马",
+    "妈死",
 )
 _MODERATE_HOSTILITY = (
     "滚",
@@ -45,6 +58,10 @@ _MODERATE_HOSTILITY = (
     "烦死了",
     "真蠢",
     "真菜",
+    "傻子",
+    "蠢逼",
+    "废狗",
+    "臭机器人",
 )
 _MILD_HOSTILITY = (
     "笨",
@@ -103,10 +120,10 @@ def clamp_affection(value: int) -> int:
 
 def affection_stage(score: int) -> tuple[str, str]:
     score = clamp_affection(score)
-    if score == 0:
-        return "彻底冷淡", "除必要的查看/清除命令外不再回应这名成员。"
+    if score < 10:
+        return "冰封", "对这名成员非常冷淡，只回复几个字，不主动延伸话题，也不装作没情绪。"
     if score < 20:
-        return "戒备", "非常冷淡，通常只回一句，不主动延伸话题。"
+        return "戒备", "明显冷淡，通常只回一句，不主动延伸话题。"
     if score < 40:
         return "高冷傲娇", "初识阶段，回答简短，有距离感，偶尔嘴硬或短促反问。"
     if score < 60:
@@ -119,7 +136,10 @@ def affection_stage(score: int) -> tuple[str, str]:
 def affection_prompt(score: int) -> str:
     stage, description = affection_stage(score)
     score = clamp_affection(score)
-    if score < 20:
+    if score < 10:
+        length_rule = "普通互动只回2到8个汉字左右，尽量不超过12个字；即使回答事实问题也保持极短。"
+        question_rule = "绝不主动反问，也不要主动缓和气氛。"
+    elif score < 20:
         length_rule = "回复尽量控制在1句，除非事实问题必须解释。"
         question_rule = "几乎不主动反问。"
     elif score < 40:
