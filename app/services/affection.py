@@ -8,8 +8,8 @@ from app.llm.providers import LLMError
 
 AFFECTION_MIN = 0
 AFFECTION_MAX = 100
-AFFECTION_INITIAL = 40
-MEMORY_UNLOCK_SCORE = 55
+AFFECTION_INITIAL = 30
+MEMORY_UNLOCK_SCORE = 60
 
 _AFFECTION_COMMAND_HINTS = (
     "好感度",
@@ -33,8 +33,10 @@ _SEVERE_HOSTILITY = (
     "脑残",
     "脑瘫",
     "弱智",
+    "智障",
     "畜生",
     "出生",
+    "初生",
     "狗东西",
     "死机器人",
     "妈的",
@@ -42,10 +44,16 @@ _SEVERE_HOSTILITY = (
     "草你",
     "操你妈",
     "草你妈",
+    "你妈死了",
+    "妈死",
+    "司马",
+    "死妈",
     "cnm",
     "nmsl",
-    "司马",
-    "妈死",
+    "wdnmd",
+    "tmd",
+    "sb",
+    "nt",
 )
 _MODERATE_HOSTILITY = (
     "滚",
@@ -62,6 +70,14 @@ _MODERATE_HOSTILITY = (
     "蠢逼",
     "废狗",
     "臭机器人",
+    "唐氏",
+    "唐人",
+    "小丑",
+    "狗叫",
+    "急了",
+    "破防",
+    "fw",
+    "zz",
 )
 _MILD_HOSTILITY = (
     "笨",
@@ -72,6 +88,33 @@ _MILD_HOSTILITY = (
     "回答得真差",
     "答错了",
 )
+
+_SEXUAL_HARASSMENT = (
+    "欧金金",
+    "おちんちん",
+    "ちんちん",
+    "ちんぽ",
+    "チンポ",
+    "ochinchin",
+    "鸡巴",
+    "鸡吧",
+    "几把",
+    "牛子",
+    "屌",
+    "j8",
+    "jb",
+    "透你",
+    "草你",
+    "操你",
+)
+
+_INTIMATE_ACTIONS = (
+    ("亲吻", ("亲吻", "亲亲", "亲一口", "亲你", "吻你"), 2),
+    ("拥抱", ("拥抱", "抱抱", "抱一下", "抱住你"), 2),
+    ("牵手", ("牵手", "拉手", "牵你的手"), 1),
+    ("摸头", ("摸头", "摸摸头", "摸摸你的头", "揉揉头"), 1),
+)
+
 _STRONG_POSITIVE = (
     "完美",
     "太棒了",
@@ -102,9 +145,9 @@ _WARM_POSITIVE = (
     "早安",
     "晚安",
     "想你了",
-    "抱抱",
     "陪我聊聊",
 )
+
 
 
 @dataclass(frozen=True)
@@ -112,6 +155,24 @@ class AffectionAssessment:
     delta: int
     reason: str
     source: str = "rule"
+
+
+def _contains_slang(compact: str, token: str) -> bool:
+    folded = token.casefold()
+    if folded.isascii() and folded.isalnum() and len(folded) <= 5:
+        return re.search(
+            rf"(?<![a-z0-9]){re.escape(folded)}(?![a-z0-9])",
+            compact,
+        ) is not None
+    return folded in compact
+
+
+def intimate_action(text: str) -> tuple[str, int] | None:
+    compact = re.sub(r"\s+", "", str(text or "")).casefold()
+    for action, aliases, delta in _INTIMATE_ACTIONS:
+        if any(alias.casefold() in compact for alias in aliases):
+            return action, delta
+    return None
 
 
 def clamp_affection(value: int) -> int:
@@ -144,10 +205,16 @@ def affection_prompt(score: int) -> str:
         question_rule = "几乎不主动反问。"
     elif score < 40:
         length_rule = "普通闲聊通常1到2句，事实问题可适度解释但不要长篇。"
-        question_rule = "偶尔在自然场景反问一个很短的问题，不要每次都问。"
+        question_rule = (
+            "只要是问候、日常分享、兴趣或情绪闲聊，通常在结尾自然反问一个"
+            "与刚才内容直接相关的小问题；事实问答、命令、争吵时不要硬问。"
+        )
     elif score < 60:
         length_rule = "普通闲聊通常2到3句。"
-        question_rule = "可以偶尔问对方今天在做什么、吃了什么、最近在玩什么等轻松日常。"
+        question_rule = (
+            "闲聊时优先接一个自然的小问题，例如今天在做什么、吃了什么、"
+            "最近在玩什么或刚才那件事后来怎样；不要每次都问同一个模板。"
+        )
     elif score < 80:
         length_rule = "普通闲聊通常2到4句。"
         question_rule = "适合时主动接一个自然的小问题，让对话能继续。"
@@ -159,7 +226,8 @@ def affection_prompt(score: int) -> str:
         f"{description}{length_rule}{question_rule}"
         "好感度是游戏化数值，不要说自己真的受伤、被抛弃或要求对方负责。"
         "不要主动告诉数值，除非对方明确查看好感度或系统刚发生升降。"
-        f"只有好感度达到 {MEMORY_UNLOCK_SCORE} 才能新增“记住”类持久记忆。"
+        f"只有好感度达到 {MEMORY_UNLOCK_SCORE} 才能新增“记住”类持久记忆，"
+        "并解锁摸头、牵手、拥抱、亲吻等亲密互动动作。"
     )
 
 
@@ -177,11 +245,13 @@ def hostility_assessment(text: str) -> AffectionAssessment:
     compact = re.sub(r"\s+", "", str(text or "")).casefold()
     if not compact:
         return AffectionAssessment(0, "没有攻击性内容")
-    if any(token in compact for token in _SEVERE_HOSTILITY):
+    if any(_contains_slang(compact, token) for token in _SEXUAL_HARASSMENT):
+        return AffectionAssessment(-6, "低俗性骚扰或露骨性暗示")
+    if any(_contains_slang(compact, token) for token in _SEVERE_HOSTILITY):
         return AffectionAssessment(-10, "明显恶意辱骂")
-    if any(token in compact for token in _MODERATE_HOSTILITY):
+    if any(_contains_slang(compact, token) for token in _MODERATE_HOSTILITY):
         return AffectionAssessment(-5, "不友善或攻击性表达")
-    if any(token in compact for token in _MILD_HOSTILITY):
+    if any(_contains_slang(compact, token) for token in _MILD_HOSTILITY):
         return AffectionAssessment(-2, "明显不满或轻度恶言")
     return AffectionAssessment(0, "没有攻击性内容")
 
@@ -195,10 +265,12 @@ def rule_based_affection(text: str, previous_bot_reply: str = "") -> AffectionAs
     if hostile.delta:
         return hostile
 
+    if "好感度+" in compact or "好感度＋" in compact:
+        return AffectionAssessment(0, "用户自报好感度数值不作为结算依据")
     if any(token in compact for token in _STRONG_POSITIVE):
-        return AffectionAssessment(5, "明确称赞或非常满意")
+        return AffectionAssessment(4, "明确称赞或非常满意")
     if any(token in compact for token in _POSITIVE):
-        return AffectionAssessment(3, "友好回应或明确肯定")
+        return AffectionAssessment(2, "友好回应或明确肯定")
     if any(token in compact for token in _WARM_POSITIVE):
         return AffectionAssessment(1, "自然的友好互动")
 
