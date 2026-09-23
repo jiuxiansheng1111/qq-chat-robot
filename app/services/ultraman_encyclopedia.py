@@ -1188,7 +1188,7 @@ async def bing_image_relaxed_ultraman_image(
         return None
 
     parent_name = name.split("·", 1)[0] if "·" in name else name
-    parent_terms = _specific_terms(parent_name, tuple())
+    parent_terms = _specific_terms(parent_name, ())
     query_values = [name]
     query_values.extend(alias for alias in aliases if alias)
     searches = [
