@@ -1909,6 +1909,60 @@ async def onebot_webhook(
         murasame_addressed(event, text) or reply_to_murasame
     )
 
+    action = (
+        intimate_action(text)
+        if addressed_to_murasame and not active_possession_for_affection
+        else None
+    )
+    if action is not None:
+        action_name, action_delta = action
+        if current_affection < MEMORY_UNLOCK_SCORE:
+            await send_group_message(
+                group_id,
+                f"……还没熟到能{action_name}的程度。"
+                f"好感度到 {MEMORY_UNLOCK_SCORE}/100 再说。",
+            )
+            return {"ok": True, "source": "affection_action_locked"}
+
+        granted = await request.app.state.db.claim_affection_action(
+            group_id,
+            user_id,
+            today,
+            action_name,
+        )
+        action_replies = {
+            "摸头": "……只准摸一下，别把吾辈当小孩子。",
+            "牵手": "手给汝了，苟修金可别乱跑。",
+            "拥抱": "……过来吧。只抱一会儿，听见没。",
+            "亲吻": "等、等一下……这次就不躲了。",
+        }
+        if granted:
+            old_score, current_affection = await request.app.state.db.adjust_affection(
+                group_id,
+                user_id,
+                action_delta,
+                f"解锁亲密互动：{action_name}",
+                initial=AFFECTION_INITIAL,
+            )
+            notice = affection_change_text(
+                old_score,
+                current_affection,
+                type("_ActionAssessment", (), {
+                    "reason": f"解锁亲密互动：{action_name}",
+                })(),
+            )
+            reply = action_replies.get(action_name, "……行吧，这次就依汝。")
+            if notice:
+                reply += "\n" + notice
+            await send_group_message(group_id, reply)
+        else:
+            await send_group_message(
+                group_id,
+                action_replies.get(action_name, "……行吧。")
+                + "\n今天这个动作已经加过好感度了，再刷也不会继续加。",
+            )
+        return {"ok": True, "source": "affection_action"}
+
     if (
         addressed_to_murasame
         and not active_possession_for_affection
@@ -1954,6 +2008,42 @@ async def onebot_webhook(
             )
             if change_notice:
                 await send_group_message(group_id, change_notice)
+
+        compact_interaction = re.sub(r"\s+", "", text)
+        if (
+            assessment.delta >= 0
+            and len(compact_interaction) >= 3
+            and "好感度" not in compact_interaction
+            and not text.startswith("/")
+        ):
+            bonus, streak, count, bonus_reason = (
+                await request.app.state.db.record_affection_engagement(
+                    group_id,
+                    user_id,
+                    today,
+                )
+            )
+            if bonus:
+                old_score, current_affection = (
+                    await request.app.state.db.adjust_affection(
+                        group_id,
+                        user_id,
+                        bonus,
+                        bonus_reason,
+                        initial=AFFECTION_INITIAL,
+                    )
+                )
+                await send_group_message(
+                    group_id,
+                    affection_change_text(
+                        old_score,
+                        current_affection,
+                        type("_StreakAssessment", (), {
+                            "reason": bonus_reason
+                            or f"持续互动：连续 {streak} 天 / 今日第 {count} 次",
+                        })(),
+                    ),
+                )
 
     deterministic_logic = resolve_rps_logic(text)
     if deterministic_logic is not None and murasame_addressed(event, text):
