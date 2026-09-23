@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import hashlib
 import random
 import time
 from collections import deque
@@ -92,8 +93,23 @@ _pig_pool_lock = asyncio.Lock()
 _nailong_path_pool: list[str] = []
 _nailong_pool_lock = asyncio.Lock()
 _cat_gif_cache: deque[str] = deque()
+_cat_cached_hashes: set[str] = set()
+_cat_recent_hashes: deque[str] = deque(maxlen=16)
 _cat_cache_lock = asyncio.Lock()
 _cat_fill_lock = asyncio.Lock()
+
+
+def _cat_digest(image: str) -> str:
+    return hashlib.sha256(image.encode("ascii", errors="ignore")).hexdigest()
+
+
+def _remember_cat_digest(digest: str) -> None:
+    if digest in _cat_recent_hashes:
+        try:
+            _cat_recent_hashes.remove(digest)
+        except ValueError:
+            pass
+    _cat_recent_hashes.append(digest)
 
 
 @dataclass(frozen=True)
@@ -160,23 +176,29 @@ async def _download_cat_gif(settings: Settings) -> str:
 
 
 async def warm_cat_gif_cache(settings: Settings) -> None:
-    target = max(1, min(int(getattr(settings, "cat_cache_size", 2)), 5))
+    target = max(1, min(int(getattr(settings, "cat_cache_size", 6)), 10))
     async with _cat_fill_lock:
-        while True:
+        attempts_left = max(8, target * 4)
+        while attempts_left > 0:
             async with _cat_cache_lock:
                 if len(_cat_gif_cache) >= target:
                     return
+            attempts_left -= 1
             try:
                 image = await _download_cat_gif(settings)
             except (RuntimeError, httpx.HTTPError):
                 return
+            digest = _cat_digest(image)
             async with _cat_cache_lock:
+                if digest in _cat_cached_hashes or digest in _cat_recent_hashes:
+                    continue
                 _cat_gif_cache.append(image)
+                _cat_cached_hashes.add(digest)
 
 
 async def maintain_cat_gif_cache(settings: Settings) -> None:
     """Keep refilling the cat cache after transient upstream failures."""
-    target = max(1, min(int(getattr(settings, "cat_cache_size", 2)), 5))
+    target = max(1, min(int(getattr(settings, "cat_cache_size", 6)), 10))
     while True:
         await warm_cat_gif_cache(settings)
         async with _cat_cache_lock:
@@ -187,8 +209,28 @@ async def maintain_cat_gif_cache(settings: Settings) -> None:
 async def random_cat_gif(settings: Settings) -> str:
     async with _cat_cache_lock:
         image = _cat_gif_cache.popleft() if _cat_gif_cache else None
+        if image is not None:
+            digest = _cat_digest(image)
+            _cat_cached_hashes.discard(digest)
+            _remember_cat_digest(digest)
+
     if image is None:
-        image = await _download_cat_gif(settings)
+        # CATAAS can occasionally return the same GIF repeatedly even with a
+        # cache-busting query. Compare actual content and retry a few times.
+        last_image = ""
+        for _ in range(8):
+            candidate = await _download_cat_gif(settings)
+            last_image = candidate
+            digest = _cat_digest(candidate)
+            async with _cat_cache_lock:
+                if digest in _cat_recent_hashes:
+                    continue
+                _remember_cat_digest(digest)
+            image = candidate
+            break
+        if image is None:
+            image = last_image or await _download_cat_gif(settings)
+
     asyncio.create_task(warm_cat_gif_cache(settings))
     return image
 
