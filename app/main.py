@@ -370,6 +370,17 @@ def event_bot_self_id(event: dict) -> str:
     return str(event.get("self_id") or settings.onebot_self_id or "").strip()
 
 
+def has_reply_segment(event: dict) -> bool:
+    """Return whether the incoming OneBot message explicitly quotes another message."""
+    message = event.get("message", "")
+    if isinstance(message, str):
+        return bool(re.search(r"\[CQ:reply,[^\]]+\]", message))
+    return any(
+        isinstance(segment, dict) and segment.get("type") == "reply"
+        for segment in (message or [])
+    )
+
+
 def bot_mentioned(event: dict) -> bool:
     self_id = event_bot_self_id(event)
     if not self_id:
@@ -1680,10 +1691,14 @@ async def onebot_webhook(
         previous_reply = request.app.state.last_murasame_replies.pop(
             (group_id, user_id), ""
         )
+        # Rule-based praise/hostility still works on ordinary mentions. The LLM
+        # may interpret nuanced affection only when the user explicitly quoted
+        # a previous message, preventing stale replies from unrelated topics
+        # being scored as if they were direct answers.
         assessment = await assess_affection(
             text,
-            previous_reply,
-            request.app.state.llm,
+            previous_reply if has_reply_segment(event) else "",
+            request.app.state.llm if has_reply_segment(event) else None,
         )
         if assessment.delta:
             old_score, current_affection = await request.app.state.db.adjust_affection(
