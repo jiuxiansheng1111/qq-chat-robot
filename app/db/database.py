@@ -127,6 +127,17 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_group_memories_group
                     ON group_memories(group_id, id);
+                CREATE TABLE IF NOT EXISTS group_member_identities (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    group_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    alias TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(group_id, user_id, alias)
+                );
+                CREATE INDEX IF NOT EXISTS idx_group_member_identities_owner
+                    ON group_member_identities(group_id, user_id, id);
                 CREATE TABLE IF NOT EXISTS group_style_stats (
                     group_id TEXT PRIMARY KEY,
                     sample_count INTEGER NOT NULL DEFAULT 0,
@@ -670,6 +681,108 @@ class Database:
             (user_id,),
         )
         return int(totals[0]), int(totals[1]), str(favorite[0]), int(favorite[1])
+
+    async def add_group_member_identity(
+        self,
+        group_id: str,
+        user_id: str,
+        display_name: str,
+        alias: str,
+        max_items: int = 20,
+    ) -> None:
+        clean_alias = str(alias).strip()[:100]
+        clean_name = str(display_name).strip()[:100]
+        if not clean_alias:
+            return
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT INTO group_member_identities(group_id, user_id, display_name, alias) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(group_id, user_id, alias) DO UPDATE SET "
+                "display_name = excluded.display_name, created_at = CURRENT_TIMESTAMP",
+                (group_id, user_id, clean_name, clean_alias),
+            )
+            await db.execute(
+                "DELETE FROM group_member_identities WHERE group_id = ? AND user_id = ? "
+                "AND id NOT IN (SELECT id FROM group_member_identities "
+                "WHERE group_id = ? AND user_id = ? ORDER BY id DESC LIMIT ?)",
+                (group_id, user_id, group_id, user_id, max_items),
+            )
+            await db.commit()
+
+    async def group_member_identities(
+        self, group_id: str, user_id: str, limit: int = 20
+    ) -> list[str]:
+        rows = await self.fetchall(
+            "SELECT alias FROM group_member_identities "
+            "WHERE group_id = ? AND user_id = ? ORDER BY id DESC LIMIT ?",
+            (group_id, user_id, limit),
+        )
+        return [str(row[0]) for row in rows]
+
+    async def clear_group_member_identities(
+        self, group_id: str, user_id: str
+    ) -> None:
+        await self.execute(
+            "DELETE FROM group_member_identities WHERE group_id = ? AND user_id = ?",
+            (group_id, user_id),
+        )
+
+    async def delete_group_member_identities_matching(
+        self, group_id: str, text: str
+    ) -> int:
+        pattern = f"%{text}%"
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                "DELETE FROM group_member_identities "
+                "WHERE group_id = ? AND (alias LIKE ? OR user_id = ? OR display_name LIKE ?)",
+                (group_id, pattern, text, pattern),
+            )
+            deleted = max(0, int(cursor.rowcount or 0))
+            await db.commit()
+        return deleted
+
+    async def find_group_member_identity(
+        self, group_id: str, value: str
+    ) -> list[tuple[str, str, str]]:
+        rows = await self.fetchall(
+            "SELECT user_id, display_name, alias FROM group_member_identities "
+            "WHERE group_id = ? ORDER BY id DESC",
+            (group_id,),
+        )
+        needle = str(value).strip().casefold()
+        matches: list[tuple[str, str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for user_id, display_name, alias in rows:
+            uid = str(user_id)
+            name = str(display_name)
+            label = str(alias)
+            if needle not in {uid.casefold(), name.casefold(), label.casefold()}:
+                continue
+            key = (uid, label.casefold())
+            if key in seen:
+                continue
+            seen.add(key)
+            matches.append((uid, name, label))
+        return matches
+
+    async def latest_group_member_display_name(
+        self, group_id: str, user_id: str
+    ) -> str:
+        row = await self.fetchone(
+            "SELECT display_name FROM daily_activity "
+            "WHERE group_id = ? AND user_id = ? "
+            "ORDER BY activity_date DESC LIMIT 1",
+            (group_id, user_id),
+        )
+        if row and row[0]:
+            return str(row[0])
+        row = await self.fetchone(
+            "SELECT display_name FROM group_member_identities "
+            "WHERE group_id = ? AND user_id = ? ORDER BY id DESC LIMIT 1",
+            (group_id, user_id),
+        )
+        return str(row[0]) if row and row[0] else ""
 
     async def add_group_memory(
         self, group_id: str, content: str, max_items: int = 50
