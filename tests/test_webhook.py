@@ -39,6 +39,7 @@ from app.main import (
     mentioned_image_command,
     mentioned_user_ids,
     message_text,
+    murasame_addressed,
     notify_rate_limited,
     polish_chat_reply,
     possession_recent_messages_prompt,
@@ -106,6 +107,16 @@ def test_long_qq_text_is_split_without_losing_content():
     assert len(chunks) > 1
     assert all(len(chunk) <= 901 for chunk in chunks)
     assert "".join(chunks).replace("\n", "") == source.replace("\n", "")
+
+
+def test_persona_name_counts_as_direct_address_without_at():
+    payload = event("小丛雨你这个傻屌机器人")
+    assert murasame_addressed(payload, message_text(payload))
+
+    payload = event("穗织幼刀姬，别装死")
+    assert murasame_addressed(payload, message_text(payload))
+
+    assert not murasame_addressed(event("今天天气不错"), "今天天气不错")
 
 
 def test_at_message_is_detected():
