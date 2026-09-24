@@ -124,7 +124,7 @@ def _load_extra_anime_characters() -> tuple[AnimeCharacter, ...]:
 
 ANIME_CHARACTER_ROSTER += _load_extra_anime_characters()
 ANIME_CHARACTER_BY_NAME = {item.name: item for item in ANIME_CHARACTER_ROSTER}
-ANIME_IMAGE_CACHE_VERSION = "v3-staged-provenance-20260924"
+ANIME_IMAGE_CACHE_VERSION = "v4-staged-quality-20260924"
 
 ANIME_SERIES_ALIASES: dict[str, tuple[str, ...]] = {
     "《千恋＊万花》": ("Senren * Banka", "Senren Banka", "千恋＊万花"),
@@ -206,6 +206,198 @@ def anime_character_profile_text(character: AnimeCharacter) -> str:
         f"角色背景：{background}\n"
         f"资料重点：{focus}"
     )
+
+
+_ANIME_PROFILE_CACHE: dict[tuple[str, bool], str] = {}
+
+
+async def _moegirl_character_profile(
+    character: AnimeCharacter,
+    settings: Settings,
+) -> tuple[str, str] | None:
+    """Fetch a short, attributable Moegirl extract for profile enrichment."""
+    if not settings.moegirl_image_provider_enabled:
+        return None
+    timeout = max(3.0, min(float(settings.media_timeout_seconds), 10.0))
+    series = character.series.strip("《》 ")
+    query = f"{character.name} {series}".strip()
+    headers = {"User-Agent": "qq-chatrobot/0.1 (profile attribution resolver)"}
+    try:
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            follow_redirects=True,
+            headers=headers,
+        ) as client:
+            response = await client.get(
+                "https://zh.moegirl.org.cn/api.php",
+                params={
+                    "action": "query",
+                    "generator": "search",
+                    "gsrsearch": query,
+                    "gsrnamespace": "0",
+                    "gsrlimit": "8",
+                    "prop": "info|extracts|categories",
+                    "inprop": "url",
+                    "exintro": "1",
+                    "explaintext": "1",
+                    "exsentences": "8",
+                    "cllimit": "max",
+                    "format": "json",
+                    "formatversion": "2",
+                },
+            )
+            response.raise_for_status()
+            pages_payload = response.json().get("query", {}).get("pages", [])
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return None
+
+    pages = list(pages_payload.values()) if isinstance(pages_payload, dict) else pages_payload
+    if not isinstance(pages, list):
+        return None
+    series_terms = _series_match_terms(character)
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        title = str(page.get("title") or "")
+        extract = re.sub(r"\s+", " ", str(page.get("extract") or "")).strip()
+        categories = " ".join(
+            str(item.get("title") or "")
+            for item in page.get("categories", [])
+            if isinstance(item, dict)
+        )
+        evidence = _normalize(f"{title} {extract} {categories}")
+        if not _candidate_name_matches(character, tuple(character.aliases), [title]):
+            continue
+        if series_terms and not any(term in evidence for term in series_terms):
+            continue
+        if not extract:
+            continue
+        page_url = str(page.get("fullurl") or "")
+        if not page_url:
+            page_url = "https://zh.moegirl.org.cn/" + quote(title.replace(" ", "_"))
+        return extract[:1800], page_url
+    return None
+
+
+def _profile_search_evidence(
+    character: AnimeCharacter,
+    results: list,
+) -> tuple[str, ...]:
+    evidence: list[str] = []
+    for result in results:
+        descriptor = f"{result.title} {result.snippet} {result.url}"
+        if _candidate_score(character, tuple(character.aliases), descriptor) <= 0:
+            continue
+        snippet = re.sub(r"\s+", " ", result.snippet or "").strip()
+        if snippet:
+            evidence.append(f"{result.title}：{snippet[:360]}")
+    return tuple(evidence[:5])
+
+
+async def resolve_anime_character_profile(
+    character: AnimeCharacter,
+    settings: Settings,
+    llm=None,
+) -> str:
+    """Build a factual, readable profile from Moegirl/search evidence and LLM editing.
+
+    The model is only asked to rewrite supplied evidence; it is not allowed to
+    invent a biography or pretend that an unavailable source was consulted.
+    """
+    cache_key = (character.name, callable(getattr(llm, "ask", None)))
+    cached = _ANIME_PROFILE_CACHE.get(cache_key)
+    if cached:
+        return cached
+
+    evidence: list[str] = [
+        f"本地图鉴设定：{character.description}",
+    ]
+    source_urls: list[str] = []
+    moegirl = await _moegirl_character_profile(character, settings)
+    if moegirl is not None:
+        extract, source_url = moegirl
+        evidence.insert(0, f"萌娘百科条目摘要：{extract}")
+        source_urls.append(source_url)
+
+    queries = (
+        f"{character.name} {character.series} 角色 简介 背景",
+        f"{character.name} {character.series} character profile",
+    )
+    search_results = []
+    for query in queries:
+        try:
+            search_results = await search_web(query, limit=6, timeout=7)
+        except (httpx.HTTPError, RuntimeError, ValueError):
+            search_results = []
+        if search_results:
+            break
+    evidence.extend(_profile_search_evidence(character, search_results))
+    source_urls.extend(
+        result.url
+        for result in search_results
+        if _candidate_score(
+            character,
+            tuple(character.aliases),
+            f"{result.title} {result.snippet} {result.url}",
+        ) > 0
+    )
+    source_urls = list(dict.fromkeys(source_urls))[:3]
+    evidence_text = "\n".join(evidence)[:6500]
+
+    generated = ""
+    if callable(getattr(llm, "ask", None)):
+        try:
+            generated = await llm.ask(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "你是二次元角色资料编辑。只能根据用户提供的资料证据改写，"
+                            "不能补写没有证据的年龄、能力、关系或剧情；不要把搜索摘要当成绝对事实。"
+                            "输出两段，严格使用“角色简介：”和“角色背景：”两个标签，"
+                            "总长度约200到320字，语言自然具体，不要写检索过程、免责声明或模板空话。"
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"角色：{character.name}\n作品：{character.series}\n"
+                            f"别名：{'、'.join(character.aliases)}\n资料证据：\n{evidence_text}"
+                        ),
+                    },
+                ]
+            )
+        except (LLMError, httpx.HTTPError, RuntimeError, ValueError):
+            generated = ""
+
+    generated = re.sub(r"\n{3,}", "\n\n", (generated or "").strip())
+    if not (
+        120 <= len(generated) <= 900
+        and "角色简介：" in generated
+        and "角色背景：" in generated
+    ):
+        fallback_background = (
+            moegirl[0]
+            if moegirl is not None
+            else (search_results[0].snippet if search_results else "")
+        )
+        fallback_background = re.sub(r"\s+", " ", fallback_background or "").strip()
+        if not fallback_background:
+            fallback_background = (
+                f"{character.series}中的相关角色资料目前主要以图鉴设定为准，"
+                "未检索到足够可靠的公开背景摘要。"
+            )
+        generated = (
+            f"角色简介：{character.description}本文条目中的角色信息以作品设定和公开角色资料为准，"
+            "会避免把同名人物或未经核实的二次创作设定混入介绍。\n"
+            f"角色背景：公开资料将其置于{character.series}的故事背景中；"
+            f"资料摘要提到：{fallback_background[:180]}"
+        )
+
+    if source_urls:
+        generated += "\n资料来源：" + "、".join(source_urls)
+    _ANIME_PROFILE_CACHE[cache_key] = generated
+    return generated
 
 
 def anime_character_catalog_text_pages(max_chars: int = 1700) -> list[str]:
@@ -1982,7 +2174,23 @@ def _load_anime_image_cache(
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         except (OSError, ValueError, json.JSONDecodeError):
             metadata = None
-        return ImageResolution.from_cache_metadata(data, metadata)
+        result = ImageResolution.from_cache_metadata(data, metadata)
+        if result.width <= 0 or result.height <= 0:
+            try:
+                result = ImageResolution(
+                    data=result.data,
+                    provider=result.provider,
+                    source_page_url=result.source_page_url,
+                    image_url=result.image_url,
+                    label=result.label,
+                    evidence=result.evidence,
+                    cache_hit=result.cache_hit,
+                    width=width,
+                    height=height,
+                )
+            except (ValueError, OSError):
+                pass
+        return result
     except (OSError, ValueError):
         return None
 
@@ -2026,7 +2234,18 @@ def _with_anime_source_attribution(
 ) -> ImageResolution | None:
     if result is None:
         return None
-    if result.source_page_url:
+    width, height = result.width, result.height
+    if width <= 0 or height <= 0:
+        try:
+            raw = base64.b64decode(
+                result.data.removeprefix("base64://"),
+                validate=True,
+            )
+            with Image.open(BytesIO(raw)) as decoded:
+                width, height = decoded.size
+        except (ValueError, OSError):
+            width, height = 0, 0
+    if result.source_page_url and width == result.width and height == result.height:
         return result
     # A number of legacy providers intentionally return only the normalized
     # image payload (their public helpers are also used by older callers). Do
@@ -2048,11 +2267,13 @@ def _with_anime_source_attribution(
     return ImageResolution(
         data=result.data,
         provider=result.provider or source_name,
-        source_page_url=source_pages.get(source_name, ""),
+        source_page_url=result.source_page_url or source_pages.get(source_name, ""),
         image_url=result.image_url,
         label=result.label or character.name,
         evidence=result.evidence,
         cache_hit=result.cache_hit,
+        width=width,
+        height=height,
     )
 
 
@@ -2098,6 +2319,103 @@ async def _delayed_anime_first_image(
     if attributed is None:
         raise RuntimeError("搜索引擎首图 no-match")
     return attributed
+
+
+def _anime_image_quality_key(result: ImageResolution) -> tuple[int, int, int]:
+    """Rank candidates by decoded resolution, then by source reliability."""
+    provider_rank = {
+        "萌娘百科": 8,
+        "VNDB": 7,
+        "Bangumi": 6,
+        "AniList": 5,
+        "角色/官方网页": 4,
+        "Wikipedia": 3,
+        "百度图片": 2,
+        "Bing图片": 1,
+        "Bing放宽匹配": 0,
+        "搜索引擎首图": 0,
+    }
+    return (
+        result.pixel_area,
+        min(max(0, result.width), max(0, result.height)),
+        provider_rank.get(result.provider, 0),
+    )
+
+
+async def _run_anime_source_group(
+    character: AnimeCharacter,
+    aliases: tuple[str, ...],
+    settings: Settings,
+    source_specs: tuple[tuple[str, object], ...],
+    group_timeout: float,
+    errors: list[str],
+) -> ImageResolution | None:
+    tasks = [
+        asyncio.create_task(
+            _anime_source_result(
+                character,
+                aliases,
+                settings,
+                source_name,
+                resolver,
+            )
+        )
+        for source_name, resolver in source_specs
+        if source_name != "搜索引擎首图"
+    ]
+    if any(source_name == "搜索引擎首图" for source_name, _ in source_specs):
+        tasks.append(
+            asyncio.create_task(
+                _delayed_anime_first_image(character, aliases, settings)
+            )
+        )
+    if not tasks:
+        return None
+
+    pending = set(tasks)
+    candidates: list[ImageResolution] = []
+    deadline = asyncio.get_running_loop().time() + group_timeout
+    # Once the first valid image arrives, give nearby providers a short grace
+    # period so a larger candidate can win without making the bot wait for a
+    # permanently hung source.
+    grace_deadline: float | None = None
+    try:
+        while pending:
+            now = asyncio.get_running_loop().time()
+            remaining = deadline - now
+            if grace_deadline is not None:
+                remaining = min(remaining, grace_deadline - now)
+            if remaining <= 0:
+                break
+            done, pending = await asyncio.wait(
+                pending,
+                timeout=remaining,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if not done:
+                break
+            for task in done:
+                try:
+                    candidate = task.result()
+                    if candidate is not None:
+                        candidates.append(candidate)
+                        if grace_deadline is None:
+                            grace_deadline = asyncio.get_running_loop().time() + 1.25
+                except (
+                    httpx.HTTPError,
+                    RuntimeError,
+                    OSError,
+                    ValueError,
+                ) as exc:
+                    errors.append(str(exc))
+    finally:
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+
+    if not candidates:
+        return None
+    return max(candidates, key=_anime_image_quality_key)
 
 
 async def resolve_anime_character_image(
@@ -2168,45 +2486,17 @@ async def resolve_anime_character_image(
         if remaining <= 0:
             errors.append(f"总搜索超过 {timeout:.1f}s")
             break
-        tasks = [
-            asyncio.create_task(
-                _anime_source_result(
-                    character,
-                    aliases,
-                    settings,
-                    source_name,
-                    resolver,
-                )
-            )
-            for source_name, resolver in source_specs
-            if source_name != "搜索引擎首图"
-        ]
-        if any(source_name == "搜索引擎首图" for source_name, _ in source_specs):
-            tasks.append(
-                asyncio.create_task(
-                    _delayed_anime_first_image(character, aliases, settings)
-                )
-            )
         try:
-            async with asyncio.timeout(min(group_timeout, remaining)):
-                for completed in asyncio.as_completed(tasks):
-                    try:
-                        winner = await completed
-                        break
-                    except (
-                        httpx.HTTPError,
-                        RuntimeError,
-                        OSError,
-                        ValueError,
-                    ) as exc:
-                        errors.append(str(exc))
+            winner = await _run_anime_source_group(
+                character,
+                aliases,
+                settings,
+                source_specs,
+                min(group_timeout, remaining),
+                errors,
+            )
         except TimeoutError:
             errors.append(f"当前来源组超过 {min(group_timeout, remaining):.1f}s")
-        finally:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
         if winner is not None:
             break
 

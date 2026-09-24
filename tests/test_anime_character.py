@@ -169,6 +169,71 @@ async def test_legacy_provider_result_gets_traceable_source_page():
 
 
 @pytest.mark.asyncio
+async def test_image_group_prefers_higher_resolution_candidate():
+    character = anime.ANIME_CHARACTER_BY_NAME["丛雨"]
+    settings = Settings(_env_file=None)
+    errors: list[str] = []
+
+    async def low(*args, **kwargs):
+        return jpeg_base64(320, 480)
+
+    async def high(*args, **kwargs):
+        return jpeg_base64(1200, 1600)
+
+    winner = await anime._run_anime_source_group(
+        character,
+        character.aliases,
+        settings,
+        (("Bing图片", low), ("Bangumi", high)),
+        2,
+        errors,
+    )
+    assert winner is not None
+    assert winner.provider == "Bangumi"
+    assert winner.width == 1200
+    assert winner.height == 1600
+
+
+@pytest.mark.asyncio
+async def test_profile_uses_moegirl_evidence_and_llm_rewrites_it(monkeypatch):
+    character = anime.ANIME_CHARACTER_BY_NAME["丛雨"]
+    captured = {}
+
+    async def fake_moegirl(*args, **kwargs):
+        return (
+            "丛雨是《千恋＊万花》的登场角色，寄宿于丛雨丸并担任神社神使。",
+            "https://zh.moegirl.org.cn/丛雨",
+        )
+
+    async def fake_search(*args, **kwargs):
+        return []
+
+    class FakeLLM:
+        async def ask(self, messages):
+            captured["messages"] = messages
+            return (
+                "角色简介：丛雨是《千恋＊万花》的重要角色，寄宿于丛雨丸，"
+                "并以神社神使的身份与主人公及其他角色相遇。她外表年幼，"
+                "言行带有古风气质，互动中既有嘴硬的一面，也会表现出体贴与责任感。\n"
+                "角色背景：她与建实神社、丛雨丸及作品的神秘传承紧密相连，"
+                "故事会通过她与同伴的交流逐步揭开身份和过去。"
+            )
+
+    monkeypatch.setattr(anime, "_moegirl_character_profile", fake_moegirl)
+    monkeypatch.setattr(anime, "search_web", fake_search)
+    anime._ANIME_PROFILE_CACHE.clear()
+    text = await anime.resolve_anime_character_profile(
+        character,
+        Settings(_env_file=None, moegirl_image_provider_enabled=True),
+        FakeLLM(),
+    )
+    prompt_text = "\n".join(item["content"] for item in captured["messages"])
+    assert "萌娘百科条目摘要" in prompt_text
+    assert "角色简介：" in text and "角色背景：" in text
+    assert "https://zh.moegirl.org.cn/丛雨" in text
+
+
+@pytest.mark.asyncio
 async def test_resolver_persists_cache_and_skips_network_next_time(
     monkeypatch,
     tmp_path,

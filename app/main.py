@@ -53,9 +53,9 @@ from app.services.anime_character import (
     ANIME_CHARACTER_BY_NAME,
     ANIME_CHARACTER_ROSTER,
     anime_character_catalog_text_pages,
-    anime_character_profile_text,
     render_anime_character_catalog,
     resolve_anime_character_image,
+    resolve_anime_character_profile,
     resolve_anime_character_query,
 )
 from app.services.bilibili import (
@@ -3088,10 +3088,15 @@ async def onebot_webhook(
                 await send_group_message(group_id, f"日漫角色图鉴里暂时没找到“{catalog_query}”。")
             else:
                 request.app.state.recent_anime_character_queries[(group_id, user_id)] = character.name
+                profile_text = await resolve_anime_character_profile(
+                    character,
+                    settings,
+                    request.app.state.llm,
+                )
                 caption = (
                     "✦ 日漫与特摄角色图鉴 · 日漫资料 ✦\n"
                     f"【{character.name}】\n"
-                    f"{anime_character_profile_text(character)}\n\n"
+                    f"{profile_text}\n\n"
                     "本次仅查看图鉴，不会增加收藏次数。"
                 )
                 try:
@@ -3113,11 +3118,16 @@ async def onebot_webhook(
         )
         character = ANIME_CHARACTER_BY_NAME[character_name]
         request.app.state.recent_anime_character_queries[(group_id, user_id)] = character.name
+        profile_text = await resolve_anime_character_profile(
+            character,
+            settings,
+            request.app.state.llm,
+        )
         status = "今日首次获得" if created else "今天已经抽到过"
         caption = (
             f"✨ {sender_display_name(event)} 的今日二次元角色\n"
             f"【{character.name}】\n"
-            f"{anime_character_profile_text(character)}\n\n"
+            f"{profile_text}\n\n"
             f"{status}，已收入你的二次元角色收藏！"
         )
         try:
@@ -3165,10 +3175,15 @@ async def onebot_webhook(
                 await send_group_message(group_id, page)
     elif bot_mentioned(event) and (anime_character := resolve_anime_character_query(text)):
         request.app.state.recent_anime_character_queries[(group_id, user_id)] = anime_character.name
+        profile_text = await resolve_anime_character_profile(
+            anime_character,
+            settings,
+            request.app.state.llm,
+        )
         caption = (
             "✦ 二次元角色图鉴 · 角色资料 ✦\n"
             f"【{anime_character.name}】\n"
-            f"{anime_character_profile_text(anime_character)}\n\n"
+            f"{profile_text}\n\n"
             "本次仅查看资料，不会增加收藏次数。"
         )
         try:

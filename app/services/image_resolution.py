@@ -28,6 +28,13 @@ class ImageResolution:
     label: str = ""
     evidence: str = ""
     cache_hit: bool = False
+    width: int = 0
+    height: int = 0
+
+    @property
+    def pixel_area(self) -> int:
+        """Decoded pixel area used to prefer genuinely higher-resolution art."""
+        return max(0, int(self.width)) * max(0, int(self.height))
 
     @property
     def source(self) -> str:
@@ -74,6 +81,8 @@ class ImageResolution:
             label=str(payload.get("label") or ""),
             evidence=str(payload.get("evidence") or ""),
             cache_hit=True,
+            width=int(payload.get("width") or 0),
+            height=int(payload.get("height") or 0),
         )
 
 
@@ -106,6 +115,8 @@ def coerce_image_resolution(
         image_url=str(getattr(value, "image_url", None) or ""),
         label=str(getattr(value, "label", None) or label),
         evidence=evidence,
+        width=int(getattr(value, "width", 0) or 0),
+        height=int(getattr(value, "height", 0) or 0),
     )
 
 
