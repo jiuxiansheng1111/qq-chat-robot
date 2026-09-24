@@ -202,13 +202,15 @@ Windows 一键启动 NapCatQQ Desktop、OneBot 和 FastAPI：
 
 启动脚本现在会自动检查 `.venv` 和运行依赖：虚拟环境不存在时自动用本机 Python 3.11/3.12 创建，依赖缺失时自动安装，不再因为 `.venv\Scripts\python.exe` 不存在直接退出。
 
+机器人 API 由 `scripts\run_bot.ps1` 生命周期守护脚本管理：NapCat 的 OneBot HTTP Server（默认 `127.0.0.1:3000`）可用时自动启动或接管 Uvicorn；NapCat/OneBot 关闭后会自动停止 Uvicorn，重新打开 NapCat 后会自动使用当前项目代码启动 Uvicorn。不要用手动的 Uvicorn 命令替代一键脚本，否则不会启用这个生命周期联动。
+
 为了避免重启电脑或机器人进程退出后出现 `ECONNREFUSED 127.0.0.1:8000`，管理员身份双击：
 
 ```text
 安装机器人开机自启.bat
 ```
 
-它会注册并立即运行 `QQChatRobot API` 计划任务，登录 Windows 后自动启动并守护 8000 服务；同时注册每分钟检查一次的 `QQChatRobot Health Check`，主守护任务意外退出时也会自动拉起。
+它会注册并立即运行 `QQChatRobot API` 计划任务，登录 Windows 后自动启动生命周期守护脚本；只有 NapCat/OneBot 可用时才启动并守护 8000 服务，NapCat 关闭时会一并停止 Uvicorn；同时注册每分钟检查一次的 `QQChatRobot Health Check`，主守护任务意外退出时也会自动拉起。
 NapCat/QQ 因可能需要登录确认，仍使用 `start-qq-chatrobot.bat` 启动。
 
 一键脚本会读取 `.env` 中的 `ONEBOT_SELF_ID`，检查端口避免重复启动 NapCat，并优先启动默认安装位置的 NapCatQQ Desktop：

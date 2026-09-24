@@ -8,6 +8,7 @@ $desktopRoot = Split-Path -Parent $projectRoot
 $envPath = Join-Path $projectRoot ".env"
 $pythonPath = Join-Path $projectRoot ".venv\Scripts\python.exe"
 $bootstrapScript = Join-Path $PSScriptRoot "bootstrap_windows.ps1"
+$lifecycleScript = Join-Path $PSScriptRoot "run_bot.ps1"
 $logRoot = Join-Path $projectRoot "logs"
 $botOutputLog = Join-Path $logRoot "bot.out.log"
 $botErrorLog = Join-Path $logRoot "bot.error.log"
@@ -179,37 +180,46 @@ try {
         Write-Host "[SETUP REQUIRED] OneBot 3000 is not ready. Add/login QQ $qqId in NapCatQQ Desktop and enable HTTP Server port 3000." -ForegroundColor Yellow
     }
 
-    if ($botReady -or (Test-LocalPort -Port 8000)) {
-        Write-Host "[RUNNING] Bot API: 8000" -ForegroundColor Green
+    if (-not (Test-Path -LiteralPath $lifecycleScript)) {
+        throw "Bot lifecycle supervisor was not found: $lifecycleScript"
+    }
+
+    # Always keep one lifecycle supervisor alive. It adopts an already-running
+    # Uvicorn process, or starts one when OneBot is ready, and stops it when
+    # NapCat/OneBot is closed.
+    $lifecycleRunning = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -in @("powershell.exe", "pwsh.exe") -and
+            $_.CommandLine -and
+            $_.CommandLine -match '(?i)run_bot\.ps1'
+        })
+    if ($lifecycleRunning.Count -gt 0) {
+        Write-Host "[RUNNING] Bot lifecycle supervisor" -ForegroundColor Green
     }
     else {
-        Write-Host "[STARTING] Bot API..." -ForegroundColor Yellow
+        Write-Host "[STARTING] Bot lifecycle supervisor..." -ForegroundColor Yellow
         New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
-        $botProcess = Start-Process `
-            -FilePath $pythonPath `
-            -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000") `
+        Start-Process `
+            -FilePath "powershell.exe" `
+            -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $lifecycleScript) `
             -WorkingDirectory $projectRoot `
-            -RedirectStandardOutput $botOutputLog `
-            -RedirectStandardError $botErrorLog `
-            -PassThru `
-            -WindowStyle Minimized
-
+            -WindowStyle Hidden
         Start-Sleep -Seconds 2
-        if ($botProcess.HasExited) {
-            $errorSummary = ""
-            if (Test-Path -LiteralPath $botErrorLog) {
-                $errorSummary = ((Get-Content -LiteralPath $botErrorLog -Tail 8) -join " | ").Trim()
-            }
-            if (-not $errorSummary) {
-                $errorSummary = "No stderr output was captured."
-            }
-            throw "Bot API exited immediately (code $($botProcess.ExitCode)): $errorSummary"
-        }
+    }
 
-        if (-not (Wait-LocalPort -Port 8000 -TimeoutSeconds 30)) {
-            throw "Bot API did not start within 30 seconds. Check $botErrorLog"
+    if (Test-LocalPort -Port 8000) {
+        Write-Host "[RUNNING] Bot API: 8000" -ForegroundColor Green
+    }
+    elseif (Test-LocalPort -Port 3000) {
+        if (Wait-LocalPort -Port 8000 -TimeoutSeconds 30) {
+            Write-Host "[STARTED] Bot API: 8000" -ForegroundColor Green
         }
-        Write-Host "[STARTED] Bot API: 8000" -ForegroundColor Green
+        else {
+            throw "Bot lifecycle supervisor did not start the API within 30 seconds. Check $botErrorLog"
+        }
+    }
+    else {
+        Write-Host "[WAITING] NapCat/OneBot 3000 is unavailable; the supervisor will start Bot API 8000 when NapCat is opened." -ForegroundColor Yellow
     }
 
     Write-Host ""
