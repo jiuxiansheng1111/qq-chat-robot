@@ -91,6 +91,36 @@ ANIME_CHARACTER_ROSTER = (
     AnimeCharacter("博丽灵梦", "《东方Project》", "博丽神社的巫女，负责处理幻想乡异变。", ("博麗霊夢", "Hakurei Reimu")),
     AnimeCharacter("雾雨魔理沙", "《东方Project》", "人类魔法使，擅长强力光束魔法。", ("霧雨魔理沙", "Kirisame Marisa")),
 )
+def _load_extra_anime_characters() -> tuple[AnimeCharacter, ...]:
+    path = Path(__file__).resolve().parents[1] / "data" / "anime_characters_extra.json"
+    if not path.exists():
+        return ()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return ()
+    characters: list[AnimeCharacter] = []
+    seen = {item.name for item in ANIME_CHARACTER_ROSTER}
+    for item in payload if isinstance(payload, list) else []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        series = str(item.get("series") or "").strip()
+        description = str(item.get("description") or "").strip()
+        aliases_raw = item.get("aliases") or []
+        aliases = tuple(
+            str(value).strip()
+            for value in aliases_raw
+            if str(value).strip()
+        ) if isinstance(aliases_raw, list) else ()
+        if not name or not series or not description or name in seen:
+            continue
+        seen.add(name)
+        characters.append(AnimeCharacter(name, series, description, aliases))
+    return tuple(characters)
+
+
+ANIME_CHARACTER_ROSTER += _load_extra_anime_characters()
 ANIME_CHARACTER_BY_NAME = {item.name: item for item in ANIME_CHARACTER_ROSTER}
 
 ANIME_SERIES_ALIASES: dict[str, tuple[str, ...]] = {
