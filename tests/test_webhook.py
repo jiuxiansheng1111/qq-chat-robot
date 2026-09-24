@@ -392,6 +392,29 @@ def test_automatic_web_search_detects_current_or_model_deferred_questions():
     assert automatic_web_search_query("讲个笑话", "当然可以") is None
     assert automatic_web_search_query("", "<WEB_SEARCH>x</WEB_SEARCH>") is None
 
+def test_live_data_questions_force_web_lookup():
+    assert requires_live_web_data("新加坡天气怎么样")
+    assert requires_live_web_data("美元人民币汇率")
+    assert requires_live_web_data("今天比赛比分")
+    assert not requires_live_web_data("讲个笑话")
+
+
+def test_weather_location_extraction_requires_command_or_bot_mention():
+    previous = settings.onebot_self_id
+    settings.onebot_self_id = "bot-1"
+    try:
+        assert extract_weather_location(event("/天气 新加坡"), "/天气 新加坡") == "新加坡"
+        mentioned = event("北京天气怎么样")
+        mentioned["message"] = [
+            {"type": "at", "data": {"qq": "bot-1"}},
+            {"type": "text", "data": {"text": "北京天气怎么样"}},
+        ]
+        assert extract_weather_location(mentioned, message_text(mentioned)) == "北京"
+        assert extract_weather_location(event("北京天气不错"), "北京天气不错") is None
+    finally:
+        settings.onebot_self_id = previous
+
+
 
 def test_sender_name_question_is_distinct_from_bot_identity():
     assert asks_for_sender_name("say my name")
