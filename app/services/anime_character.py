@@ -1493,7 +1493,7 @@ async def _llm_search_aliases(
     character: AnimeCharacter,
     llm,
 ) -> tuple[str, ...]:
-    if llm is None:
+    if llm is None or not callable(getattr(llm, "ask", None)):
         return ()
     try:
         answer = await llm.ask(
@@ -1608,7 +1608,7 @@ async def _delayed_anime_first_image(
     # Give structured/official sources enough time before accepting a generic
     # search-engine image. This reduces wrong-character hits without losing the
     # final fallback.
-    await asyncio.sleep(3.0)
+    await asyncio.sleep(1.5)
     image = await _search_engine_first_image(character, aliases, settings)
     if image is None:
         raise RuntimeError("搜索引擎首图 no-match")
