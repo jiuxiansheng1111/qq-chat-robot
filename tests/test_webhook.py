@@ -832,7 +832,7 @@ async def test_image_send_retries_with_normalized_jpeg(monkeypatch, tmp_path):
         settings.database_path = previous_database_path
 
     assert len(calls) == 2
-    assert calls[0] == original
+    assert calls[0].startswith("file://")
     assert calls[1].startswith("base64://")
     assert calls[1] != original
 
@@ -1061,7 +1061,7 @@ async def test_ultraman_image_resolution_returns_first_parallel_success(
 
 
 @pytest.mark.asyncio
-async def test_ultraman_image_resolution_has_deadline_and_always_returns_image(
+async def test_ultraman_image_resolution_has_deadline_and_rejects_unverified_placeholder(
     monkeypatch,
     tmp_path,
 ):
@@ -1089,12 +1089,8 @@ async def test_ultraman_image_resolution_has_deadline_and_always_returns_image(
     monkeypatch.setattr("app.main.ultraman_image_aliases", lambda hero: (hero.name,))
 
     try:
-        result = await resolve_ultraman_card_image(hero)
-        assert result.startswith("base64://")
-        raw = base64.b64decode(result.removeprefix("base64://"))
-        with Image.open(BytesIO(raw)) as decoded:
-            assert decoded.width >= 160
-            assert decoded.height >= 160
+        with pytest.raises(RuntimeError, match="没有找到.*可显示真实图片"):
+            await resolve_ultraman_card_image(hero)
     finally:
         settings.ultraman_image_cache_dir = previous_cache_dir
         settings.ultraman_image_resolve_timeout_seconds = previous_timeout
