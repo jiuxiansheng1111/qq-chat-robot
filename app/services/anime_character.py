@@ -93,6 +93,46 @@ ANIME_CHARACTER_ROSTER = (
 )
 ANIME_CHARACTER_BY_NAME = {item.name: item for item in ANIME_CHARACTER_ROSTER}
 
+ANIME_SERIES_ALIASES: dict[str, tuple[str, ...]] = {
+    "《千恋＊万花》": ("Senren * Banka", "Senren Banka", "千恋＊万花"),
+    "《魔女的夜宴》": ("Sanoba Witch", "サノバウィッチ"),
+    "《Re:从零开始的异世界生活》": (
+        "Re:ZERO -Starting Life in Another World-",
+        "Re:ゼロから始める異世界生活",
+    ),
+    "《某科学的超电磁炮》": ("A Certain Scientific Railgun", "とある科学の超電磁砲"),
+    "《孤独摇滚！》": ("Bocchi the Rock!", "ぼっち・ざ・ろっく！"),
+    "《莉可丽丝》": ("Lycoris Recoil", "リコリス・リコイル"),
+    "《约会大作战》": ("Date A Live", "デート・ア・ライブ"),
+    "《我的青春恋爱物语果然有问题。》": (
+        "My Teen Romantic Comedy SNAFU",
+        "やはり俺の青春ラブコメはまちがっている。",
+    ),
+    "《路人女主的养成方法》": (
+        "Saekano",
+        "冴えない彼女の育てかた",
+    ),
+    "《青春猪头少年系列》": (
+        "Rascal Does Not Dream",
+        "青春ブタ野郎",
+    ),
+    "《关于邻家的天使大人不知不觉把我惯成了废人这档子事》": (
+        "The Angel Next Door Spoils Me Rotten",
+        "お隣の天使様",
+    ),
+    "《SSSS.GRIDMAN》": ("SSSS.GRIDMAN",),
+    "《辉夜大小姐想让我告白》": (
+        "Kaguya-sama: Love is War",
+        "かぐや様は告らせたい",
+    ),
+    "《五等分的新娘》": ("The Quintessential Quintuplets", "五等分の花嫁"),
+    "《间谍过家家》": ("SPY x FAMILY", "SPY×FAMILY"),
+    "《葬送的芙莉莲》": ("Frieren: Beyond Journey's End", "葬送のフリーレン"),
+    "《药屋少女的呢喃》": ("The Apothecary Diaries", "薬屋のひとりごと"),
+    "《鬼灭之刃》": ("Demon Slayer: Kimetsu no Yaiba", "鬼滅の刃"),
+    "《东方Project》": ("Touhou Project", "東方Project"),
+}
+
 ANIME_CHARACTER_SEARCH_HINTS: dict[str, tuple[str, ...]] = {
     "丛雨": (
         "千恋万花 丛雨 绿色头发 女角色",
@@ -277,6 +317,271 @@ def _search_queries(
         queries.append(f'"{value}" "{series}"')
         queries.append(f"{value} {series} character")
     return tuple(dict.fromkeys(queries))[:16]
+
+
+def _series_match_terms(character: AnimeCharacter) -> tuple[str, ...]:
+    values = [character.series.strip("《》 ")]
+    values.extend(ANIME_SERIES_ALIASES.get(character.series, ()))
+    return tuple(
+        dict.fromkeys(
+            normalized
+            for value in values
+            if (normalized := _normalize(value))
+        )
+    )
+
+
+def _candidate_name_matches(
+    character: AnimeCharacter,
+    aliases: tuple[str, ...],
+    values: list[str],
+) -> bool:
+    descriptor = _normalize(" ".join(values))
+    return any(
+        term in descriptor
+        for term in _name_terms(character, aliases)
+    )
+
+
+async def _vndb_image(
+    character: AnimeCharacter,
+    aliases: tuple[str, ...],
+    settings: Settings,
+) -> str | None:
+    """Resolve visual-novel character art through VNDB's structured API."""
+    queries = tuple(
+        dict.fromkeys(
+            value
+            for value in (
+                *character.aliases,
+                character.name,
+                *aliases,
+            )
+            if value
+        )
+    )[:6]
+    series_terms = _series_match_terms(character)
+    timeout = max(3.0, min(float(settings.media_timeout_seconds), 7.0))
+    headers = {
+        "User-Agent": "qq-chatrobot/0.1 anime-character-image",
+        "Content-Type": "application/json",
+    }
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        headers=headers,
+    ) as client:
+        for query in queries:
+            try:
+                response = await client.post(
+                    "https://api.vndb.org/kana/character",
+                    json={
+                        "filters": ["search", "=", query],
+                        "fields": (
+                            "id,name,original,aliases,image.url,image.dims,"
+                            "vns.title,vns.alttitle"
+                        ),
+                        "sort": "searchrank",
+                        "results": 10,
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+            except (httpx.HTTPError, ValueError):
+                continue
+
+            results = payload.get("results", [])
+            if not isinstance(results, list):
+                continue
+            for item in results:
+                if not isinstance(item, dict):
+                    continue
+                name_values = [
+                    str(item.get("name") or ""),
+                    str(item.get("original") or ""),
+                ]
+                raw_aliases = item.get("aliases") or []
+                if isinstance(raw_aliases, list):
+                    name_values.extend(str(value) for value in raw_aliases)
+                if not _candidate_name_matches(
+                    character,
+                    aliases,
+                    name_values,
+                ):
+                    continue
+
+                vns = item.get("vns") or []
+                vn_values: list[str] = []
+                if isinstance(vns, list):
+                    for vn in vns:
+                        if not isinstance(vn, dict):
+                            continue
+                        vn_values.extend(
+                            (
+                                str(vn.get("title") or ""),
+                                str(vn.get("alttitle") or ""),
+                            )
+                        )
+                if vn_values:
+                    normalized_vns = _normalize(" ".join(vn_values))
+                    if not any(term in normalized_vns for term in series_terms):
+                        continue
+
+                image = item.get("image") or {}
+                if not isinstance(image, dict):
+                    continue
+                image_url = str(image.get("url") or "")
+                if not image_url.startswith(("https://", "http://")):
+                    continue
+                try:
+                    return await _download_image(
+                        client,
+                        image_url,
+                        "https://vndb.org/",
+                        settings,
+                    )
+                except (
+                    httpx.HTTPError,
+                    RuntimeError,
+                    OSError,
+                    ValueError,
+                ):
+                    continue
+    return None
+
+
+async def _anilist_image(
+    character: AnimeCharacter,
+    aliases: tuple[str, ...],
+    settings: Settings,
+) -> str | None:
+    """Resolve anime/manga character art through AniList GraphQL."""
+    queries = tuple(
+        dict.fromkeys(
+            value
+            for value in (
+                *character.aliases,
+                character.name,
+                *aliases,
+            )
+            if value
+        )
+    )[:6]
+    timeout = max(3.0, min(float(settings.media_timeout_seconds), 7.0))
+    query_doc = """
+    query ($search: String) {
+      Character(search: $search) {
+        id
+        name {
+          full
+          native
+          alternative
+        }
+        image {
+          large
+          medium
+        }
+        media(perPage: 10) {
+          nodes {
+            title {
+              romaji
+              english
+              native
+            }
+          }
+        }
+      }
+    }
+    """
+    series_terms = _series_match_terms(character)
+    headers = {
+        "User-Agent": "qq-chatrobot/0.1 anime-character-image",
+        "Content-Type": "application/json",
+    }
+
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        headers=headers,
+    ) as client:
+        for query in queries:
+            try:
+                response = await client.post(
+                    "https://graphql.anilist.co",
+                    json={
+                        "query": query_doc,
+                        "variables": {"search": query},
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+            except (httpx.HTTPError, ValueError):
+                continue
+
+            item = payload.get("data", {}).get("Character")
+            if not isinstance(item, dict):
+                continue
+            names = item.get("name") or {}
+            name_values = [
+                str(names.get("full") or ""),
+                str(names.get("native") or ""),
+            ]
+            alternatives = names.get("alternative") or []
+            if isinstance(alternatives, list):
+                name_values.extend(str(value) for value in alternatives)
+            if not _candidate_name_matches(
+                character,
+                aliases,
+                name_values,
+            ):
+                continue
+
+            media = item.get("media") or {}
+            nodes = media.get("nodes") or []
+            media_values: list[str] = []
+            if isinstance(nodes, list):
+                for node in nodes:
+                    if not isinstance(node, dict):
+                        continue
+                    title = node.get("title") or {}
+                    if isinstance(title, dict):
+                        media_values.extend(
+                            str(title.get(key) or "")
+                            for key in ("romaji", "english", "native")
+                        )
+            if media_values:
+                normalized_media = _normalize(" ".join(media_values))
+                if not any(term in normalized_media for term in series_terms):
+                    # Exact character aliases are often unique, but when media
+                    # metadata exists and contradicts the requested series,
+                    # reject the candidate to avoid same-name characters.
+                    continue
+
+            image = item.get("image") or {}
+            if not isinstance(image, dict):
+                continue
+            image_url = str(
+                image.get("large")
+                or image.get("medium")
+                or ""
+            )
+            if not image_url.startswith(("https://", "http://")):
+                continue
+            try:
+                return await _download_image(
+                    client,
+                    image_url,
+                    "https://anilist.co/",
+                    settings,
+                )
+            except (
+                httpx.HTTPError,
+                RuntimeError,
+                OSError,
+                ValueError,
+            ):
+                continue
+    return None
 
 
 async def _wikipedia_image(
@@ -1065,6 +1370,8 @@ async def resolve_anime_character_image(
 
     aliases = tuple(character.aliases)
     source_specs = (
+        ("VNDB", _vndb_image),
+        ("AniList", _anilist_image),
         ("角色/官方网页", _web_page_character_image),
         ("Wikipedia", _wikipedia_image),
         ("百度图片", _baidu_image),
