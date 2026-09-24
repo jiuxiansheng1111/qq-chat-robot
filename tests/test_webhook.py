@@ -804,6 +804,17 @@ def test_low_affection_voice_is_short_and_never_adds_tsundere():
     assert "杂鱼~杂鱼~" not in reply
 
 
+def test_romance_voice_avoids_legacy_prefix_and_fixed_tsundere_tail():
+    reply = ensure_default_murasame_voice(
+        "苟修金，吾辈来说：唔……我会陪着你的。杂鱼~杂鱼~",
+        prompt="今天有点难过，能安慰我吗？",
+        romance_mode=True,
+    )
+    assert "苟修金，吾辈来说" not in reply
+    assert "杂鱼~杂鱼~" not in reply
+    assert len(reply.replace(" ", "").replace("\n", "")) >= 50
+
+
 @pytest.mark.asyncio
 async def test_image_send_retries_with_normalized_jpeg(monkeypatch, tmp_path):
     previous_api_base = settings.onebot_api_base

@@ -10,6 +10,7 @@ from app.services.affection import (
     affection_status_text,
     assess_affection,
     intimate_action,
+    romance_mode_prompt,
     rule_based_affection,
 )
 
@@ -30,6 +31,15 @@ def test_affection_stage_changes_reply_behavior():
     assert "1到2句" in affection_prompt(30)
     assert "自然的小问题" in affection_prompt(65)
     assert "排他" in affection_prompt(90)
+
+
+def test_romance_mode_prompt_is_cute_context_aware_and_supportive():
+    prompt = romance_mode_prompt()
+    assert "乖巧懂事" in prompt
+    assert "禁止主动使用" in prompt
+    assert "最近群聊背景" in prompt
+    assert "至少写50个汉字" in prompt
+    assert "为什么会这样难受" in prompt
 
 
 def test_rule_based_affection_caps_positive_and_negative():
