@@ -50,6 +50,8 @@ class Database:
                     romance_mode INTEGER NOT NULL DEFAULT 0,
                     romance_turn_count INTEGER NOT NULL DEFAULT 0,
                     romance_last_turn_at TEXT,
+                    voice_mode INTEGER NOT NULL DEFAULT 0,
+                    voice_profile TEXT NOT NULL DEFAULT 'default',
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (group_id, user_id)
                 );
@@ -234,6 +236,14 @@ class Database:
             if "romance_last_turn_at" not in {column[1] for column in preference_columns}:
                 await db.execute(
                     "ALTER TABLE user_preferences ADD COLUMN romance_last_turn_at TEXT"
+                )
+            if "voice_mode" not in {column[1] for column in preference_columns}:
+                await db.execute(
+                    "ALTER TABLE user_preferences ADD COLUMN voice_mode INTEGER NOT NULL DEFAULT 0"
+                )
+            if "voice_profile" not in {column[1] for column in preference_columns}:
+                await db.execute(
+                    "ALTER TABLE user_preferences ADD COLUMN voice_profile TEXT NOT NULL DEFAULT 'default'"
                 )
             affection_daily_columns = await db.execute_fetchall("PRAGMA table_info(group_affection_daily)")
             if "severe_hostility_count" not in {column[1] for column in affection_daily_columns}:
@@ -452,6 +462,36 @@ class Database:
                 (group_id, user_id, group_id, user_id, max_items),
             )
             await db.commit()
+
+    async def voice_mode(self, group_id: str, user_id: str) -> bool:
+        row = await self.fetchone(
+            "SELECT voice_mode FROM user_preferences WHERE group_id = ? AND user_id = ?",
+            (group_id, user_id),
+        )
+        return bool(row and row[0])
+
+    async def set_voice_mode(self, group_id: str, user_id: str, enabled: bool) -> None:
+        await self.execute(
+            "INSERT INTO user_preferences(group_id, user_id, voice_mode) VALUES (?, ?, ?) "
+            "ON CONFLICT(group_id, user_id) DO UPDATE SET voice_mode = excluded.voice_mode, "
+            "updated_at = CURRENT_TIMESTAMP",
+            (group_id, user_id, int(enabled)),
+        )
+
+    async def voice_profile(self, group_id: str, user_id: str, default: str = "default") -> str:
+        row = await self.fetchone(
+            "SELECT voice_profile FROM user_preferences WHERE group_id = ? AND user_id = ?",
+            (group_id, user_id),
+        )
+        return str(row[0] or default) if row else default
+
+    async def set_voice_profile(self, group_id: str, user_id: str, profile: str) -> None:
+        await self.execute(
+            "INSERT INTO user_preferences(group_id, user_id, voice_profile) VALUES (?, ?, ?) "
+            "ON CONFLICT(group_id, user_id) DO UPDATE SET voice_profile = excluded.voice_profile, "
+            "updated_at = CURRENT_TIMESTAMP",
+            (group_id, user_id, profile),
+        )
 
     async def long_term_memories(
         self, group_id: str, user_id: str, limit: int = 20

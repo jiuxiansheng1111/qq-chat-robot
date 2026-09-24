@@ -11,6 +11,7 @@ from PIL import Image, ImageStat
 
 from app.config import Settings
 from app.services import ultraman
+from app.services.http_routing import install_outbound_proxy_environment
 from app.services.ultraman_encyclopedia import encyclopedia_ultraman_image
 
 
@@ -149,13 +150,16 @@ async def run(
     require_all: bool,
     forms_only: bool = False,
 ) -> int:
-    settings = Settings(_env_file=None)
+    settings = Settings()
+    await install_outbound_proxy_environment(settings)
     settings.media_timeout_seconds = min(float(settings.media_timeout_seconds), 12.0)
     settings.media_max_bytes = max(int(settings.media_max_bytes), 8 * 1024 * 1024)
 
     # Audit the complete roster, not only independent forms. A green report must
     # mean every drawable entry used by 今日奥特曼/图鉴 has a decodable image.
     heroes = list(ultraman.ULTRAMAN_ROSTER)
+    if forms_only:
+        heroes = [hero for hero in heroes if ultraman.is_ultraman_form_variant(hero)]
     semaphore = asyncio.Semaphore(max(1, min(concurrency, 6)))
     rows = await asyncio.gather(
         *(audit_one(hero, settings, semaphore) for hero in heroes)

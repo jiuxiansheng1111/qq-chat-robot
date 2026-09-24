@@ -81,11 +81,13 @@ from app.services.group_memory_logic import (
     rewrite_relation_pronouns,
 )
 from app.services.http_routing import install_outbound_proxy_environment
+from app.services.image_generation import generate_image
 from app.services.image_resolution import (
     ImageResolution,
     append_image_attribution,
     coerce_image_resolution,
 )
+from app.services.murasame_media import asset_help, random_asset
 from app.services.music import (
     MusicIdentity,
     MusicTrack,
@@ -144,6 +146,13 @@ from app.services.ultraman_encyclopedia import (
     web_page_ultraman_image,
     wikipedia_ultraman_image,
 )
+from app.services.voice import (
+    random_local_voice,
+    synthesize_voice,
+    voice_profile_menu,
+    voice_profiles,
+    voice_setup_help,
+)
 from app.services.weather import WeatherServiceError, fetch_weather, format_weather_report
 from app.services.web_search import SearchResult, search_web
 
@@ -154,6 +163,22 @@ logger = logging.getLogger("qqchat")
 CAT_IMAGE_COMMANDS = frozenset({"/猫", "/cat", "猫图", "随机猫", "随机猫咪", "随机猫图"})
 PIG_IMAGE_COMMANDS = frozenset({"/小猪", "/pig", "猪图", "随机猪", "随机猪猪", "随机小猪"})
 NAILONG_IMAGE_COMMANDS = frozenset({"/奶龙", "奶龙", "随机奶龙", "来只奶龙", "龙来"})
+MURASAME_IMAGE_COMMANDS = frozenset(
+    {"/丛雨图片", "丛雨图片", "丛雨图", "小丛雨图片", "小丛雨图"}
+)
+MURASAME_EMOJI_COMMANDS = frozenset(
+    {"/丛雨表情", "丛雨表情", "丛雨表情包", "小丛雨表情", "小丛雨表情包"}
+)
+IMAGE_GENERATION_COMMANDS = frozenset({"/生成图片", "生成图片", "/画图", "画图"})
+VOICE_ON_COMMANDS = frozenset(
+    {"/开启语音", "开启语音", "/语音开启", "语音开启", "/打开语音模式", "打开语音模式"}
+)
+VOICE_OFF_COMMANDS = frozenset(
+    {"/关闭语音", "关闭语音", "/语音关闭", "语音关闭", "/关闭语音模式", "关闭语音模式"}
+)
+VOICE_STATUS_COMMANDS = frozenset({"/语音状态", "语音状态"})
+VOICE_PROFILE_LIST_COMMANDS = frozenset({"/音色列表", "音色列表", "/切换音色", "切换音色"})
+VOICE_MURASAME_COMMANDS = frozenset({"/丛雨语音", "丛雨语音", "小丛雨语音"})
 DAILY_ULTRAMAN_COMMANDS = frozenset({"/今日奥特曼", "今日奥特曼", "抽奥特曼"})
 DAILY_NEWS_COMMANDS = frozenset({"/今日热点", "今日热点", "/今日新闻", "今日新闻"})
 MY_ULTRAMAN_COMMANDS = frozenset(
@@ -449,6 +474,14 @@ async def lifespan(app: FastAPI):
     app.state.pending_character_confirmations = {}
     app.state.last_murasame_replies = {}
     app.state.translation_cache = {}
+    app.state.image_generation_limiter = LocalRateLimiter(
+        limit=1,
+        window_seconds=max(1, settings.image_generation_cooldown_seconds),
+    )
+    app.state.voice_send_limiter = LocalRateLimiter(
+        limit=1,
+        window_seconds=max(1, settings.voice_send_cooldown_seconds),
+    )
     app.state.deduplicator = EventDeduplicator(settings.event_dedupe_ttl_seconds)
     registry.load_modules(settings.plugin_modules)
     app.state.ingress_limiter = LocalRateLimiter(
@@ -2317,6 +2350,56 @@ async def send_group_image(group_id: str, image_file: str, caption: str = "") ->
     raise RuntimeError(str(last_error or "OneBot image send failed after all fallbacks"))
 
 
+async def send_group_record(group_id: str, record_file: str) -> None:
+    """Send a OneBot 11 record segment, preserving the same dry-run behavior."""
+    route = onebot_route(settings)
+    if not route.api_base:
+        logger.info("[dry-run] bot=%s group=%s record=%s", route.self_id, group_id, record_file[:80])
+        return
+    headers = (
+        {"Authorization": f"Bearer {route.access_token}"}
+        if route.access_token
+        else {}
+    )
+    async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
+        response = await client.post(
+            f"{route.api_base.rstrip('/')}/send_group_msg",
+            headers=headers,
+            json={
+                "group_id": group_id,
+                "message": [{"type": "record", "data": {"file": record_file}}],
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+    if payload.get("status") != "ok":
+        raise RuntimeError(payload.get("wording") or "OneBot record send failed")
+
+
+async def maybe_send_voice_reply(
+    request: Request,
+    group_id: str,
+    user_id: str,
+    text: str,
+) -> bool:
+    """Send TTS only for users who explicitly enabled voice mode."""
+    if not settings.voice_enabled or not await request.app.state.db.voice_mode(group_id, user_id):
+        return False
+    limiter = getattr(request.app.state, "voice_send_limiter", None)
+    if limiter is not None and not await limiter.allow(f"{group_id}:{user_id}"):
+        return False
+    try:
+        profile = await request.app.state.db.voice_profile(
+            group_id, user_id, settings.voice_profile_default
+        )
+        record = await synthesize_voice(text, settings, profile)
+        await send_group_record(group_id, record)
+        return True
+    except (RuntimeError, ValueError, httpx.HTTPError) as exc:
+        logger.warning("voice reply failed: %s", exc)
+        return False
+
+
 CHARACTER_CONFIRMATION_TTL_SECONDS = 90
 _CHARACTER_CONFIRM_YES = frozenset(
     {"是", "是的", "对", "对的", "没错", "确认", "确认查找", "查这个", "就这个", "好", "好的", "可以", "查吧"}
@@ -3297,6 +3380,118 @@ async def onebot_webhook(
             await send_group_message(group_id, "今天还没有候选人：群友当天发言达到 15 条才会加入随机抽取。")
     elif text in {"/help", "/帮助", "help", "帮助"}:
         await send_group_message(group_id, registry.help_text())
+    elif text in VOICE_ON_COMMANDS:
+        if not settings.voice_enabled:
+            await send_group_message(
+                group_id,
+                "语音功能还没在服务端开启；管理员配置 VOICE_ENABLED=true 和 VOICE_API_URL 后再试。",
+            )
+        else:
+            await request.app.state.db.set_voice_mode(group_id, user_id, True)
+            await send_group_message(group_id, "已开启你的语音回复；发送“关闭语音”即可关闭。")
+    elif text in VOICE_OFF_COMMANDS:
+        await request.app.state.db.set_voice_mode(group_id, user_id, False)
+        await send_group_message(group_id, "已关闭你的语音回复，之后只发送文字。")
+    elif text in VOICE_STATUS_COMMANDS:
+        enabled = await request.app.state.db.voice_mode(group_id, user_id)
+        profile_id = await request.app.state.db.voice_profile(
+            group_id, user_id, settings.voice_profile_default
+        )
+        profile = voice_profiles(settings).get(profile_id, {})
+        profile_hint = (
+            f"；音色：{profile.get('label') or profile_id}（{profile.get('language') or '未指定'}）"
+        )
+        if settings.voice_enabled:
+            await send_group_message(
+                group_id,
+                ("你的语音回复：已开启" if enabled else "你的语音回复：未开启") + profile_hint,
+            )
+        else:
+            await send_group_message(group_id, "语音回复：服务端未配置（即使个人开关打开也不会发送）。")
+    elif text in VOICE_PROFILE_LIST_COMMANDS or text.startswith(("切换音色 ", "/切换音色 ")):
+        if text in VOICE_PROFILE_LIST_COMMANDS:
+            await send_group_message(group_id, voice_profile_menu(settings))
+        else:
+            profile_id = text.split(" ", 1)[1].strip()
+            profiles = voice_profiles(settings)
+            if profile_id not in profiles:
+                await send_group_message(
+                    group_id,
+                    f"没有找到音色“{profile_id}”。\n\n{voice_profile_menu(settings)}",
+                )
+            else:
+                await request.app.state.db.set_voice_profile(group_id, user_id, profile_id)
+                label = profiles[profile_id].get("label") or profile_id
+                await send_group_message(group_id, f"已切换到音色：{label}（{profile_id}）。")
+    elif text in VOICE_MURASAME_COMMANDS:
+        try:
+            profile = await request.app.state.db.voice_profile(
+                group_id, user_id, settings.voice_profile_default
+            )
+            await send_group_record(group_id, await random_local_voice(settings, profile))
+        except (FileNotFoundError, RuntimeError, OSError) as exc:
+            await send_group_message(group_id, str(exc) or voice_setup_help(settings))
+    elif text in MURASAME_IMAGE_COMMANDS or mentioned_image_command(
+        event, MURASAME_IMAGE_COMMANDS
+    ):
+        try:
+            await send_group_image(group_id, await random_asset(settings, "image"))
+        except FileNotFoundError:
+            # A local gallery is preferred, but the existing audited character
+            # resolver remains a useful read-only fallback for 丛雨 itself.
+            murasame = ANIME_CHARACTER_BY_NAME.get("丛雨")
+            try:
+                if murasame is None:
+                    raise RuntimeError(asset_help(settings))
+                image = await resolve_anime_character_image(
+                    murasame, settings, request.app.state.llm
+                )
+                caption = "✦ 小丛雨图片 ✦"
+                if image.source_page_url:
+                    caption = append_image_attribution(caption, image)
+                await send_group_image(group_id, image.data, caption)
+            except (RuntimeError, OSError, httpx.HTTPError) as exc:
+                await send_group_message(group_id, str(exc) or asset_help(settings))
+        except (RuntimeError, OSError, httpx.HTTPError) as exc:
+            await send_group_message(group_id, str(exc) or asset_help(settings))
+    elif text in MURASAME_EMOJI_COMMANDS or mentioned_image_command(
+        event, MURASAME_EMOJI_COMMANDS
+    ):
+        try:
+            await send_group_image(group_id, await random_asset(settings, "emoji"))
+        except (FileNotFoundError, RuntimeError, OSError, httpx.HTTPError) as exc:
+            await send_group_message(group_id, str(exc) or asset_help(settings))
+    elif text in IMAGE_GENERATION_COMMANDS or any(
+        text.startswith(f"{command} ") for command in IMAGE_GENERATION_COMMANDS
+    ):
+        prompt = ""
+        for command in sorted(IMAGE_GENERATION_COMMANDS, key=len, reverse=True):
+            if text == command:
+                break
+            if text.startswith(f"{command} "):
+                prompt = text[len(command) :].strip()
+                break
+        if not prompt:
+            await send_group_message(group_id, "用法：@我 生成图片 一只在月光下撑伞的猫娘。")
+        elif not settings.image_generation_enabled:
+            await send_group_message(
+                group_id,
+                "图片生成功能还没开启；管理员配置 IMAGE_GENERATION_ENABLED=true、"
+                "IMAGE_GENERATION_API_URL 和密钥后再试。",
+            )
+        elif not await request.app.state.image_generation_limiter.allow(f"group:{group_id}"):
+            await send_group_message(group_id, "图片生成冷却中，请稍等几十秒再试～")
+        else:
+            try:
+                result = await generate_image(prompt, settings)
+                await send_group_image(
+                    group_id,
+                    result.data,
+                    f"✦ 图片生成完成 ✦\n描述：{prompt[:200]}",
+                )
+            except (RuntimeError, ValueError, httpx.HTTPError) as exc:
+                logger.warning("image generation failed: %s", exc)
+                await send_group_message(group_id, f"这次图片没有生成成功：{exc}")
     elif text in CHARACTER_CATALOG_COMMANDS and (
         text.startswith("/") or bot_mentioned(event)
     ):
@@ -4219,6 +4414,7 @@ async def onebot_webhook(
             if not possession_name:
                 request.app.state.last_murasame_replies[(group_id, user_id)] = answer[-1800:]
             await send_group_long_message(group_id, answer)
+            await maybe_send_voice_reply(request, group_id, user_id, answer)
             if romance_mode and not possession_name:
                 await request.app.state.db.record_romance_turn(group_id, user_id)
             if imitate_current_possession and possession:

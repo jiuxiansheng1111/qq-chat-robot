@@ -43,6 +43,18 @@ async def test_romance_turns_are_scoped_resettable_and_expire(tmp_path):
     assert await db.romance_turn_count("100", "200") == 0
 
 
+async def test_voice_mode_and_profile_are_scoped(tmp_path):
+    db = Database(Settings(_env_file=None, database_path=str(tmp_path / "voice.db")))
+    await db.init()
+    assert not await db.voice_mode("100", "200")
+    assert await db.voice_profile("100", "200") == "default"
+    await db.set_voice_mode("100", "200", True)
+    await db.set_voice_profile("100", "200", "murasame_ja")
+    assert await db.voice_mode("100", "200")
+    assert await db.voice_profile("100", "200") == "murasame_ja"
+    assert not await db.voice_mode("100", "other")
+
+
 async def test_long_term_memory_is_persistent_pruned_and_clearable(tmp_path):
     db = Database(Settings(_env_file=None, database_path=str(tmp_path / "memory.db")))
     await db.init()

@@ -85,6 +85,39 @@ class Settings(BaseSettings):
     # Moegirl restricts automated/off-site image use. Keep disabled until the
     # deployer has obtained the permissions required for their bot/use case.
     moegirl_image_provider_enabled: bool = False
+    # Optional image-generation provider. The endpoint follows the OpenAI
+    # /v1/images/generations response shape (data[].b64_json or data[].url).
+    image_generation_enabled: bool = False
+    image_generation_api_url: str = ""
+    image_generation_api_key: str = Field(default="", repr=False)
+    image_generation_model: str = ""
+    image_generation_size: str = "1024x1024"
+    image_generation_timeout_seconds: float = 90
+    image_generation_max_prompt_chars: int = 500
+    image_generation_cooldown_seconds: int = 20
+    # Local, user-provided Murasame image/emoji assets. No copyrighted assets
+    # are downloaded automatically; drop files into these directories.
+    murasame_asset_dir: str = "./data/murasame_assets"
+    murasame_image_subdir: str = "images"
+    murasame_emoji_subdir: str = "emotes"
+    # Voice is deliberately opt-in. The bot supports local clips and an
+    # OpenAI-compatible /v1/audio/speech endpoint; supplied audio is not used
+    # to train a voice model implicitly.
+    voice_enabled: bool = False
+    voice_provider: str = "openai_compatible"
+    voice_api_url: str = ""
+    voice_api_key: str = Field(default="", repr=False)
+    voice_model: str = ""
+    voice_name: str = "alloy"
+    voice_profile_default: str = "default"
+    voice_supports_language_fields: bool = False
+    # JSON object keyed by a safe profile id. Each value may contain label,
+    # voice, model, language and provider-specific instructions.
+    voice_profiles_json: str = '{"default":{"label":"默认音色","voice":"alloy","language":"zh"}}'
+    voice_timeout_seconds: float = 45
+    voice_max_chars: int = 360
+    voice_local_dir: str = "./data/murasame_assets/voices"
+    voice_send_cooldown_seconds: int = 20
     daily_news_enabled: bool = True
     daily_news_hour: int = 12
     daily_news_minute: int = 0
