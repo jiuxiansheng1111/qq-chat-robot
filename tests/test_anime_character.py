@@ -31,6 +31,23 @@ def test_anya_common_aliases_are_present():
     assert "Anya Forger" in character.aliases
 
 
+def test_short_names_and_near_names_require_safe_resolution():
+    yoshino = anime.resolve_anime_character_matches("芳乃")
+    assert len(yoshino) == 1
+    assert yoshino[0].character.name == "朝武芳乃"
+    assert yoshino[0].exact is True
+
+    kirito = anime.resolve_anime_character_matches("桐谷和人")
+    assert len(kirito) == 1
+    assert kirito[0].character.name == "桐人"
+    assert kirito[0].exact is True
+
+    typo = anime.resolve_anime_character_matches("芳野")
+    assert typo
+    assert typo[0].character.name == "朝武芳乃"
+    assert typo[0].exact is False
+
+
 def test_murasame_has_disambiguated_search_terms():
     character = anime.ANIME_CHARACTER_BY_NAME["丛雨"]
     assert "ムラサメ" in character.aliases

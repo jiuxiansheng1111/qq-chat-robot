@@ -7,6 +7,7 @@ import math
 import re
 import unicodedata
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from html.parser import HTMLParser
 from io import BytesIO
 from pathlib import Path
@@ -29,6 +30,16 @@ class AnimeCharacter:
     aliases: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class AnimeCharacterMatch:
+    """A direct or near match found for a user-entered character name."""
+
+    character: AnimeCharacter
+    matched_alias: str
+    score: float
+    exact: bool = False
+
+
 ANIME_CHARACTER_ROSTER = (
     AnimeCharacter(
         "丛雨",
@@ -41,7 +52,12 @@ ANIME_CHARACTER_ROSTER = (
             "千恋万花 丛雨",
         ),
     ),
-    AnimeCharacter("朝武芳乃", "《千恋＊万花》", "建实神社的巫女姬，性格认真而有责任感。", ("Tomotake Yoshino",)),
+    AnimeCharacter(
+        "朝武芳乃",
+        "《千恋＊万花》",
+        "建实神社的巫女姬，性格认真而有责任感。",
+        ("芳乃", "Yoshino", "Tomotake Yoshino"),
+    ),
     AnimeCharacter("常陆茉子", "《千恋＊万花》", "芳乃的青梅竹马兼护卫，身手敏捷。", ("Hitachi Mako",)),
     AnimeCharacter("蕾娜·列支敦瑙尔", "《千恋＊万花》", "来自海外的少女，活泼直率。", ("レナ・リヒテナウアー", "Lena Liechtenauer")),
     AnimeCharacter("绫地宁宁", "《魔女的夜宴》", "拥有特殊能力的少女，外表沉稳，内心细腻。", ("綾地寧々", "Ayachi Nene")),
@@ -486,20 +502,107 @@ def _normalize(value: str) -> str:
     return re.sub(r"[^0-9a-z\u3040-\u30ff\u3400-\u9fff]+", "", value)
 
 
-def resolve_anime_character_query(text: str) -> AnimeCharacter | None:
-    key = _normalize(text)
-    if not key:
-        return None
+def _build_anime_alias_index() -> dict[str, tuple[tuple[AnimeCharacter, str], ...]]:
+    index: dict[str, list[tuple[AnimeCharacter, str]]] = {}
     for character in ANIME_CHARACTER_ROSTER:
         for alias in (character.name, *character.aliases):
             alias_key = _normalize(alias)
-            if key == alias_key or key in {
-                _normalize(f"介绍{alias}"),
-                _normalize(f"看看{alias}"),
-                _normalize(f"{alias}图片"),
-                _normalize(f"{alias}资料"),
-            }:
-                return character
+            if not alias_key:
+                continue
+            entries = index.setdefault(alias_key, [])
+            if all(item[0].name != character.name for item in entries):
+                entries.append((character, alias))
+    return {key: tuple(value) for key, value in index.items()}
+
+
+ANIME_CHARACTER_ALIAS_INDEX = _build_anime_alias_index()
+
+
+def _anime_character_query_key(text: str) -> str:
+    key = _normalize(text)
+    if not key:
+        return ""
+    key = re.sub(
+        r"^(?:请|麻烦)?(?:介绍一下|介绍|查看|看看|查询|查找|给我看看|我想看)",
+        "",
+        key,
+    )
+    return re.sub(r"(?:的)?(?:图片|照片|资料|简介|介绍)$", "", key)
+
+
+def _edit_distance(left: str, right: str) -> int:
+    if len(left) < len(right):
+        left, right = right, left
+    previous = list(range(len(right) + 1))
+    for left_index, left_char in enumerate(left, start=1):
+        current = [left_index]
+        for right_index, right_char in enumerate(right, start=1):
+            current.append(
+                min(
+                    current[-1] + 1,
+                    previous[right_index] + 1,
+                    previous[right_index - 1] + (left_char != right_char),
+                )
+            )
+        previous = current
+    return previous[-1]
+
+
+def resolve_anime_character_matches(
+    text: str,
+    *,
+    limit: int = 4,
+) -> tuple[AnimeCharacterMatch, ...]:
+    """Return exact, ambiguous, or conservative near-name matches.
+
+    Exact aliases are returned immediately, including all characters sharing an
+    alias (for example ``结衣``). Near matches are deliberately only offered for
+    an addressed query; the caller asks for confirmation before fetching an
+    image, so a typo can never silently select the wrong character.
+    """
+    key = _anime_character_query_key(text)
+    if not key:
+        return ()
+    exact_entries = ANIME_CHARACTER_ALIAS_INDEX.get(key)
+    if exact_entries:
+        return tuple(
+            AnimeCharacterMatch(character, alias, 1.0, exact=True)
+            for character, alias in exact_entries[:limit]
+        )
+
+    if len(key) < 2:
+        return ()
+    best_by_character: dict[str, AnimeCharacterMatch] = {}
+    for alias_key, entries in ANIME_CHARACTER_ALIAS_INDEX.items():
+        if len(alias_key) < 2:
+            continue
+        ratio = SequenceMatcher(None, key, alias_key).ratio()
+        distance = _edit_distance(key, alias_key)
+        near_score = ratio
+        if key in alias_key or alias_key in key:
+            near_score = max(near_score, 0.82)
+        if distance <= 1 and max(len(key), len(alias_key)) <= 8:
+            near_score = max(near_score, 0.90)
+        threshold = 0.82 if min(len(key), len(alias_key)) <= 3 else 0.70
+        if near_score < threshold:
+            continue
+        for character, alias in entries:
+            candidate = AnimeCharacterMatch(character, alias, near_score, exact=False)
+            current = best_by_character.get(character.name)
+            if current is None or candidate.score > current.score:
+                best_by_character[character.name] = candidate
+    return tuple(
+        sorted(
+            best_by_character.values(),
+            key=lambda item: (-item.score, len(item.character.name), item.character.name),
+        )[:limit]
+    )
+
+
+def resolve_anime_character_query(text: str) -> AnimeCharacter | None:
+    matches = resolve_anime_character_matches(text)
+    if len(matches) == 1 and matches[0].exact:
+        return matches[0].character
     return None
 
 

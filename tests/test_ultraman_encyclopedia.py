@@ -24,6 +24,13 @@ def png_bytes(width: int = 480, height: int = 720) -> bytes:
     return buffer.getvalue()
 
 
+def test_geed_royal_megamaster_has_a_specific_verified_fallback():
+    candidates = encyclopedia_module.DIRECT_FORM_IMAGE_URLS["捷德奥特曼·尊皇形态"]
+    assert candidates
+    assert "Geed_Profile_2.jpg" in candidates[0][0]
+    assert "捷德奥特曼" in candidates[0][1] or "moegirl" in candidates[0][1]
+
+
 @pytest.mark.asyncio
 async def test_verified_download_normalizes_supported_images_to_jpeg():
     source = png_bytes(480, 720)

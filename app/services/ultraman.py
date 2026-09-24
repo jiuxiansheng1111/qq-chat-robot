@@ -3,6 +3,7 @@ import math
 import re
 import unicodedata
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from html.parser import HTMLParser
 from io import BytesIO
 from urllib.parse import urljoin, urlsplit, urlunsplit
@@ -32,6 +33,14 @@ class Ultraman:
     slug: str
     page_path: str = ""
     image_hint: str = ""
+
+
+@dataclass(frozen=True)
+class UltramanQueryMatch:
+    hero: Ultraman
+    matched_alias: str
+    score: float
+    exact: bool = False
 
 
 @dataclass(frozen=True)
@@ -190,6 +199,24 @@ def _normalize_ultraman_name(value: str) -> str:
     return re.sub(r"[\s·・•._—–\-:：/]+", "", normalized)
 
 
+def _ultraman_edit_distance(left: str, right: str) -> int:
+    if len(left) < len(right):
+        left, right = right, left
+    previous = list(range(len(right) + 1))
+    for left_index, left_char in enumerate(left, start=1):
+        current = [left_index]
+        for right_index, right_char in enumerate(right, start=1):
+            current.append(
+                min(
+                    current[-1] + 1,
+                    previous[right_index] + 1,
+                    previous[right_index - 1] + (left_char != right_char),
+                )
+            )
+        previous = current
+    return previous[-1]
+
+
 def _build_ultraman_alias_index() -> dict[str, Ultraman]:
     index: dict[str, Ultraman] = {}
     for hero in ULTRAMAN_ROSTER:
@@ -213,22 +240,55 @@ def _build_ultraman_alias_index() -> dict[str, Ultraman]:
 ULTRAMAN_ALIAS_INDEX: dict[str, Ultraman] = {}
 
 
-def resolve_ultraman_query(query: str) -> Ultraman | None:
-    """Resolve an exact official name or common nickname without fuzzy chat matches."""
+def resolve_ultraman_matches(
+    query: str,
+    *,
+    limit: int = 4,
+) -> tuple[UltramanQueryMatch, ...]:
     key = _normalize_ultraman_name(query)
     if not key:
-        return None
-    direct = ULTRAMAN_ALIAS_INDEX.get(key)
-    if direct:
-        return direct
-
+        return ()
     conversational = re.sub(
         r"^(?:请|麻烦)?(?:介绍一下|介绍|查看|看看|查询|给我看看|我想看|来一个|来个)",
         "",
         key,
     )
     conversational = re.sub(r"(?:是谁|是什么|怎么样|厉害吗)$", "", conversational)
-    return ULTRAMAN_ALIAS_INDEX.get(conversational)
+    if not conversational:
+        return ()
+    direct = ULTRAMAN_ALIAS_INDEX.get(conversational)
+    if direct is not None:
+        return (UltramanQueryMatch(direct, direct.name, 1.0, exact=True),)
+
+    if len(conversational) < 2:
+        return ()
+    candidates: dict[str, UltramanQueryMatch] = {}
+    for alias_key, hero in ULTRAMAN_ALIAS_INDEX.items():
+        ratio = SequenceMatcher(None, conversational, alias_key).ratio()
+        distance = _ultraman_edit_distance(conversational, alias_key)
+        score = ratio
+        if conversational in alias_key or alias_key in conversational:
+            score = max(score, 0.82)
+        if distance <= 1 and max(len(conversational), len(alias_key)) <= 12:
+            score = max(score, 0.90)
+        threshold = 0.80 if min(len(conversational), len(alias_key)) <= 4 else 0.68
+        if score < threshold:
+            continue
+        item = UltramanQueryMatch(hero, hero.name, score, exact=False)
+        current = candidates.get(hero.name)
+        if current is None or item.score > current.score:
+            candidates[hero.name] = item
+    return tuple(
+        sorted(candidates.values(), key=lambda item: (-item.score, len(item.hero.name), item.hero.name))[:limit]
+    )
+
+
+def resolve_ultraman_query(query: str) -> Ultraman | None:
+    """Resolve an exact official name or common nickname without fuzzy chat matches."""
+    matches = resolve_ultraman_matches(query)
+    if len(matches) == 1 and matches[0].exact:
+        return matches[0].hero
+    return None
 
 
 def ultraman_catalog_text_pages(max_chars: int = 1700) -> list[str]:

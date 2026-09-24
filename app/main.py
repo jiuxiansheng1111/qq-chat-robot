@@ -9,7 +9,7 @@ import secrets
 from collections import deque
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone, tzinfo
+from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -55,8 +55,8 @@ from app.services.anime_character import (
     anime_character_catalog_text_pages,
     render_anime_character_catalog,
     resolve_anime_character_image,
+    resolve_anime_character_matches,
     resolve_anime_character_profile,
-    resolve_anime_character_query,
 )
 from app.services.bilibili import (
     bilibili_card_content,
@@ -126,7 +126,7 @@ from app.services.ultraman import (
     official_ultraman_search_image,
     render_ultraman_card,
     render_ultraman_catalog,
-    resolve_ultraman_query,
+    resolve_ultraman_matches,
     ultraman_catalog_text_pages,
     ultraman_image_aliases,
     ultraman_profile_text,
@@ -136,6 +136,7 @@ from app.services.ultraman_encyclopedia import (
     baidu_image_search_ultraman_image,
     bing_image_relaxed_ultraman_image,
     bing_image_search_ultraman_image,
+    direct_ultraman_form_image,
     moegirl_ultraman_image,
     official_merch_ultraman_image,
     search_engine_first_ultraman_image,
@@ -444,6 +445,7 @@ async def lifespan(app: FastAPI):
     app.state.group_history_bootstrapped = set()
     app.state.recent_ultraman_queries = {}
     app.state.recent_anime_character_queries = {}
+    app.state.pending_character_confirmations = {}
     app.state.last_murasame_replies = {}
     app.state.translation_cache = {}
     app.state.deduplicator = EventDeduplicator(settings.event_dedupe_ttl_seconds)
@@ -1697,7 +1699,7 @@ async def llm_confirm_ultraman_image_candidate(
     return result
 
 
-ULTRAMAN_IMAGE_CACHE_VERSION = "v3-attribution-20260924"
+ULTRAMAN_IMAGE_CACHE_VERSION = "v4-form-direct-source-20260924"
 
 
 def _ultraman_image_cache_path(hero) -> Path:
@@ -1862,6 +1864,21 @@ async def resolve_ultraman_card_image(hero, llm=None) -> ImageResolution:
         return cached
 
     aliases = ultraman_image_aliases(hero)
+    # A few form images live in tabs on a general encyclopedia page. Resolve
+    # those verified URLs first so a fast but generic Geed/hero banner can never
+    # win the race and be shown as the requested independent form.
+    try:
+        direct_form = await _resolve_ultraman_source(
+            hero,
+            "形态专用核验来源",
+            lambda: direct_ultraman_form_image(hero.name, settings),
+        )
+    except (RuntimeError, ValueError, OSError, httpx.HTTPError) as exc:
+        logger.debug("No direct verified form image for %s: %s", hero.name, exc)
+    else:
+        _save_ultraman_image_cache(hero, direct_form)
+        return direct_form
+
     source_factories = (
         (
             "圆谷官方直连",
@@ -2194,6 +2211,169 @@ async def send_group_image(group_id: str, image_file: str, caption: str = "") ->
     raise RuntimeError(str(last_error or "OneBot image send failed after all fallbacks"))
 
 
+CHARACTER_CONFIRMATION_TTL_SECONDS = 90
+_CHARACTER_CONFIRM_YES = frozenset(
+    {"是", "是的", "对", "对的", "没错", "确认", "确认查找", "查这个", "就这个", "好", "好的", "可以", "查吧"}
+)
+_CHARACTER_CONFIRM_NO = frozenset({"否", "不是", "不对", "取消", "不用", "算了", "不要"})
+
+
+def _character_confirmation_token(text: str) -> str:
+    return re.sub(r"[\s\u3000!?！？。，,.、；;：:~～]+", "", str(text or "")).casefold()
+
+
+def _character_match_identity(match) -> tuple[str, str, str]:
+    character = getattr(match, "character", None)
+    if character is not None:
+        return character.name, character.series, getattr(match, "matched_alias", "")
+    hero = getattr(match, "hero", None)
+    if hero is not None:
+        return hero.name, "特摄角色图鉴", getattr(match, "matched_alias", "")
+    return "", "", ""
+
+
+async def _ask_character_lookup_confirmation(
+    request: Request,
+    group_id: str,
+    user_id: str,
+    query: str,
+    kind: str,
+    matches,
+) -> None:
+    candidates = []
+    for match in matches[:4]:
+        name, series, alias = _character_match_identity(match)
+        if name and name not in {item[0] for item in candidates}:
+            candidates.append((name, series, alias))
+    if not candidates:
+        return
+    request.app.state.pending_character_confirmations[(group_id, user_id)] = {
+        "kind": kind,
+        "query": query[:100],
+        "candidates": tuple(item[0] for item in candidates),
+        "expires_at": datetime.now(UTC).timestamp() + CHARACTER_CONFIRMATION_TTL_SECONDS,
+    }
+    if len(candidates) == 1:
+        name, series, alias = candidates[0]
+        matched_hint = f"（匹配到简称“{alias}”）" if alias and alias != name else ""
+        await send_group_message(
+            group_id,
+            f"你输入的“{query}”{matched_hint}可能是【{name}】（{series}）。要查这个角色吗？"
+            "回复“是/确认”继续，回复“否/取消”放弃。",
+        )
+        return
+    lines = [f"“{query}”可能对应多个角色，请确认要查哪一个："]
+    for index, (name, series, alias) in enumerate(candidates, start=1):
+        alias_hint = f"，匹配名：{alias}" if alias and alias != name else ""
+        lines.append(f"{index}. 【{name}】（{series}{alias_hint}）")
+    lines.append("回复序号或完整角色名；回复“取消”放弃。")
+    await send_group_message(group_id, "\n".join(lines))
+
+
+def _pending_character_choice(text: str, candidates: tuple[str, ...]) -> tuple[str, str | None]:
+    token = _character_confirmation_token(text)
+    if token in _CHARACTER_CONFIRM_NO:
+        return "cancel", None
+    if token in _CHARACTER_CONFIRM_YES:
+        return "confirm", candidates[0] if len(candidates) == 1 else None
+    number = re.fullmatch(r"(?:第)?([1-9])(?:个|号)?", token)
+    if number:
+        index = int(number.group(1)) - 1
+        if 0 <= index < len(candidates):
+            return "confirm", candidates[index]
+    for candidate in candidates:
+        if _character_confirmation_token(candidate) == token:
+            return "confirm", candidate
+    return "", None
+
+
+async def _send_anime_character_lookup(
+    request: Request,
+    group_id: str,
+    character,
+    *,
+    heading: str = "二次元角色图鉴 · 角色资料",
+    note: str = "本次仅查看资料，不会增加收藏次数。",
+) -> None:
+    profile_text = await resolve_anime_character_profile(
+        character,
+        settings,
+        request.app.state.llm,
+    )
+    caption = f"✦ {heading} ✦\n【{character.name}】\n{profile_text}\n\n{note}"
+    try:
+        image = await resolve_anime_character_image(character, settings, request.app.state.llm)
+        if image.source_page_url:
+            caption = append_image_attribution(caption, image)
+        await send_group_image(group_id, image.data, caption)
+    except (RuntimeError, httpx.HTTPError) as exc:
+        logger.warning("anime character lookup image failed for %s: %s", character.name, exc)
+        await send_group_message(group_id, caption + "\n图片暂时没有找到可靠来源。")
+
+
+async def _send_ultraman_character_lookup(
+    request: Request,
+    group_id: str,
+    hero,
+    *,
+    heading: str = "奥特曼图鉴 · 角色资料",
+    note: str = "本次仅查看图鉴，不会加入“我的奥特曼”。",
+) -> None:
+    caption = f"✦ {heading} ✦\n【{hero.name}】\n{ultraman_profile_text(hero)}\n\n{note}"
+    try:
+        image = await resolve_ultraman_card_image(hero, request.app.state.llm)
+        card = render_ultraman_card(hero, image.data, heading=heading)
+        if image.source_page_url:
+            caption = append_image_attribution(caption, image)
+        await send_group_image(group_id, card, caption)
+    except (RuntimeError, httpx.HTTPError) as exc:
+        logger.warning("Ultraman lookup image failed for %s: %s", hero.name, exc)
+        await send_group_message(group_id, caption + "\n暂无可靠的对应图片，吾辈不会拿其他形态冒充。")
+
+
+async def _handle_pending_character_confirmation(
+    request: Request,
+    group_id: str,
+    user_id: str,
+    text: str,
+) -> bool:
+    pending_map = getattr(request.app.state, "pending_character_confirmations", {})
+    key = (group_id, user_id)
+    pending = pending_map.get(key)
+    if not isinstance(pending, dict):
+        return False
+    expires_at = float(pending.get("expires_at") or 0)
+    if expires_at <= datetime.now(UTC).timestamp():
+        pending_map.pop(key, None)
+        return False
+    candidates = tuple(str(item) for item in pending.get("candidates") or () if str(item))
+    decision, selected_name = _pending_character_choice(text, candidates)
+    if decision == "":
+        return False
+    if decision == "cancel":
+        pending_map.pop(key, None)
+        await send_group_message(group_id, "已取消这次角色查询。")
+        return True
+    if not selected_name:
+        await send_group_message(group_id, "候选不止一个，请回复上面列表的序号或完整角色名。")
+        return True
+    pending_map.pop(key, None)
+    if pending.get("kind") == "ultraman":
+        hero = ULTRAMAN_BY_NAME.get(selected_name)
+        if hero is not None:
+            request.app.state.recent_ultraman_queries[(group_id, user_id)] = hero.name
+            await _send_ultraman_character_lookup(request, group_id, hero)
+            return True
+    else:
+        character = ANIME_CHARACTER_BY_NAME.get(selected_name)
+        if character is not None:
+            request.app.state.recent_anime_character_queries[(group_id, user_id)] = character.name
+            await _send_anime_character_lookup(request, group_id, character)
+            return True
+    await send_group_message(group_id, "这个候选已经不在当前角色图鉴里了，请重新输入角色名。")
+    return True
+
+
 async def send_group_music_card(group_id: str, track: MusicTrack) -> None:
     route = onebot_route(settings)
     if not route.api_base:
@@ -2326,6 +2506,13 @@ async def onebot_webhook(
         return {"ok": True, "ignored": True, "reason": "group_disabled"}
     if await request.app.state.db.is_blocked(group_id, user_id):
         return {"ok": True, "ignored": True, "reason": "user_blocked"}
+    if await _handle_pending_character_confirmation(
+        request,
+        group_id,
+        user_id,
+        text,
+    ):
+        return {"ok": True, "source": "character_confirmation"}
     today = datetime.now().astimezone().date().isoformat()
     await request.app.state.db.record_group_activity(
         group_id, user_id, display_name, text, today
@@ -3048,24 +3235,47 @@ async def onebot_webhook(
         elif catalog_kind == "all":
             # The unified catalog searches both namespaces while keeping the
             # two collection/favorite systems separate.
-            hero = resolve_ultraman_query(catalog_query)
-            if hero is not None:
+            ultraman_matches = resolve_ultraman_matches(catalog_query)
+            anime_matches = resolve_anime_character_matches(catalog_query)
+            if len(ultraman_matches) == 1 and ultraman_matches[0].exact:
+                hero = ultraman_matches[0].hero
                 catalog_kind = "ultraman"
+            elif len(anime_matches) == 1 and anime_matches[0].exact:
+                character = anime_matches[0].character
+                catalog_kind = "anime"
+            elif anime_matches:
+                await _ask_character_lookup_confirmation(
+                    request, group_id, user_id, catalog_query, "anime", anime_matches
+                )
+                return {"ok": True, "source": "character_confirmation_request"}
+            elif ultraman_matches:
+                await _ask_character_lookup_confirmation(
+                    request, group_id, user_id, catalog_query, "ultraman", ultraman_matches
+                )
+                return {"ok": True, "source": "character_confirmation_request"}
             else:
-                character = resolve_anime_character_query(catalog_query)
-                if character is not None:
-                    catalog_kind = "anime"
-                else:
-                    await send_group_message(
-                        group_id,
-                        f"角色图鉴里暂时没找到“{catalog_query}”，可直接输入正式名或常用简称搜索。",
-                    )
-                    return {"ok": True, "source": "catalog_not_found"}
+                await send_group_message(
+                    group_id,
+                    f"角色图鉴里暂时没找到“{catalog_query}”，可直接输入正式名或常用简称搜索。",
+                )
+                return {"ok": True, "source": "catalog_not_found"}
         if catalog_kind == "ultraman":
-            hero = resolve_ultraman_query(catalog_query)
-            if hero is None:
-                await send_group_message(group_id, f"奥特曼图鉴里暂时没找到“{catalog_query}”。")
+            ultraman_matches = resolve_ultraman_matches(catalog_query)
+            if len(ultraman_matches) != 1 or not ultraman_matches[0].exact:
+                if ultraman_matches:
+                    await _ask_character_lookup_confirmation(
+                        request, group_id, user_id, catalog_query, "ultraman", ultraman_matches
+                    )
+                else:
+                    await send_group_message(group_id, f"奥特曼图鉴里暂时没找到“{catalog_query}”。")
+                return {
+                    "ok": True,
+                    "source": "character_confirmation_request"
+                    if ultraman_matches
+                    else "catalog_not_found",
+                }
             else:
+                hero = ultraman_matches[0].hero
                 request.app.state.recent_ultraman_queries[(group_id, user_id)] = hero.name
                 caption = (
                     "✦ 日漫与特摄角色图鉴 · 特摄资料 ✦\n"
@@ -3083,10 +3293,22 @@ async def onebot_webhook(
                     logger.warning("catalog hub Ultraman image failed: %s", exc)
                     await send_group_message(group_id, caption + "\n暂无可靠的对应图片。")
         else:
-            character = resolve_anime_character_query(catalog_query)
-            if character is None:
-                await send_group_message(group_id, f"日漫角色图鉴里暂时没找到“{catalog_query}”。")
+            anime_matches = resolve_anime_character_matches(catalog_query)
+            if len(anime_matches) != 1 or not anime_matches[0].exact:
+                if anime_matches:
+                    await _ask_character_lookup_confirmation(
+                        request, group_id, user_id, catalog_query, "anime", anime_matches
+                    )
+                else:
+                    await send_group_message(group_id, f"日漫角色图鉴里暂时没找到“{catalog_query}”。")
+                return {
+                    "ok": True,
+                    "source": "character_confirmation_request"
+                    if anime_matches
+                    else "catalog_not_found",
+                }
             else:
+                character = anime_matches[0].character
                 request.app.state.recent_anime_character_queries[(group_id, user_id)] = character.name
                 profile_text = await resolve_anime_character_profile(
                     character,
@@ -3173,29 +3395,16 @@ async def onebot_webhook(
             # the old text pages so the command still works.
             for page in anime_character_catalog_text_pages():
                 await send_group_message(group_id, page)
-    elif bot_mentioned(event) and (anime_character := resolve_anime_character_query(text)):
-        request.app.state.recent_anime_character_queries[(group_id, user_id)] = anime_character.name
-        profile_text = await resolve_anime_character_profile(
-            anime_character,
-            settings,
-            request.app.state.llm,
-        )
-        caption = (
-            "✦ 二次元角色图鉴 · 角色资料 ✦\n"
-            f"【{anime_character.name}】\n"
-            f"{profile_text}\n\n"
-            "本次仅查看资料，不会增加收藏次数。"
-        )
-        try:
-            image = await resolve_anime_character_image(
-                anime_character, settings, request.app.state.llm
+    elif bot_mentioned(event) and (anime_matches := resolve_anime_character_matches(text)):
+        if len(anime_matches) == 1 and anime_matches[0].exact:
+            anime_character = anime_matches[0].character
+            request.app.state.recent_anime_character_queries[(group_id, user_id)] = anime_character.name
+            await _send_anime_character_lookup(request, group_id, anime_character)
+        else:
+            await _ask_character_lookup_confirmation(
+                request, group_id, user_id, text, "anime", anime_matches
             )
-            if image.source_page_url:
-                caption = append_image_attribution(caption, image)
-            await send_group_image(group_id, image.data, caption)
-        except (RuntimeError, httpx.HTTPError) as exc:
-            logger.warning("anime character encyclopedia image failed: %s", exc)
-            await send_group_message(group_id, caption + "\n图片暂时没有找到可靠来源。")
+            return {"ok": True, "source": "character_confirmation_request"}
     elif text in DAILY_NEWS_COMMANDS or (
         bot_mentioned(event) and text in DAILY_NEWS_COMMANDS
     ):
@@ -3272,23 +3481,16 @@ async def onebot_webhook(
             logger.warning("Ultraman catalog image failed: %s", exc)
             for page in ultraman_catalog_text_pages():
                 await send_group_message(group_id, page)
-    elif bot_mentioned(event) and (catalog_hero := resolve_ultraman_query(text)):
-        request.app.state.recent_ultraman_queries[(group_id, user_id)] = catalog_hero.name
-        caption = (
-            "✦ 奥特曼图鉴 · 角色资料 ✦\n"
-            f"【{catalog_hero.name}】\n"
-            f"{ultraman_profile_text(catalog_hero)}\n\n"
-            "本次仅查看图鉴，不会加入“我的奥特曼”。"
-        )
-        try:
-            image = await resolve_ultraman_card_image(catalog_hero, request.app.state.llm)
-            card = render_ultraman_card(catalog_hero, image.data, heading="奥特曼图鉴")
-            if image.source_page_url:
-                caption = append_image_attribution(caption, image)
-            await send_group_image(group_id, card, caption)
-        except (RuntimeError, httpx.HTTPError) as exc:
-            logger.warning("Ultraman encyclopedia image failed: %s", exc)
-            await send_group_message(group_id, caption + "\n暂无可靠的对应图片，吾辈不会拿视频封面或其他形态图片冒充。")
+    elif bot_mentioned(event) and (ultraman_matches := resolve_ultraman_matches(text)):
+        if len(ultraman_matches) == 1 and ultraman_matches[0].exact:
+            catalog_hero = ultraman_matches[0].hero
+            request.app.state.recent_ultraman_queries[(group_id, user_id)] = catalog_hero.name
+            await _send_ultraman_character_lookup(request, group_id, catalog_hero)
+        else:
+            await _ask_character_lookup_confirmation(
+                request, group_id, user_id, text, "ultraman", ultraman_matches
+            )
+            return {"ok": True, "source": "character_confirmation_request"}
     elif (
         bot_mentioned(event)
         and asks_for_ultraman_image_followup(text)

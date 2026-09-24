@@ -64,6 +64,26 @@ BAIDU_DIRECT_PAGES = {
     "令迦奥特曼": "https://bkso.baidu.com/item/令迦奥特曼/24350007",
 }
 
+# Some form pages are represented as tabs inside a general Moegirl character
+# page, so a normal pageimage lookup only returns Geed's base artwork. Keep the
+# tab's original file URL and the page that labels it as the form. The second
+# entry is an official Ultraman Card Game image, used only if the Moegirl CDN
+# is temporarily unavailable.
+DIRECT_FORM_IMAGE_URLS = {
+    "捷德奥特曼·尊皇形态": (
+        (
+            "https://storage.moegirl.org.cn/moegirl/commons/8/82/Geed_Profile_2.jpg",
+            "https://zh.moegirl.org.cn/%E6%8D%B7%E5%BE%B7%E5%A5%A5%E7%89%B9%E6%9B%BC%28%E8%A7%92%E8%89%B2%29",
+            "萌娘百科形态专图",
+        ),
+        (
+            "https://img.ultraman-cardgame.com/images/news_t/133c582aa4fd53040e86ce1314a7dac6bb9633ab.png",
+            "https://ultraman-cardgame.com/page/jp/news/news-detail/205",
+            "ULTRAMAN CARD GAME 官方图",
+        ),
+    ),
+}
+
 BAIDU_PARENT_PAGES = {
     "迪迦奥特曼·强力型": (
         "https://bkso.baidu.com/item/艾克斯奥特曼剧场版来了！我们的奥特曼/59156783",
@@ -576,6 +596,43 @@ async def _download_verified_image(
     if len(payload) > settings.media_max_bytes:
         raise RuntimeError("转换后的百科图片超过大小限制")
     return "base64://" + base64.b64encode(payload).decode()
+
+
+async def direct_ultraman_form_image(
+    name: str,
+    settings: Settings,
+) -> EncyclopediaImage | None:
+    """Fetch a manually verified form image before broad search fallbacks."""
+    candidates = DIRECT_FORM_IMAGE_URLS.get(name, ())
+    if not candidates:
+        return None
+    timeout = max(6.0, min(float(settings.media_timeout_seconds), 20.0))
+    headers = {
+        "User-Agent": ENCYCLOPEDIA_USER_AGENT,
+        "Accept-Language": "zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7",
+    }
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        headers=headers,
+    ) as client:
+        for image_url, page_url, source in candidates:
+            try:
+                data = await _download_verified_image(
+                    client,
+                    image_url,
+                    page_url,
+                    settings,
+                )
+            except (RuntimeError, httpx.HTTPError, OSError, ValueError):
+                continue
+            return EncyclopediaImage(
+                data=data,
+                source=source,
+                page_url=page_url,
+                label=name,
+            )
+    return None
 
 
 async def moegirl_ultraman_image(
