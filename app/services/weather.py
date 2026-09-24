@@ -139,8 +139,16 @@ async def fetch_weather(location: str, settings: Settings) -> WeatherReport:
 
     dates = daily.get("time") if isinstance(daily.get("time"), list) else []
     codes = daily.get("weather_code") if isinstance(daily.get("weather_code"), list) else []
-    highs = daily.get("temperature_2m_max") if isinstance(daily.get("temperature_2m_max"), list) else []
-    lows = daily.get("temperature_2m_min") if isinstance(daily.get("temperature_2m_min"), list) else []
+    highs = (
+        daily.get("temperature_2m_max")
+        if isinstance(daily.get("temperature_2m_max"), list)
+        else []
+    )
+    lows = (
+        daily.get("temperature_2m_min")
+        if isinstance(daily.get("temperature_2m_min"), list)
+        else []
+    )
     pops = (
         daily.get("precipitation_probability_max")
         if isinstance(daily.get("precipitation_probability_max"), list)
