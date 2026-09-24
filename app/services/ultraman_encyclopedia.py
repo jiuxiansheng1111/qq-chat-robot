@@ -568,22 +568,17 @@ async def moegirl_ultraman_image(
     aliases: tuple[str, ...],
     settings: Settings,
 ) -> EncyclopediaImage | None:
-    """Resolve an exact Ultraman/Ultra-form page from Moegirlpedia.
-
-    Moegirlpedia is treated as a trusted encyclopedia source, but it is never
-    allowed to weaken identity checks: the resolved page title itself must
-    contain a strong character/form term before its lead image is accepted.
-    """
+    """Resolve Ultraman/form art from Moegirlpedia with page-search fallback."""
     terms = _specific_terms(name, aliases)
     if not terms:
         return None
-    queries = _encyclopedia_search_terms(name, aliases)
+    queries = tuple(dict.fromkeys((name, *aliases, *_encyclopedia_search_terms(name, aliases))))[:12]
     domains = (
         "https://zh.moegirl.org.cn",
         "https://moegirl.icu",
         "https://moegirl.uk",
     )
-    timeout = max(4.0, min(float(settings.media_timeout_seconds), 9.0))
+    timeout = max(4.0, min(float(settings.media_timeout_seconds), 12.0))
     headers = {
         "User-Agent": ENCYCLOPEDIA_USER_AGENT,
         "Accept-Language": "zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7",
@@ -595,6 +590,9 @@ async def moegirl_ultraman_image(
         headers=headers,
     ) as client:
         for domain in domains:
+            page_titles: list[str] = []
+
+            # Exact title/redirect lookup.
             for query in queries[:8]:
                 try:
                     response = await client.get(
@@ -614,33 +612,25 @@ async def moegirl_ultraman_image(
                 except (httpx.HTTPError, ValueError):
                     continue
 
-                pages = (
-                    payload.get("query", {}).get("pages", {})
-                    if isinstance(payload, dict)
-                    else {}
-                )
+                pages = payload.get("query", {}).get("pages", {})
                 if not isinstance(pages, dict):
                     continue
                 for page in pages.values():
                     if not isinstance(page, dict) or page.get("missing") is not None:
                         continue
-                    page_title = str(page.get("title") or "")
-                    if not _matches_specific(page_title, terms):
+                    page_title = str(page.get("title") or query).strip()
+                    if not _matches_specific(f"{page_title} {query}", terms):
                         continue
+                    page_titles.append(page_title)
 
-                    image_urls: list[str] = []
-                    original = page.get("original") or {}
-                    thumbnail = page.get("thumbnail") or {}
-                    if isinstance(original, dict):
-                        image_urls.append(str(original.get("source") or ""))
-                    if isinstance(thumbnail, dict):
-                        image_urls.append(str(thumbnail.get("source") or ""))
-
-                    page_url = f"{domain}/{quote(page_title or query)}"
+                    image_urls = []
+                    for key in ("original", "thumbnail"):
+                        image = page.get(key) or {}
+                        if isinstance(image, dict):
+                            image_urls.append(str(image.get("source") or ""))
+                    page_url = f"{domain}/{quote(page_title)}"
                     for image_url in dict.fromkeys(
-                        value.strip()
-                        for value in image_urls
-                        if value and value.strip()
+                        value.strip() for value in image_urls if value.strip()
                     ):
                         if not image_url.startswith(("https://", "http://")):
                             continue
@@ -660,10 +650,130 @@ async def moegirl_ultraman_image(
                             continue
                         return EncyclopediaImage(
                             data=data_b64,
-                            source="萌娘百科",
+                            source="萌娘百科角色页",
                             page_url=page_url,
                             label=page_title or query,
                         )
+
+            # Moegirl internal search catches disambiguated titles and aliases.
+            search_values = list(queries[:8])
+            search_values.extend(f"{query} 奥特曼" for query in queries[:6])
+            for query in tuple(dict.fromkeys(search_values))[:14]:
+                try:
+                    response = await client.get(
+                        f"{domain}/api.php",
+                        params={
+                            "action": "query",
+                            "format": "json",
+                            "generator": "search",
+                            "gsrsearch": query,
+                            "gsrlimit": "8",
+                            "prop": "pageimages",
+                            "piprop": "original|thumbnail|name",
+                            "pithumbsize": "1400",
+                        },
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                except (httpx.HTTPError, ValueError):
+                    continue
+
+                pages = payload.get("query", {}).get("pages", {})
+                if not isinstance(pages, dict):
+                    continue
+                for page in pages.values():
+                    if not isinstance(page, dict):
+                        continue
+                    page_title = str(page.get("title") or "").strip()
+                    if not page_title:
+                        continue
+                    page_titles.append(page_title)
+
+                    # Prefer a direct search-result lead image when the result
+                    # itself clearly names the requested hero/form.
+                    if _matches_specific(f"{page_title} {query}", terms):
+                        image_urls = []
+                        for key in ("original", "thumbnail"):
+                            image = page.get(key) or {}
+                            if isinstance(image, dict):
+                                image_urls.append(str(image.get("source") or ""))
+                        page_url = f"{domain}/{quote(page_title)}"
+                        for image_url in dict.fromkeys(
+                            value.strip() for value in image_urls if value.strip()
+                        ):
+                            if not image_url.startswith(("https://", "http://")):
+                                continue
+                            try:
+                                data_b64 = await _download_verified_image(
+                                    client,
+                                    image_url,
+                                    page_url,
+                                    settings,
+                                )
+                            except (
+                                httpx.HTTPError,
+                                RuntimeError,
+                                OSError,
+                                ValueError,
+                            ):
+                                continue
+                            return EncyclopediaImage(
+                                data=data_b64,
+                                source="萌娘百科站内搜索",
+                                page_url=page_url,
+                                label=page_title,
+                            )
+
+            # If the form has no standalone page, inspect the found character /
+            # series pages and require the image metadata itself to name the form.
+            for page_title in tuple(dict.fromkeys(page_titles))[:24]:
+                page_url = f"{domain}/{quote(page_title)}"
+                try:
+                    page = await client.get(page_url)
+                    page.raise_for_status()
+                    parser = _EncyclopediaPageParser()
+                    parser.feed(page.text)
+                except (httpx.HTTPError, ValueError):
+                    continue
+
+                candidates: list[tuple[int, str, str]] = []
+                for source, label in parser.images:
+                    image_url = _clean_image_url(source, str(page.url))
+                    if not image_url:
+                        continue
+                    descriptor = f"{label} {image_url}"
+                    if _matches_specific(descriptor, terms):
+                        candidates.append((200, image_url, label))
+                candidates.extend(
+                    _raw_image_candidates(page.text, str(page.url), terms)
+                )
+
+                unique: dict[str, tuple[int, str, str]] = {}
+                for item in candidates:
+                    current = unique.get(item[1])
+                    if current is None or item[0] > current[0]:
+                        unique[item[1]] = item
+
+                for _, image_url, label in sorted(
+                    unique.values(),
+                    key=lambda item: item[0],
+                    reverse=True,
+                )[:16]:
+                    try:
+                        data_b64 = await _download_verified_image(
+                            client,
+                            image_url,
+                            str(page.url),
+                            settings,
+                        )
+                    except (RuntimeError, httpx.HTTPError):
+                        continue
+                    return EncyclopediaImage(
+                        data=data_b64,
+                        source="萌娘百科角色/系列页",
+                        page_url=str(page.url),
+                        label=label or page_title,
+                    )
     return None
 
 
@@ -1901,17 +2011,17 @@ async def encyclopedia_ultraman_image(
     aliases: tuple[str, ...],
     settings: Settings,
 ) -> EncyclopediaImage:
-    # Baidu Baike usually has denser Chinese form galleries for the Ultra Series.
-    # Prefer it first, then use Wikipedia/Wikimedia as the secondary source.
+    # Prefer Moegirlpedia: exact character page -> internal search ->
+    # character/series page image metadata. Other encyclopedias remain fallback.
+    moegirl = await moegirl_ultraman_image(name, aliases, settings)
+    if moegirl is not None:
+        return moegirl
     baidu = await baidu_baike_ultraman_image(name, aliases, settings)
     if baidu is not None:
         return baidu
     wikipedia = await wikipedia_ultraman_image(name, aliases, settings)
     if wikipedia is not None:
         return wikipedia
-    moegirl = await moegirl_ultraman_image(name, aliases, settings)
-    if moegirl is not None:
-        return moegirl
     baidu_image = await baidu_image_search_ultraman_image(name, aliases, settings)
     if baidu_image is not None:
         return baidu_image
