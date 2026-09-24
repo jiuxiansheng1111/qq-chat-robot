@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     llm_max_concurrency: int = 10
     llm_queue_size: int = 30
     llm_queue_timeout_seconds: float = 8
-    auto_web_search_enabled: bool = False
+    auto_web_search_enabled: bool = True
     auto_web_search_limit: int = 5
     # Optional outbound proxy for web search/media. When empty, common local
     # Clash Verge/Clash mixed ports are auto-detected.
