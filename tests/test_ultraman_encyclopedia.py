@@ -19,7 +19,7 @@ from app.services.web_search import SearchResult
 
 def png_bytes(width: int = 480, height: int = 720) -> bytes:
     buffer = BytesIO()
-    Image.new("RGB", (width, height)).save(buffer, format="PNG")
+    Image.new("RGB", (width, height), (88, 116, 156)).save(buffer, format="PNG")
     return buffer.getvalue()
 
 
@@ -49,6 +49,60 @@ async def test_verified_download_normalizes_supported_images_to_jpeg():
     with Image.open(BytesIO(raw)) as decoded:
         assert decoded.format == "JPEG"
         assert decoded.size == (480, 720)
+
+
+@pytest.mark.asyncio
+async def test_verified_download_rejects_black_image():
+    buffer = BytesIO()
+    Image.new("RGB", (480, 720), (0, 0, 0)).save(buffer, format="PNG")
+
+    async def handler(request: httpx.Request):
+        return httpx.Response(
+            200,
+            headers={"content-type": "image/png"},
+            content=buffer.getvalue(),
+        )
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(RuntimeError, match="近似全黑"):
+            await encyclopedia_module._download_verified_image(
+                client,
+                "https://example.invalid/black.png",
+                "https://example.invalid/page",
+                Settings(_env_file=None),
+            )
+
+
+@pytest.mark.asyncio
+async def test_verified_download_flattens_transparent_png_to_visible_background():
+    source = Image.new("RGBA", (480, 720), (0, 0, 0, 0))
+    source.paste((220, 40, 40, 255), (150, 120, 330, 650))
+    buffer = BytesIO()
+    source.save(buffer, format="PNG")
+
+    async def handler(request: httpx.Request):
+        return httpx.Response(
+            200,
+            headers={"content-type": "image/png"},
+            content=buffer.getvalue(),
+        )
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        result = await encyclopedia_module._download_verified_image(
+            client,
+            "https://example.invalid/transparent.png",
+            "https://example.invalid/page",
+            Settings(_env_file=None),
+        )
+
+    import base64
+
+    raw = base64.b64decode(result.removeprefix("base64://"))
+    with Image.open(BytesIO(raw)) as decoded:
+        corner = decoded.convert("RGB").getpixel((10, 10))
+        assert sum(corner) > 100
 
 
 @pytest.mark.asyncio
@@ -674,3 +728,57 @@ async def test_bing_image_fallback_skips_wrong_form_and_accepts_exact_form(monke
     assert result is not None
     assert result.source.startswith("Bing")
     assert result.label == "捷德奥特曼·刚燃形态"
+
+
+@pytest.mark.asyncio
+async def test_search_engine_first_image_skips_wrong_form_metadata(monkeypatch):
+    image_data = png_bytes()
+
+    async def handler(request: httpx.Request):
+        if request.url.host == "image.baidu.com" and request.url.path == "/search/acjson":
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "fromURLHost": "example.com",
+                            "fromPageTitleEnc": "捷德奥特曼·原始形态",
+                            "middleURL": "https://img.example/wrong.jpg",
+                            "fromURL": "https://example.com/geed-primitive",
+                        },
+                        {
+                            "fromURLHost": "example.com",
+                            "fromPageTitleEnc": "捷德奥特曼·刚燃形态",
+                            "middleURL": "https://img.example/exact.jpg",
+                            "fromURL": "https://example.com/geed-solid-burning",
+                        },
+                    ]
+                },
+            )
+        if request.url.host == "img.example" and request.url.path == "/exact.jpg":
+            return httpx.Response(
+                200,
+                headers={"content-type": "image/png"},
+                content=image_data,
+            )
+        if request.url.host == "img.example" and request.url.path == "/wrong.jpg":
+            raise AssertionError("wrong form image must not be downloaded")
+        if request.url.host == "www.bing.com":
+            return httpx.Response(200, text="")
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mocked_client(**kwargs):
+        kwargs["transport"] = transport
+        return original_client(**kwargs)
+
+    monkeypatch.setattr(encyclopedia_module.httpx, "AsyncClient", mocked_client)
+    result = await encyclopedia_module.search_engine_first_ultraman_image(
+        "捷德奥特曼·刚燃形态",
+        ("Ultraman Geed Solid Burning",),
+        Settings(_env_file=None),
+    )
+    assert result is not None
+    assert "刚燃形态" in result.label

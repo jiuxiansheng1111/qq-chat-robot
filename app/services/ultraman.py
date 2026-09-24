@@ -1265,12 +1265,27 @@ async def official_ultraman_image(hero: Ultraman, settings: Settings) -> str:
     raise RuntimeError("圆谷官方角色图片下载失败：" + "; ".join(errors))
 
 
+ULTRAMAN_IMAGE_BACKGROUND = (32, 48, 78)
+
+
+def normalize_ultraman_source_image(source: Image.Image) -> Image.Image:
+    """Flatten transparent artwork onto a visible Ultra-themed background."""
+    if source.mode in {"RGBA", "LA"} or "transparency" in source.info:
+        rgba = source.convert("RGBA")
+        background = Image.new(
+            "RGBA", rgba.size, (*ULTRAMAN_IMAGE_BACKGROUND, 255)
+        )
+        background.alpha_composite(rgba)
+        return background.convert("RGB")
+    return source.convert("RGB")
+
+
 def render_ultraman_card(
     hero: Ultraman, image_file: str, heading: str = "今日奥特曼"
 ) -> str:
     raw = base64.b64decode(image_file.removeprefix("base64://"))
     with Image.open(BytesIO(raw)) as source:
-        source = source.convert("RGB")
+        source = normalize_ultraman_source_image(source)
         target_width, target_height = 900, 1200
         scale = max(target_width / source.width, target_height / source.height)
         resized = source.resize(

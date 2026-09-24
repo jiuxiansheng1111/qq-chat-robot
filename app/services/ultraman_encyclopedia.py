@@ -7,12 +7,13 @@ import unicodedata
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from io import BytesIO
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import quote, unquote, urljoin, urlparse
 
 import httpx
 from PIL import Image
 
 from app.config import Settings
+from app.services.ultraman import normalize_ultraman_source_image
 from app.services.web_search import SearchResult, search_web
 
 BAIDU_BAIKE_HOSTS = {
@@ -530,9 +531,26 @@ async def _download_verified_image(
             if width < 160 or height < 160 or width * height < 40_000:
                 raise RuntimeError("百科图片尺寸过小")
             # QQ/NapCat 对部分 WebP/AVIF/PNG 外链兼容性不稳定。
-            # 在机器人侧统一解码并转成 JPEG，再以 base64 发送，避免客户端
-            # 继续依赖原网站、防盗链或不受支持的图片编码。
-            image = source.convert("RGB")
+            # 在机器人侧统一解码并转成 JPEG；透明 PNG 先铺到可见背景，
+            # 避免直接丢弃 alpha 后透明区域被转换成大面积黑色。
+            if source.mode in {"RGBA", "LA"} or "transparency" in source.info:
+                alpha = source.convert("RGBA").getchannel("A")
+                alpha_sample = alpha.copy()
+                alpha_sample.thumbnail((256, 256), Image.Resampling.BILINEAR)
+                alpha_histogram = alpha_sample.histogram()
+                alpha_pixels = max(1, sum(alpha_histogram))
+                visible_alpha_fraction = sum(alpha_histogram[16:]) / alpha_pixels
+                if visible_alpha_fraction < 0.01:
+                    raise RuntimeError("百科图片几乎完全透明")
+            image = normalize_ultraman_source_image(source)
+            sample = image.copy()
+            sample.thumbnail((256, 256), Image.Resampling.BILINEAR)
+            histogram = sample.convert("L").histogram()
+            pixels = max(1, sum(histogram))
+            near_black_fraction = sum(histogram[:24]) / pixels
+            visible_fraction = sum(histogram[48:]) / pixels
+            if near_black_fraction >= 0.90 and visible_fraction <= 0.08:
+                raise RuntimeError("百科图片近似全黑")
             output = BytesIO()
             image.save(output, format="JPEG", quality=92, optimize=True)
     except RuntimeError:
@@ -1449,10 +1467,10 @@ async def search_engine_first_ultraman_image(
 ) -> EncyclopediaImage | None:
     """Last-resort exact-name image search.
 
-    The user explicitly prefers getting the first plausible search-engine image
-    over returning no character image. Source sites are therefore unrestricted
-    here (Tencent Video, iQIYI, Bilibili, ordinary articles, etc.). We still
-    require a real decodable image with a reasonable size.
+    Source sites are unrestricted here (Tencent Video, iQIYI, Bilibili,
+    ordinary articles, etc.), but a candidate is accepted only when its own
+    title/page/image metadata names the requested character or independent form.
+    The search query itself never counts as identity evidence.
     """
     query_values = [query.strip() for query in extra_queries if query.strip()]
     query_values.append(name)
@@ -1466,6 +1484,9 @@ async def search_engine_first_ultraman_image(
         )
     )
     queries = list(dict.fromkeys(query_values))[:8]
+    strict_terms = _specific_terms(name, aliases)
+    if not strict_terms:
+        return None
     timeout = max(3.0, min(float(settings.media_timeout_seconds), 6.0))
     headers = {
         "User-Agent": ENCYCLOPEDIA_USER_AGENT,
@@ -1532,9 +1553,21 @@ async def search_engine_first_ultraman_image(
                             item.get("fromPageTitleEnc")
                             or item.get("fromPageTitle")
                             or item.get("title")
-                            or query
+                            or ""
                         )
                     )
+                    descriptor = " ".join(
+                        part
+                        for part in (
+                            title,
+                            unquote(page_url),
+                            source_host,
+                            unquote(image_url),
+                        )
+                        if part
+                    )
+                    if not _matches_specific(descriptor, strict_terms):
+                        continue
                     try:
                         data_b64 = await _download_verified_image(
                             client,
@@ -1552,7 +1585,7 @@ async def search_engine_first_ultraman_image(
                             else "百度图片首图"
                         ),
                         page_url=page_url,
-                        label=title or query,
+                        label=title or name,
                     )
 
         # Bing Images is the second unrestricted first-result source.
@@ -1579,7 +1612,8 @@ async def search_engine_first_ultraman_image(
             parser = _BingImageResultParser()
             parser.feed(response.text)
             for item in parser.items[:20]:
-                title = html.unescape(str(item.get("t") or query))
+                title = html.unescape(str(item.get("t") or ""))
+                description = html.unescape(str(item.get("desc") or ""))
                 page_url = html.unescape(
                     str(item.get("purl") or "")
                 ).strip()
@@ -1589,6 +1623,19 @@ async def search_engine_first_ultraman_image(
                 original_url = html.unescape(
                     str(item.get("murl") or "")
                 ).strip()
+                descriptor = " ".join(
+                    part
+                    for part in (
+                        title,
+                        description,
+                        unquote(page_url),
+                        unquote(thumb_url),
+                        unquote(original_url),
+                    )
+                    if part
+                )
+                if not _matches_specific(descriptor, strict_terms):
+                    continue
                 referer = (
                     page_url
                     if page_url.startswith(("https://", "http://"))
@@ -1613,7 +1660,7 @@ async def search_engine_first_ultraman_image(
                         source="Bing 图片首图",
                         page_url=page_url
                         or f"https://www.bing.com/images/search?q={quote(query)}",
-                        label=title or query,
+                        label=title or description or name,
                     )
     return None
 

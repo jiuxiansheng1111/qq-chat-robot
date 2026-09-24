@@ -476,3 +476,22 @@ def test_every_variant_search_query_is_specific_to_that_variant():
             for alias in aliases
             if alias
         ), name
+
+
+def test_ultraman_card_flattens_transparent_source_on_visible_background(monkeypatch):
+    monkeypatch.setattr(
+        ultraman_module,
+        "FONT_CANDIDATES",
+        ("/font-that-does-not-exist.ttc", "DejaVuSans.ttf"),
+    )
+    source = Image.new("RGBA", (900, 1200), (0, 0, 0, 0))
+    source.paste((220, 50, 40, 255), (260, 180, 640, 900))
+    output = BytesIO()
+    source.save(output, format="PNG")
+    hero = ultraman_module.ULTRAMAN_BY_NAME["初代奥特曼"]
+    card = render_ultraman_card(
+        hero, "base64://" + base64.b64encode(output.getvalue()).decode()
+    )
+    decoded = Image.open(BytesIO(base64.b64decode(card.removeprefix("base64://")))).convert("RGB")
+    corner = decoded.getpixel((20, 200))
+    assert sum(corner) > 70

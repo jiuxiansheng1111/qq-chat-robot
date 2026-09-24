@@ -106,6 +106,8 @@ from app.services.ultraman import (
     ULTRAMAN_ROSTER,
     official_ultraman_image,
     official_ultraman_search_image,
+    is_ultraman_form_variant,
+    normalize_ultraman_source_image,
     render_ultraman_card,
     render_ultraman_catalog,
     resolve_ultraman_query,
@@ -1570,10 +1572,14 @@ async def llm_confirm_ultraman_image_candidate(
 _ultraman_prefetch_tasks: set[asyncio.Task] = set()
 
 
+ULTRAMAN_IMAGE_CACHE_VERSION = "v2-verified-20260924"
+
+
 def _ultraman_image_cache_path(hero) -> Path:
     cache_dir = Path(settings.ultraman_image_cache_dir).expanduser().resolve()
     cache_dir.mkdir(parents=True, exist_ok=True)
-    digest = hashlib.sha256(hero.name.encode("utf-8")).hexdigest()[:24]
+    cache_key = f"{ULTRAMAN_IMAGE_CACHE_VERSION}\0{hero.name}"
+    digest = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:24]
     return cache_dir / f"{digest}.img"
 
 
@@ -1584,7 +1590,7 @@ def _ultraman_image_payload_usable(image_file: str) -> bool:
     try:
         raw = base64.b64decode(image_file.removeprefix("base64://"), validate=True)
         with Image.open(BytesIO(raw)) as decoded:
-            image = decoded.convert("RGB")
+            image = normalize_ultraman_source_image(decoded)
             width, height = image.size
             if width < 160 or height < 160 or width * height < 40_000:
                 return False
@@ -1594,7 +1600,15 @@ def _ultraman_image_payload_usable(image_file: str) -> bool:
             mean_luma = sum(stats.mean) / 3
             channel_spread = max(high - low for low, high in sample.getextrema())
             entropy = sample.entropy()
+            histogram = sample.convert("L").histogram()
+            pixels = max(1, sum(histogram))
+            near_black_fraction = sum(histogram[:24]) / pixels
+            visible_fraction = sum(histogram[48:]) / pixels
             if entropy < 0.75:
+                return False
+            if near_black_fraction >= 0.90 and visible_fraction <= 0.08:
+                return False
+            if mean_luma < 26 and visible_fraction <= 0.12:
                 return False
             if mean_luma < 42 and channel_spread < 35 and entropy < 2.2:
                 return False
@@ -1707,20 +1721,6 @@ async def _llm_ultraman_search_queries(hero, llm) -> tuple[str, ...]:
     return tuple(queries)
 
 
-async def _delayed_search_engine_first_image(hero, aliases) -> object:
-    # Give exact/official sources a short head start, then prefer "a picture now"
-    # over waiting for every strict source to time out.
-    await asyncio.sleep(2.0)
-    result = await search_engine_first_ultraman_image(
-        hero.name,
-        aliases,
-        settings,
-    )
-    if result is None:
-        raise RuntimeError("搜索引擎首图兜底没有可下载结果")
-    return result
-
-
 async def resolve_ultraman_card_image(hero, llm=None) -> str:
     """Resolve a hero image with a strict response deadline and persistent cache.
 
@@ -1768,14 +1768,6 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
             "网页角色页",
             lambda: web_page_ultraman_image(hero.name, aliases, settings),
         ),
-        (
-            "Bing精确最终兜底",
-            lambda: bing_image_relaxed_ultraman_image(hero.name, aliases, settings),
-        ),
-        (
-            "搜索引擎精确名称首图",
-            lambda: _delayed_search_engine_first_image(hero, aliases),
-        ),
     )
 
     tasks = [
@@ -1815,25 +1807,54 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
         return cached
 
     llm_queries = await _llm_ultraman_search_queries(hero, llm)
-    if llm_queries:
+    fallback_factories = (
+        (
+            "Bing精确最终兜底",
+            lambda: bing_image_relaxed_ultraman_image(hero.name, aliases, settings),
+            is_ultraman_form_variant(hero),
+        ),
+        (
+            "搜索引擎+LLM精确兜底" if llm_queries else "搜索引擎精确名称兜底",
+            lambda: search_engine_first_ultraman_image(
+                hero.name,
+                aliases,
+                settings,
+                extra_queries=llm_queries,
+            ),
+            False,
+        ),
+    )
+    for source_name, resolver, require_positive_review in fallback_factories:
         try:
-            async with asyncio.timeout(18.0):
-                result = await search_engine_first_ultraman_image(
-                    hero.name,
-                    aliases,
-                    settings,
-                    extra_queries=llm_queries,
-                )
-            if result is not None and _ultraman_image_payload_usable(result.data):
-                _save_ultraman_image_cache(hero, result.data)
+            async with asyncio.timeout(14.0):
+                result = await resolver()
+            if result is None or not _ultraman_image_payload_usable(result.data):
+                continue
+            verdict = await llm_confirm_ultraman_image_candidate(
+                hero,
+                llm,
+                source=source_name,
+                label=result.label,
+                page_url=result.page_url,
+            )
+            if verdict is False or (require_positive_review and verdict is not True):
                 logger.info(
-                    "Ultraman image resolved by LLM-assisted web search for %s: %s",
+                    "Ultraman fallback candidate rejected for %s from %s: %s",
                     hero.name,
+                    source_name,
                     result.label,
                 )
-                return result.data
+                continue
+            _save_ultraman_image_cache(hero, result.data)
+            logger.info(
+                "Ultraman image resolved from reviewed fallback %s for %s: %s",
+                source_name,
+                hero.name,
+                result.label,
+            )
+            return result.data
         except (TimeoutError, RuntimeError, ValueError, OSError, httpx.HTTPError) as exc:
-            logger.info("LLM-assisted Ultraman image search failed for %s: %s", hero.name, exc)
+            logger.info("Ultraman fallback %s failed for %s: %s", source_name, hero.name, exc)
 
     cached = _load_ultraman_image_cache(hero)
     if cached is not None:
@@ -1854,7 +1875,13 @@ def _qq_safe_image_variant(image_file: str) -> str | None:
                 source.seek(0)
             except EOFError:
                 pass
-            image = source.convert("RGB")
+            if source.mode in {"RGBA", "LA"} or "transparency" in source.info:
+                rgba = source.convert("RGBA")
+                canvas = Image.new("RGBA", rgba.size, (248, 248, 248, 255))
+                canvas.alpha_composite(rgba)
+                image = canvas.convert("RGB")
+            else:
+                image = source.convert("RGB")
             image.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
             output = BytesIO()
             image.save(
@@ -1951,10 +1978,13 @@ async def send_group_image(group_id: str, image_file: str, caption: str = "") ->
     normalized = _qq_safe_image_variant(image_file)
     candidates: list[str] = []
     if normalized:
-        candidates.append(normalized)
         file_uri = _persist_outgoing_image(normalized)
         if file_uri:
+            # Local NapCat is more reliable with a real baseline JPEG file than
+            # a large base64 payload; remote/container deployments simply fall
+            # through to the normalized base64 candidate when file:// is invalid.
             candidates.append(file_uri)
+        candidates.append(normalized)
     candidates.append(image_file)
 
     last_error: Exception | None = None

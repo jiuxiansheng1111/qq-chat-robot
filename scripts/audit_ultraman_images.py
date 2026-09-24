@@ -73,7 +73,7 @@ async def audit_one(hero, settings: Settings, semaphore: asyncio.Semaphore) -> A
             with Image.open(BytesIO(raw)) as image:
                 image.verify()
             with Image.open(BytesIO(raw)) as image:
-                rgb = image.convert("RGB")
+                rgb = ultraman.normalize_ultraman_source_image(image)
                 width, height = rgb.size
                 sample = rgb.copy()
                 sample.thumbnail((256, 256), Image.Resampling.BILINEAR)
@@ -81,10 +81,23 @@ async def audit_one(hero, settings: Settings, semaphore: asyncio.Semaphore) -> A
                 mean_luma = sum(stats.mean) / 3
                 channel_spread = max(high - low for low, high in sample.getextrema())
                 entropy = sample.entropy()
+                histogram = sample.convert("L").histogram()
+                pixels = max(1, sum(histogram))
+                near_black_fraction = sum(histogram[:24]) / pixels
+                visible_fraction = sum(histogram[48:]) / pixels
             if width < 160 or height < 160 or width * height < 40_000:
                 raise RuntimeError(f"图片尺寸过小: {width}x{height}")
             if entropy < 0.75:
                 raise RuntimeError(f"图片近似纯色/空白: entropy={entropy:.3f}")
+            if near_black_fraction >= 0.90 and visible_fraction <= 0.08:
+                raise RuntimeError(
+                    "图片近似全黑: "
+                    f"dark={near_black_fraction:.3f}, visible={visible_fraction:.3f}"
+                )
+            if mean_luma < 26 and visible_fraction <= 0.12:
+                raise RuntimeError(
+                    f"图片过暗不可见: luma={mean_luma:.1f}, visible={visible_fraction:.3f}"
+                )
             if mean_luma < 42 and channel_spread < 35 and entropy < 2.2:
                 raise RuntimeError(
                     f"图片近似全黑: luma={mean_luma:.1f}, spread={channel_spread}, entropy={entropy:.3f}"
