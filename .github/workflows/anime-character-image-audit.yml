@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "app/services/anime_character.py"
+      - "app/data/anime_characters_extra.json"
       - "app/config.py"
       - "scripts/audit_anime_character_images.py"
       - ".github/workflows/anime-character-image-audit.yml"
@@ -13,7 +14,7 @@ on:
 jobs:
   audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
