@@ -191,7 +191,6 @@ async def test_resolver_hard_deadline_prevents_long_hang(monkeypatch, tmp_path):
 
     async def slow(*args, **kwargs):
         await __import__("asyncio").sleep(1)
-        return None
 
     for name in (
         "_web_page_character_image",
