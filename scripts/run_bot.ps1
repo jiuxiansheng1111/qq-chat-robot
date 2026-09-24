@@ -16,6 +16,7 @@ $logRoot = Join-Path $projectRoot "logs"
 $outputLog = Join-Path $logRoot "bot.out.log"
 $errorLog = Join-Path $logRoot "bot.error.log"
 $watchdogLog = Join-Path $logRoot "watchdog.log"
+$uvicornStartMutex = [Threading.Mutex]::new($false, "Global\QQChatRobot-Uvicorn-Start")
 
 New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
 Set-Location -LiteralPath $projectRoot
@@ -107,19 +108,32 @@ function Start-Uvicorn {
     if (-not (Test-Path -LiteralPath $pythonPath)) {
         throw "Python environment not found: $pythonPath"
     }
-    if (@(Get-UvicornProcesses).Count -gt 0) {
-        return
+    $mutexAcquired = $false
+    try {
+        $mutexAcquired = $uvicornStartMutex.WaitOne(0)
+        if (-not $mutexAcquired) {
+            return
+        }
+        if (@(Get-UvicornProcesses).Count -gt 0) {
+            return
+        }
+
+        Start-Process `
+            -FilePath $pythonPath `
+            -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000") `
+            -WorkingDirectory $projectRoot `
+            -RedirectStandardOutput $outputLog `
+            -RedirectStandardError $errorLog `
+            -WindowStyle Hidden
+
+        Start-Sleep -Seconds 2
+        Write-LifecycleLog "Started Uvicorn from the current project files."
     }
-
-    Start-Process `
-        -FilePath $pythonPath `
-        -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000") `
-        -WorkingDirectory $projectRoot `
-        -RedirectStandardOutput $outputLog `
-        -RedirectStandardError $errorLog `
-        -WindowStyle Hidden
-
-    Write-LifecycleLog "Started Uvicorn from the current project files."
+    finally {
+        if ($mutexAcquired) {
+            $uvicornStartMutex.ReleaseMutex()
+        }
+    }
 }
 
 $oneBotEndpoint = Get-OneBotEndpoint
