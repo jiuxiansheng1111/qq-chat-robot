@@ -2025,11 +2025,13 @@ async def resolve_ultraman_card_image(hero, llm=None) -> ImageResolution:
 
 
 def _qq_safe_image_variant(image_file: str) -> str | None:
-    """Normalize base64 media to a baseline RGB JPEG before NapCat sees it."""
+    """Normalize still images, while preserving GIF animation frames."""
     if not image_file.startswith("base64://"):
         return None
     try:
         raw = base64.b64decode(image_file.removeprefix("base64://"), validate=True)
+        if raw.startswith((b"GIF87a", b"GIF89a")):
+            return image_file
         with Image.open(BytesIO(raw)) as source:
             try:
                 source.seek(0)
@@ -2080,7 +2082,8 @@ def _persist_outgoing_image(image_file: str) -> str | None:
         base_dir = Path(settings.database_path).expanduser().resolve().parent
         media_dir = base_dir / "outgoing_media"
         media_dir.mkdir(parents=True, exist_ok=True)
-        path = media_dir / f"{digest}.jpg"
+        suffix = ".gif" if raw.startswith((b"GIF87a", b"GIF89a")) else ".jpg"
+        path = media_dir / f"{digest}{suffix}"
         if not path.exists():
             path.write_bytes(raw)
         return path.as_uri()
@@ -2135,7 +2138,15 @@ async def send_group_image(group_id: str, image_file: str, caption: str = "") ->
         else {}
     )
 
-    normalized = _qq_safe_image_variant(image_file)
+    is_gif = False
+    if image_file.startswith("base64://"):
+        try:
+            is_gif = base64.b64decode(
+                image_file.removeprefix("base64://"), validate=True
+            ).startswith((b"GIF87a", b"GIF89a"))
+        except (ValueError, OSError):
+            is_gif = False
+    normalized = image_file if is_gif else _qq_safe_image_variant(image_file)
     candidates: list[str] = []
     if normalized:
         # 标准 baseline JPEG base64 先发；NapCat 若确实拒绝，再退到 file://。
