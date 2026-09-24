@@ -125,6 +125,7 @@ async def test_resolver_races_sources_and_uses_first_image_fallback(
         return expected
 
     monkeypatch.setattr(anime, "_vndb_image", none)
+    monkeypatch.setattr(anime, "_bangumi_image", none)
     monkeypatch.setattr(anime, "_anilist_image", none)
     monkeypatch.setattr(anime, "_web_page_character_image", none)
     monkeypatch.setattr(anime, "_wikipedia_image", none)
@@ -198,6 +199,7 @@ async def test_resolver_hard_deadline_prevents_long_hang(monkeypatch, tmp_path):
 
     for name in (
         "_vndb_image",
+        "_bangumi_image",
         "_anilist_image",
         "_web_page_character_image",
         "_wikipedia_image",
@@ -274,3 +276,69 @@ async def test_vndb_resolves_murasame_character_art(monkeypatch):
     with Image.open(BytesIO(decoded)) as image:
         assert image.width == 256
         assert image.height == 300
+
+
+
+@pytest.mark.asyncio
+async def test_bangumi_resolves_chinese_character_art(monkeypatch):
+    character = anime.ANIME_CHARACTER_BY_NAME["樱岛麻衣"]
+    raw = jpeg_data(300, 420)
+
+    async def handler(request: httpx.Request):
+        if request.url.host == "api.bgm.tv" and request.url.path.endswith(
+            "/v0/search/characters"
+        ):
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": 123,
+                            "name": "桜島麻衣",
+                            "name_cn": "樱岛麻衣",
+                            "images": {
+                                "large": "https://img.example/mai.jpg",
+                            },
+                            "infobox": [],
+                        }
+                    ]
+                },
+            )
+        if request.url.host == "api.bgm.tv" and request.url.path.endswith(
+            "/v0/characters/123/subjects"
+        ):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "name": "青春ブタ野郎はバニーガール先輩の夢を見ない",
+                        "name_cn": "青春猪头少年不会梦到兔女郎学姐",
+                    }
+                ],
+            )
+        if request.url.host == "img.example":
+            return httpx.Response(
+                200,
+                headers={"content-type": "image/jpeg"},
+                content=raw,
+            )
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mocked_client(**kwargs):
+        kwargs["transport"] = transport
+        return original_client(**kwargs)
+
+    monkeypatch.setattr(anime.httpx, "AsyncClient", mocked_client)
+    result = await anime._bangumi_image(
+        character,
+        character.aliases,
+        Settings(_env_file=None),
+    )
+    assert result is not None
+    decoded = base64.b64decode(result.removeprefix("base64://"))
+    with Image.open(BytesIO(decoded)) as image:
+        assert image.width == 300
+        assert image.height == 420
