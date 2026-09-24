@@ -67,6 +67,7 @@ class PluginRegistry:
             "│\n"
             "│  📚 日漫与特摄角色图鉴\n"
             "│  @我 图鉴 / 角色图鉴\n"
+            "│  @我 角色图鉴 捷德 / 角色图鉴 雷姆（统一搜索）\n"
             "│  @我 今日奥特曼 / 本命奥特曼\n"
             "│  @我 随机二次元角色 / 本命二次元角色\n"
             f"│  特摄 {roster_count} 位/形态｜日漫 {anime_character_count} 位角色\n"
@@ -79,7 +80,7 @@ class PluginRegistry:
             "│  🎵 点歌｜@我 点歌 歌名\n"
             "│  📺 B站｜播放视频 关键词\n"
             "│  🎭 夺舍｜夺舍 @群成员 / 随机夺舍 / 退出\n"
-            "│  ♡ 好感度｜好感度 / 好感度记录\n"
+            "│  ♡ 恋爱模式｜开启恋爱模式 / 关闭恋爱模式\n"
             "│  🧠 记忆｜记住：内容 / 删除记忆 关键词\n"
             "│\n"
             "┗ @我 帮助 或 /help ┛\n\n"
@@ -89,6 +90,16 @@ class PluginRegistry:
 
 registry = PluginRegistry()
 registry.register(PluginSpec("help", ("/help", "/帮助", "help", "帮助"), "/help —— 查看帮助"))
+registry.register(
+    PluginSpec(
+        "romance_mode",
+        (
+            "/恋爱模式", "恋爱模式", "/开启恋爱模式", "开启恋爱模式",
+            "/关闭恋爱模式", "关闭恋爱模式", "/恋爱模式状态", "恋爱模式状态",
+        ),
+        "按用户开关恋爱模式；严重辱骂/性骚扰/暴力威胁过量时当天禁止开启",
+    )
+)
 registry.register(PluginSpec("ai", ("/ai", "/AI"), "/ai <问题> —— AI 对话"))
 registry.register(
     PluginSpec(

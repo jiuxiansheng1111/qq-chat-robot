@@ -47,6 +47,7 @@ class Database:
                     group_id TEXT NOT NULL,
                     user_id TEXT NOT NULL,
                     memory_enabled INTEGER NOT NULL DEFAULT 0,
+                    romance_mode INTEGER NOT NULL DEFAULT 0,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (group_id, user_id)
                 );
@@ -166,6 +167,7 @@ class Database:
                     streak_days INTEGER NOT NULL DEFAULT 1,
                     bonus_awarded INTEGER NOT NULL DEFAULT 0,
                     action_keys TEXT NOT NULL DEFAULT '',
+                    severe_hostility_count INTEGER NOT NULL DEFAULT 0,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (group_id, user_id, activity_date)
                 );
@@ -217,6 +219,16 @@ class Database:
             if "mode" not in {column[1] for column in columns}:
                 await db.execute(
                     "ALTER TABLE daily_possession ADD COLUMN mode TEXT NOT NULL DEFAULT 'random'"
+                )
+            preference_columns = await db.execute_fetchall("PRAGMA table_info(user_preferences)")
+            if "romance_mode" not in {column[1] for column in preference_columns}:
+                await db.execute(
+                    "ALTER TABLE user_preferences ADD COLUMN romance_mode INTEGER NOT NULL DEFAULT 0"
+                )
+            affection_daily_columns = await db.execute_fetchall("PRAGMA table_info(group_affection_daily)")
+            if "severe_hostility_count" not in {column[1] for column in affection_daily_columns}:
+                await db.execute(
+                    "ALTER TABLE group_affection_daily ADD COLUMN severe_hostility_count INTEGER NOT NULL DEFAULT 0"
                 )
             # Keep old collection rows valid when display names are corrected.
             ultraman_name_migrations = (
@@ -330,6 +342,42 @@ class Database:
             "ON CONFLICT(group_id, user_id) DO UPDATE SET memory_enabled = excluded.memory_enabled, updated_at = CURRENT_TIMESTAMP",
             (group_id, user_id, int(enabled)),
         )
+
+    async def romance_mode(self, group_id: str, user_id: str) -> bool:
+        row = await self.fetchone(
+            "SELECT romance_mode FROM user_preferences WHERE group_id = ? AND user_id = ?",
+            (group_id, user_id),
+        )
+        return bool(row[0]) if row else False
+
+    async def set_romance_mode(self, group_id: str, user_id: str, enabled: bool) -> None:
+        await self.execute(
+            "INSERT INTO user_preferences(group_id, user_id, romance_mode) VALUES (?, ?, ?) "
+            "ON CONFLICT(group_id, user_id) DO UPDATE SET romance_mode = excluded.romance_mode, updated_at = CURRENT_TIMESTAMP",
+            (group_id, user_id, int(enabled)),
+        )
+
+    async def record_severe_hostility(
+        self, group_id: str, user_id: str, activity_date: str
+    ) -> int:
+        await self.execute(
+            "INSERT INTO group_affection_daily(group_id, user_id, activity_date, severe_hostility_count) "
+            "VALUES (?, ?, ?, 1) ON CONFLICT(group_id, user_id, activity_date) DO UPDATE SET "
+            "severe_hostility_count = severe_hostility_count + 1, updated_at = CURRENT_TIMESTAMP",
+            (group_id, user_id, activity_date),
+        )
+        row = await self.fetchone(
+            "SELECT severe_hostility_count FROM group_affection_daily WHERE group_id = ? AND user_id = ? AND activity_date = ?",
+            (group_id, user_id, activity_date),
+        )
+        return int(row[0]) if row else 1
+
+    async def severe_hostility_count(self, group_id: str, user_id: str, activity_date: str) -> int:
+        row = await self.fetchone(
+            "SELECT severe_hostility_count FROM group_affection_daily WHERE group_id = ? AND user_id = ? AND activity_date = ?",
+            (group_id, user_id, activity_date),
+        )
+        return int(row[0]) if row else 0
 
     async def plugin_enabled(self, group_id: str, plugin_name: str) -> bool:
         row = await self.fetchone(

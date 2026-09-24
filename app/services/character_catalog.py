@@ -5,7 +5,8 @@ import re
 CHARACTER_CATALOG_COMMANDS = frozenset(
     {
         "/图鉴", "图鉴", "/角色图鉴", "角色图鉴", "/图鉴菜单", "图鉴菜单",
-        "/图鉴总览", "图鉴总览", "/日漫与特摄角色图鉴", "日漫与特摄角色图鉴",
+        "/图鉴总览", "图鉴总览",
+        "/日漫与特摄角色图鉴", "日漫与特摄角色图鉴",
     }
 )
 ULTRAMAN_CATALOG_ALIASES = frozenset(
@@ -48,6 +49,7 @@ def extract_catalog_lookup(text: str) -> tuple[str, str] | None:
     cleaned = re.sub(r"\s+", " ", str(text or "")).strip()
     lowered = cleaned.casefold()
     prefixes = (
+        ("all", ("角色图鉴", "查询角色图鉴", "查角色图鉴", "/角色图鉴", "/查询角色图鉴")),
         ("ultraman", ("查询奥特曼", "查奥特曼", "/查询奥特曼", "/查奥特曼")),
         ("anime", (
             "查询二次元角色", "查二次元角色", "查询日漫角色", "查日漫角色",

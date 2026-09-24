@@ -206,6 +206,10 @@ AFFECTION_HISTORY_COMMANDS = frozenset({
 AFFECTION_RESET_COMMANDS = frozenset({
     "/重置好感度", "重置好感度"
 })
+ROMANCE_MODE_COMMANDS = frozenset({
+    "/恋爱模式", "恋爱模式", "/恋爱模式状态", "恋爱模式状态",
+    "/开启恋爱模式", "开启恋爱模式", "/关闭恋爱模式", "关闭恋爱模式",
+})
 POSSESSION_STYLE_CLEAR_COMMANDS = frozenset(
     {"/删除语气", "删除语气", "/清除语气", "清除语气", "忘记这个人的语气"}
 )
@@ -1876,10 +1880,6 @@ async def resolve_ultraman_card_image(hero, llm=None) -> ImageResolution:
             lambda: wikipedia_ultraman_image(hero.name, aliases, settings),
         ),
         (
-            "萌娘百科",
-            lambda: moegirl_ultraman_image(hero.name, aliases, settings),
-        ),
-        (
             "百度图片",
             lambda: baidu_image_search_ultraman_image(hero.name, aliases, settings),
         ),
@@ -1943,6 +1943,11 @@ async def resolve_ultraman_card_image(hero, llm=None) -> ImageResolution:
 
     llm_queries = await _llm_ultraman_search_queries(hero, llm)
     fallback_factories = [
+        (
+            "萌娘百科",
+            lambda: moegirl_ultraman_image(hero.name, aliases, settings),
+            False,
+        ),
         (
             "Bing精确最终兜底",
             lambda: bing_image_relaxed_ultraman_image(hero.name, aliases, settings),
@@ -2352,18 +2357,55 @@ async def onebot_webhook(
         )
         return {"ok": True, "ignored": True, "reason": "group_ingress_rate_limited"}
 
+    romance_mode = await request.app.state.db.romance_mode(group_id, user_id)
+    # Keep the legacy value readable for migrations/admin inspection, but do
+    # not mutate it during normal chat; romance mode is now the active switch.
     current_affection = await request.app.state.db.affection_score(
         group_id, user_id, AFFECTION_INITIAL
     )
     active_possession_for_affection = await request.app.state.db.daily_possession(
         group_id, today
     )
+    severe_hostility = hostility_assessment(text).delta <= -10
+    severe_hostility_count = await request.app.state.db.severe_hostility_count(
+        group_id, user_id, today
+    )
+    if severe_hostility:
+        severe_hostility_count = await request.app.state.db.record_severe_hostility(
+            group_id, user_id, today
+        )
+    romance_blocked_today = severe_hostility_count > 3
+    affection_changes_enabled = False
+    # Romance mode replaces the old numeric threshold: enabling it grants
+    # access to the related memory features without changing a score.
+    memory_unlock_enabled = romance_mode or current_affection >= MEMORY_UNLOCK_SCORE
+
+    if text in ROMANCE_MODE_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
+        if text in {"/开启恋爱模式", "开启恋爱模式"}:
+            romance_mode = True
+        elif text in {"/关闭恋爱模式", "关闭恋爱模式"}:
+            romance_mode = False
+        else:
+            romance_mode = not romance_mode
+        if romance_mode and romance_blocked_today:
+            await send_group_message(
+                group_id,
+                "今天收到的严重侮辱、性骚扰或暴力威胁已超过 3 次，恋爱模式今天不能开启；明天再试。",
+            )
+            return {"ok": True, "source": "romance_mode_blocked"}
+        await request.app.state.db.set_romance_mode(group_id, user_id, romance_mode)
+        await send_group_message(
+            group_id,
+            "恋爱模式已开启：会使用亲密语气和互动设定。" if romance_mode
+            else "恋爱模式已关闭：恢复普通助手模式，不再计算好感度。",
+        )
+        return {"ok": True, "source": "romance_mode", "enabled": romance_mode}
 
     if text in AFFECTION_VIEW_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
         await send_group_message(group_id, affection_status_text(current_affection))
         return {"ok": True, "source": "affection"}
 
-    if text in AFFECTION_HISTORY_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
+    if romance_mode and text in AFFECTION_HISTORY_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
         events = await request.app.state.db.affection_events(group_id, user_id, limit=5)
         if not events:
             await send_group_message(
@@ -2383,7 +2425,7 @@ async def onebot_webhook(
             )
         return {"ok": True, "source": "affection_history"}
 
-    if text in AFFECTION_RESET_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
+    if romance_mode and text in AFFECTION_RESET_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
         if not is_admin:
             await send_group_message(group_id, "重置其他人的好感度需要群管理员权限。")
         else:
@@ -2406,12 +2448,12 @@ async def onebot_webhook(
 
     action = (
         intimate_action(text)
-        if addressed_to_murasame and not active_possession_for_affection
+        if romance_mode and addressed_to_murasame and not active_possession_for_affection
         else None
     )
-    if action is not None:
+    if affection_changes_enabled and action is not None:
         action_name, action_delta = action
-        if current_affection < MEMORY_UNLOCK_SCORE:
+        if affection_changes_enabled and current_affection < MEMORY_UNLOCK_SCORE:
             await send_group_message(
                 group_id,
                 f"……还没熟到能{action_name}的程度。"
@@ -2493,7 +2535,9 @@ async def onebot_webhook(
         return {"ok": True, "source": "affection_action"}
 
     if (
-        addressed_to_murasame
+        affection_changes_enabled
+        and romance_mode
+        and addressed_to_murasame
         and not active_possession_for_affection
         and text not in AFFECTION_VIEW_COMMANDS
         and text not in AFFECTION_HISTORY_COMMANDS
@@ -2655,7 +2699,7 @@ async def onebot_webhook(
         else:
             await send_group_message(group_id, "用法：/blacklist add QQ号 或 /blacklist remove QQ号")
     elif text in {"/记忆开启", "/memory on"}:
-        if current_affection < MEMORY_UNLOCK_SCORE:
+        if not memory_unlock_enabled or current_affection < MEMORY_UNLOCK_SCORE:
             await send_group_message(
                 group_id,
                 f"现在的好感度是 {current_affection}/100。等到 {MEMORY_UNLOCK_SCORE} 以上，"
@@ -2691,7 +2735,7 @@ async def onebot_webhook(
         await request.app.state.db.clear_long_term_memories(group_id, user_id)
         await send_group_message(group_id, "已经忘掉你在本群的全部长期记忆了。")
     elif (memory_content := extract_long_memory(event, text)) is not None:
-        if current_affection < MEMORY_UNLOCK_SCORE:
+        if not memory_unlock_enabled or current_affection < MEMORY_UNLOCK_SCORE:
             await send_group_message(
                 group_id,
                 f"好感度 {current_affection}/100，还没到 {MEMORY_UNLOCK_SCORE}。"
@@ -2705,7 +2749,7 @@ async def onebot_webhook(
             await request.app.state.db.add_long_term_memory(group_id, user_id, memory_content)
             await send_group_message(group_id, "好，我长期记住了。需要删除时对我说“忘记我”。")
     elif (group_memory := extract_group_memory(event, text)) is not None:
-        if current_affection < MEMORY_UNLOCK_SCORE:
+        if not memory_unlock_enabled or current_affection < MEMORY_UNLOCK_SCORE:
             await send_group_message(
                 group_id,
                 f"好感度 {current_affection}/100。至少到 {MEMORY_UNLOCK_SCORE}，"
@@ -2988,7 +3032,24 @@ async def onebot_webhook(
                 group_id,
                 "查询格式：@我 查询奥特曼 迪迦，或 @我 查询二次元角色 雷姆",
             )
-        elif catalog_kind == "ultraman":
+            return {"ok": True, "source": "catalog_help"}
+        elif catalog_kind == "all":
+            # The unified catalog searches both namespaces while keeping the
+            # two collection/favorite systems separate.
+            hero = resolve_ultraman_query(catalog_query)
+            if hero is not None:
+                catalog_kind = "ultraman"
+            else:
+                character = resolve_anime_character_query(catalog_query)
+                if character is not None:
+                    catalog_kind = "anime"
+                else:
+                    await send_group_message(
+                        group_id,
+                        f"角色图鉴里暂时没找到“{catalog_query}”，可直接输入正式名或常用简称搜索。",
+                    )
+                    return {"ok": True, "source": "catalog_not_found"}
+        if catalog_kind == "ultraman":
             hero = resolve_ultraman_query(catalog_query)
             if hero is None:
                 await send_group_message(group_id, f"奥特曼图鉴里暂时没找到“{catalog_query}”。")
@@ -3449,7 +3510,7 @@ async def onebot_webhook(
                             "role": "system",
                             "content": settings.persona_prompt()
                             + "\n"
-                            + affection_prompt(current_affection)
+                            + (affection_prompt(current_affection) if romance_mode else "")
                             + "\n你正在根据联网搜索结果回答。只使用给定结果，无法确认的内容要说明；"
                             "回答简洁，不要编造网址。",
                         },
@@ -3551,7 +3612,7 @@ async def onebot_webhook(
         long_memories = await request.app.state.db.long_term_memories(group_id, user_id)
         possession = active_possession
         persona_context: list[str] = []
-        if not active_possession:
+        if not active_possession and romance_mode:
             persona_context.append(affection_prompt(current_affection))
         possession_name = ""
         imitate_current_possession = False
