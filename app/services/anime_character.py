@@ -1,4 +1,6 @@
+import asyncio
 import base64
+import hashlib
 import html
 import json
 import re
@@ -6,6 +8,7 @@ import unicodedata
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from io import BytesIO
+from pathlib import Path
 from urllib.parse import quote, urljoin
 
 import httpx
@@ -25,7 +28,17 @@ class AnimeCharacter:
 
 
 ANIME_CHARACTER_ROSTER = (
-    AnimeCharacter("丛雨", "《千恋＊万花》", "寄宿于丛雨丸中的刀灵，也是建实神社的神使。", ("ムラサメ", "Murasame")),
+    AnimeCharacter(
+        "丛雨",
+        "《千恋＊万花》",
+        "寄宿于丛雨丸中的刀灵，也是建实神社的神使。",
+        (
+            "ムラサメ",
+            "Murasame",
+            "Senren Banka Murasame",
+            "千恋万花 丛雨",
+        ),
+    ),
     AnimeCharacter("朝武芳乃", "《千恋＊万花》", "建实神社的巫女姬，性格认真而有责任感。", ("Tomotake Yoshino",)),
     AnimeCharacter("常陆茉子", "《千恋＊万花》", "芳乃的青梅竹马兼护卫，身手敏捷。", ("Hitachi Mako",)),
     AnimeCharacter("蕾娜·列支敦瑙尔", "《千恋＊万花》", "来自海外的少女，活泼直率。", ("レナ・リヒテナウアー", "Lena Liechtenauer")),
@@ -79,6 +92,22 @@ ANIME_CHARACTER_ROSTER = (
     AnimeCharacter("雾雨魔理沙", "《东方Project》", "人类魔法使，擅长强力光束魔法。", ("霧雨魔理沙", "Kirisame Marisa")),
 )
 ANIME_CHARACTER_BY_NAME = {item.name: item for item in ANIME_CHARACTER_ROSTER}
+
+ANIME_CHARACTER_SEARCH_HINTS: dict[str, tuple[str, ...]] = {
+    "丛雨": (
+        "千恋万花 丛雨 绿色头发 女角色",
+        "千恋＊万花 ムラサメ 緑髪",
+        "Senren Banka Murasame green hair",
+    ),
+    "猫猫": (
+        "药屋少女的呢喃 猫猫 角色",
+        "薬屋のひとりごと 猫猫",
+        "The Apothecary Diaries Maomao",
+    ),
+    "雷姆": ("Re Zero Rem", "Re:ゼロ レム"),
+    "拉姆": ("Re Zero Ram", "Re:ゼロ ラム"),
+    "初音未来": ("初音ミク Hatsune Miku",),
+}
 
 
 def anime_character_profile_text(character: AnimeCharacter) -> str:
@@ -235,14 +264,19 @@ def _search_queries(
 ) -> tuple[str, ...]:
     series = character.series.strip("《》 ")
     values = [character.name, *character.aliases, *aliases]
-    queries: list[str] = []
+    queries: list[str] = [
+        f"{character.name} {series}",
+        f'"{character.name}" "{series}"',
+    ]
+    queries.extend(ANIME_CHARACTER_SEARCH_HINTS.get(character.name, ()))
     for value in values:
         value = value.strip()
         if not value:
             continue
+        queries.append(f"{value} {series}")
         queries.append(f'"{value}" "{series}"')
         queries.append(f"{value} {series} character")
-    return tuple(dict.fromkeys(queries))[:12]
+    return tuple(dict.fromkeys(queries))[:16]
 
 
 async def _wikipedia_image(
