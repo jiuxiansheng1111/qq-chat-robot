@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.services.anime_character import ANIME_CHARACTER_ROSTER
+from app.services.character_catalog import character_catalog_menu
 from app.services.ultraman import ULTRAMAN_ROSTER
 
 PluginHandler = Callable[[Any], Awaitable[str | None]]
@@ -87,23 +88,119 @@ class PluginRegistry:
 
 
 registry = PluginRegistry()
+registry.register(PluginSpec("help", ("/help", "/帮助", "help", "帮助"), "/help —— 查看帮助"))
+registry.register(PluginSpec("ai", ("/ai", "/AI"), "/ai <问题> —— AI 对话"))
+registry.register(
+    PluginSpec(
+        "translation",
+        ("/翻译", "/translate"),
+        "/翻译 <内容> —— 翻译成简体中文并给出转写/搜索别名",
+    )
+)
+registry.register(
+    PluginSpec(
+        "music",
+        ("/点歌", "/music"),
+        "/点歌 <歌手/歌名> —— 网易云原唱音乐卡片",
+    )
+)
+registry.register(
+    PluginSpec(
+        "bilibili_video",
+        ("/视频", "/bili", "/bilibili"),
+        "/视频 <关键词> 或 @机器人 播放视频 <关键词> —— B站高相关高播放视频卡片",
+    )
+)
+registry.register(
+    PluginSpec(
+        "memory",
+        ("/记忆开启", "/记忆关闭", "/记忆删除", "/记忆状态"),
+        "/记忆开启|关闭|删除|状态 —— 管理你的短期记忆",
+    )
+)
+registry.register(
+    PluginSpec(
+        "cat",
+        ("/猫", "/cat", "猫图", "随机猫", "随机猫咪", "随机猫图"),
+        "/猫 或 @机器人 随机猫咪 —— 随机猫图",
+    )
+)
+registry.register(
+    PluginSpec(
+        "pig",
+        ("/小猪", "/pig", "猪图", "随机猪", "随机猪猪", "随机小猪"),
+        "/小猪 或 @机器人 随机猪猪 —— 随机真实小猪照片",
+    )
+)
+registry.register(
+    PluginSpec(
+        "nailong",
+        ("/奶龙", "奶龙", "随机奶龙", "来只奶龙", "龙来"),
+        "/奶龙 或 @机器人 随机奶龙 —— 随机奶龙表情包",
+    )
+)
+registry.register(
+    PluginSpec(
+        "ultraman",
+        (
+            "/今日奥特曼",
+            "今日奥特曼",
+            "/我的奥特曼",
+            "我的奥特曼",
+            "/本命奥特曼",
+            "本命奥特曼",
+            "/查看本命奥特曼",
+            "查看本命奥特曼",
+            "/奥特曼图鉴",
+            "奥特曼图鉴",
+            "/特摄角色图鉴",
+            "特摄角色图鉴",
+            "/特摄图鉴",
+            "特摄图鉴",
+        ),
+        "每日抽取、收藏统计、本命奥特曼、完整图鉴与角色资料",
+    )
+)
+registry.register(
+    PluginSpec(
+        "anime_character",
+        (
+            "/随机二次元角色",
+            "随机二次元角色",
+            "/今日二次元角色",
+            "今日二次元角色",
+            "/我的二次元角色",
+            "我的二次元角色",
+            "/查看本命二次元角色",
+            "查看本命二次元角色",
+            "/本命二次元角色",
+            "本命二次元角色",
+            "/二次元角色图鉴",
+            "二次元角色图鉴",
+            "/日漫角色图鉴",
+            "日漫角色图鉴",
+            "/日漫图鉴",
+            "日漫图鉴",
+        ),
+        "随机抽取、收藏统计、本命角色、角色图鉴与角色资料",
+    )
+)
 registry.register(
     PluginSpec(
         "character_catalog",
         (
-            "/图鉴", "图鉴", "/角色图鉴", "角色图鉴",
-            "/日漫与特摄角色图鉴", "日漫与特摄角色图鉴",
-            "/今日奥特曼", "今日奥特曼", "/我的奥特曼", "我的奥特曼",
-            "/本命奥特曼", "本命奥特曼", "/奥特曼图鉴", "奥特曼图鉴",
-            "/特摄角色图鉴", "特摄角色图鉴",
-            "/随机二次元角色", "随机二次元角色",
-            "/今日二次元角色", "今日二次元角色",
-            "/我的二次元角色", "我的二次元角色",
-            "/本命二次元角色", "本命二次元角色",
-            "/二次元角色图鉴", "二次元角色图鉴",
-            "/日漫角色图鉴", "日漫角色图鉴",
+            "/图鉴",
+            "图鉴",
+            "/角色图鉴",
+            "角色图鉴",
+            "/图鉴菜单",
+            "图鉴菜单",
+            "/图鉴总览",
+            "图鉴总览",
+            "/日漫与特摄角色图鉴",
+            "日漫与特摄角色图鉴",
         ),
-        "日漫与特摄角色统一入口；两类收藏与本命统计保持独立",
+        "日漫与特摄角色统一主入口；两类收藏与本命统计保持独立",
     )
 )
 registry.register(
@@ -113,4 +210,11 @@ registry.register(
         "/天气 <城市> —— 实时天气；主接口失败后自动联网 + LLM 兜底",
     )
 )
-
+registry.register(
+    PluginSpec(
+        "group_admin",
+        ("/bot", "/blacklist"),
+        "/bot on|off、/blacklist add|remove QQ号 —— 群管理",
+        admin_only=True,
+    )
+)
