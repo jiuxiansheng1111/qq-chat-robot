@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
-from PIL import Image
+from PIL import Image, ImageStat
 from redis.exceptions import RedisError
 
 from app.api.admin import router as admin_router
@@ -1577,6 +1577,32 @@ def _ultraman_image_cache_path(hero) -> Path:
     return cache_dir / f"{digest}.img"
 
 
+def _ultraman_image_payload_usable(image_file: str) -> bool:
+    """Reject corrupt, tiny, or nearly blank/dark images before cache/send."""
+    if not image_file.startswith("base64://"):
+        return False
+    try:
+        raw = base64.b64decode(image_file.removeprefix("base64://"), validate=True)
+        with Image.open(BytesIO(raw)) as decoded:
+            image = decoded.convert("RGB")
+            width, height = image.size
+            if width < 160 or height < 160 or width * height < 40_000:
+                return False
+            sample = image.copy()
+            sample.thumbnail((256, 256), Image.Resampling.BILINEAR)
+            stats = ImageStat.Stat(sample)
+            mean_luma = sum(stats.mean) / 3
+            channel_spread = max(high - low for low, high in sample.getextrema())
+            entropy = sample.entropy()
+            if entropy < 0.75:
+                return False
+            if mean_luma < 42 and channel_spread < 35 and entropy < 2.2:
+                return False
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 def _load_ultraman_image_cache(hero) -> str | None:
     path = _ultraman_image_cache_path(hero)
     if not path.exists():
@@ -1585,38 +1611,28 @@ def _load_ultraman_image_cache(hero) -> str | None:
         raw = path.read_bytes()
         if not raw:
             return None
-        with Image.open(BytesIO(raw)) as decoded:
-            width, height = decoded.size
-            if width < 160 or height < 160:
-                return None
-        return "base64://" + base64.b64encode(raw).decode()
+        image_file = "base64://" + base64.b64encode(raw).decode()
+        if not _ultraman_image_payload_usable(image_file):
+            logger.warning("discarding unusable Ultraman image cache for %s", hero.name)
+            path.unlink(missing_ok=True)
+            return None
+        return image_file
     except (OSError, ValueError):
         return None
 
 
 def _save_ultraman_image_cache(hero, image_file: str) -> None:
-    if not image_file.startswith("base64://"):
+    if not _ultraman_image_payload_usable(image_file):
+        logger.info("refusing unusable Ultraman image cache for %s", hero.name)
         return
     try:
         raw = base64.b64decode(image_file.removeprefix("base64://"), validate=True)
-        with Image.open(BytesIO(raw)) as decoded:
-            width, height = decoded.size
-            if width < 160 or height < 160:
-                return
         path = _ultraman_image_cache_path(hero)
         tmp = path.with_suffix(".tmp")
         tmp.write_bytes(raw)
         tmp.replace(path)
     except (OSError, ValueError):
         return
-
-
-def _ultraman_placeholder_image(hero) -> str:
-    """Always provide a renderable image even when every remote source is down."""
-    image = Image.new("RGB", (900, 1200), (12, 24, 52))
-    output = BytesIO()
-    image.save(output, format="JPEG", quality=88, optimize=True)
-    return "base64://" + base64.b64encode(output.getvalue()).decode()
 
 
 async def _resolve_ultraman_source(hero, source_name: str, resolver) -> str:
@@ -1627,6 +1643,8 @@ async def _resolve_ultraman_source(hero, source_name: str, resolver) -> str:
         image = result.data
     else:
         raise RuntimeError(f"{source_name} no match")
+    if not _ultraman_image_payload_usable(image):
+        raise RuntimeError(f"{source_name} returned blank/dark/unusable image")
     _save_ultraman_image_cache(hero, image)
     logger.info("Ultraman image resolved from %s for %s", source_name, hero.name)
     return image
@@ -1645,6 +1663,48 @@ def _track_ultraman_prefetch(task: asyncio.Task) -> None:
             return
 
     task.add_done_callback(_consume)
+
+
+async def _llm_ultraman_search_queries(hero, llm) -> tuple[str, ...]:
+    if llm is None:
+        return ()
+    aliases = ultraman_image_aliases(hero)
+    alias_text = "、".join(aliases[:8])
+    try:
+        answer = await llm.ask(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "你只负责生成图片搜索关键词，不回答问题。"
+                        "针对指定奥特曼角色或独立形态给出4条精确搜索词，每行一条；"
+                        "必须保留指定角色或形态的完整名称，优先补充官方日文名、英文名、"
+                        "形态名、円谷/TSUBURAYA、设定图等词。不要输出编号、解释、网址或Markdown。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"目标：{hero.name}\n已知别名：{alias_text or '无'}",
+                },
+            ]
+        )
+    except (LLMError, RuntimeError, ValueError, httpx.HTTPError) as exc:
+        logger.info("LLM Ultraman image-query generation unavailable for %s: %s", hero.name, exc)
+        return ()
+
+    queries: list[str] = []
+    canonical = re.sub(r"\s+", "", hero.name).casefold()
+    for line in answer.splitlines():
+        query = re.sub(r"^[\s\-–—*•·\d.、:：]+", "", line).strip(" \t\"'\x60")
+        if not query:
+            continue
+        if canonical not in re.sub(r"\s+", "", query).casefold():
+            query = f'"{hero.name}" {query}'
+        if query not in queries:
+            queries.append(query[:180])
+        if len(queries) >= 4:
+            break
+    return tuple(queries)
 
 
 async def _delayed_search_engine_first_image(hero, aliases) -> object:
@@ -1750,16 +1810,41 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
             hero.name,
         )
 
-    # Do not cancel the unfinished source tasks: they can still populate the
-    # persistent cache so the next request for the same form becomes instant.
     cached = _load_ultraman_image_cache(hero)
     if cached is not None:
         return cached
-    return _ultraman_placeholder_image(hero)
+
+    llm_queries = await _llm_ultraman_search_queries(hero, llm)
+    if llm_queries:
+        try:
+            async with asyncio.timeout(18.0):
+                result = await search_engine_first_ultraman_image(
+                    hero.name,
+                    aliases,
+                    settings,
+                    extra_queries=llm_queries,
+                )
+            if result is not None and _ultraman_image_payload_usable(result.data):
+                _save_ultraman_image_cache(hero, result.data)
+                logger.info(
+                    "Ultraman image resolved by LLM-assisted web search for %s: %s",
+                    hero.name,
+                    result.label,
+                )
+                return result.data
+        except (TimeoutError, RuntimeError, ValueError, OSError, httpx.HTTPError) as exc:
+            logger.info("LLM-assisted Ultraman image search failed for %s: %s", hero.name, exc)
+
+    cached = _load_ultraman_image_cache(hero)
+    if cached is not None:
+        return cached
+    raise RuntimeError(
+        f"没有找到“{hero.name}”的可显示真实图片；已尝试官方、百科、图片搜索和 LLM 辅助搜索"
+    )
 
 
 def _qq_safe_image_variant(image_file: str) -> str | None:
-    """Convert base64 media to a conservative JPEG for NapCat retry."""
+    """Normalize base64 media to a baseline RGB JPEG before NapCat sees it."""
     if not image_file.startswith("base64://"):
         return None
     try:
@@ -1772,12 +1857,26 @@ def _qq_safe_image_variant(image_file: str) -> str | None:
             image = source.convert("RGB")
             image.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
             output = BytesIO()
-            image.save(output, format="JPEG", quality=82, optimize=True)
+            image.save(
+                output,
+                format="JPEG",
+                quality=84,
+                optimize=False,
+                progressive=False,
+                subsampling=2,
+            )
             payload = output.getvalue()
             if len(payload) > 2 * 1024 * 1024:
                 image.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
                 output = BytesIO()
-                image.save(output, format="JPEG", quality=72, optimize=True)
+                image.save(
+                    output,
+                    format="JPEG",
+                    quality=74,
+                    optimize=False,
+                    progressive=False,
+                    subsampling=2,
+                )
                 payload = output.getvalue()
     except (ValueError, OSError):
         return None
@@ -1849,13 +1948,14 @@ async def send_group_image(group_id: str, image_file: str, caption: str = "") ->
         else {}
     )
 
-    candidates = [image_file]
     normalized = _qq_safe_image_variant(image_file)
-    if normalized and normalized != image_file:
+    candidates: list[str] = []
+    if normalized:
         candidates.append(normalized)
         file_uri = _persist_outgoing_image(normalized)
         if file_uri:
             candidates.append(file_uri)
+    candidates.append(image_file)
 
     last_error: Exception | None = None
     for index, candidate in enumerate(dict.fromkeys(candidates), start=1):
