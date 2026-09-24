@@ -450,6 +450,154 @@ async def _vndb_image(
     return None
 
 
+async def _bangumi_image(
+    character: AnimeCharacter,
+    aliases: tuple[str, ...],
+    settings: Settings,
+) -> str | None:
+    """Resolve character art through Bangumi's public character search API."""
+    queries = tuple(
+        dict.fromkeys(
+            value
+            for value in (
+                character.name,
+                *character.aliases,
+                *aliases,
+            )
+            if value
+        )
+    )[:6]
+    series_terms = _series_match_terms(character)
+    timeout = max(3.0, min(float(settings.media_timeout_seconds), 7.0))
+    headers = {
+        "User-Agent": "qq-chatrobot/0.1 anime-character-image",
+        "Content-Type": "application/json",
+    }
+
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        headers=headers,
+    ) as client:
+        for query in queries:
+            try:
+                response = await client.post(
+                    "https://api.bgm.tv/v0/search/characters",
+                    params={"limit": 10, "offset": 0},
+                    json={
+                        "keyword": query,
+                        "filter": {"nsfw": False},
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+            except (httpx.HTTPError, ValueError):
+                continue
+
+            results = payload.get("data", [])
+            if not isinstance(results, list):
+                continue
+            for item in results:
+                if not isinstance(item, dict):
+                    continue
+                name_values = [
+                    str(item.get("name") or ""),
+                    str(item.get("name_cn") or ""),
+                ]
+                infobox = item.get("infobox") or []
+                if isinstance(infobox, list):
+                    for field in infobox:
+                        if not isinstance(field, dict):
+                            continue
+                        if str(field.get("key") or "") not in {
+                            "别名",
+                            "简体中文名",
+                            "日文名",
+                            "罗马字",
+                        }:
+                            continue
+                        value = field.get("value")
+                        if isinstance(value, list):
+                            for alias_item in value:
+                                if isinstance(alias_item, dict):
+                                    name_values.extend(
+                                        str(alias_item.get(key) or "")
+                                        for key in ("v", "k")
+                                    )
+                                else:
+                                    name_values.append(str(alias_item))
+                        elif value:
+                            name_values.append(str(value))
+
+                if not _candidate_name_matches(
+                    character,
+                    aliases,
+                    name_values,
+                ):
+                    continue
+
+                character_id = item.get("id")
+                if character_id:
+                    try:
+                        subject_response = await client.get(
+                            f"https://api.bgm.tv/v0/characters/{character_id}/subjects"
+                        )
+                        subject_response.raise_for_status()
+                        subjects = subject_response.json()
+                    except (httpx.HTTPError, ValueError):
+                        subjects = []
+                    if isinstance(subjects, list) and subjects:
+                        subject_values: list[str] = []
+                        for subject in subjects:
+                            if not isinstance(subject, dict):
+                                continue
+                            subject_values.extend(
+                                (
+                                    str(subject.get("name") or ""),
+                                    str(subject.get("name_cn") or ""),
+                                )
+                            )
+                        normalized_subjects = _normalize(" ".join(subject_values))
+                        if (
+                            normalized_subjects
+                            and not any(
+                                term in normalized_subjects
+                                for term in series_terms
+                            )
+                        ):
+                            continue
+
+                images = item.get("images") or {}
+                image_url = ""
+                if isinstance(images, dict):
+                    image_url = str(
+                        images.get("large")
+                        or images.get("medium")
+                        or images.get("grid")
+                        or images.get("small")
+                        or ""
+                    )
+                if not image_url:
+                    image_url = str(item.get("img") or "")
+                if not image_url.startswith(("https://", "http://")):
+                    continue
+                try:
+                    return await _download_image(
+                        client,
+                        image_url,
+                        "https://bgm.tv/",
+                        settings,
+                    )
+                except (
+                    httpx.HTTPError,
+                    RuntimeError,
+                    OSError,
+                    ValueError,
+                ):
+                    continue
+    return None
+
+
 async def _anilist_image(
     character: AnimeCharacter,
     aliases: tuple[str, ...],
@@ -1371,6 +1519,7 @@ async def resolve_anime_character_image(
     aliases = tuple(character.aliases)
     source_specs = (
         ("VNDB", _vndb_image),
+        ("Bangumi", _bangumi_image),
         ("AniList", _anilist_image),
         ("角色/官方网页", _web_page_character_image),
         ("Wikipedia", _wikipedia_image),
