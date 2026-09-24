@@ -416,3 +416,60 @@ async def test_bangumi_uses_dedicated_character_image_endpoint_when_payload_has_
     with Image.open(BytesIO(decoded)) as image:
         assert image.width == 250
         assert image.height == 300
+
+
+
+@pytest.mark.asyncio
+async def test_moegirl_pageimages_resolves_hange(monkeypatch):
+    character = anime.AnimeCharacter(
+        "韩吉·佐耶",
+        "《进击的巨人》",
+        "调查兵团成员。",
+        ("ハンジ・ゾエ", "Hange Zoe"),
+    )
+    raw = jpeg_data(420, 640)
+
+    async def handler(request: httpx.Request):
+        if request.url.path.endswith("/api.php"):
+            return httpx.Response(
+                200,
+                json={
+                    "query": {
+                        "pages": {
+                            "123": {
+                                "pageid": 123,
+                                "title": "韩吉·佐耶",
+                                "original": {
+                                    "source": "https://commons.example/hange.jpg"
+                                },
+                            }
+                        }
+                    }
+                },
+            )
+        if request.url.host == "commons.example":
+            return httpx.Response(
+                200,
+                headers={"content-type": "image/jpeg"},
+                content=raw,
+            )
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mocked_client(**kwargs):
+        kwargs["transport"] = transport
+        return original_client(**kwargs)
+
+    monkeypatch.setattr(anime.httpx, "AsyncClient", mocked_client)
+    result = await anime._moegirl_image(
+        character,
+        character.aliases,
+        Settings(_env_file=None),
+    )
+    assert result is not None
+    decoded = base64.b64decode(result.removeprefix("base64://"))
+    with Image.open(BytesIO(decoded)) as image:
+        assert image.width == 420
+        assert image.height == 640

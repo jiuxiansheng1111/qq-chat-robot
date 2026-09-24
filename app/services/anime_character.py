@@ -988,6 +988,167 @@ class _CharacterPageImageParser(HTMLParser):
             self._title_parts.append(data)
 
 
+async def _moegirl_image(
+    character: AnimeCharacter,
+    aliases: tuple[str, ...],
+    settings: Settings,
+) -> str | None:
+    """Resolve a lead character image from Moegirlpedia and its readable mirrors.
+
+    The MediaWiki pageimages API is preferred because it returns the page's lead
+    image directly. HTML parsing is retained as a fallback for mirrors that do
+    not expose the API endpoint.
+    """
+    timeout = max(4.0, min(float(settings.media_timeout_seconds), 10.0))
+    headers = {
+        "User-Agent": "Mozilla/5.0 qq-chatrobot/0.1 anime-character-image",
+        "Accept-Language": "zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7",
+    }
+    domains = (
+        "https://zh.moegirl.org.cn",
+        "https://moegirl.icu",
+        "https://moegirl.uk",
+    )
+    titles = tuple(
+        dict.fromkeys(
+            value.strip()
+            for value in (character.name, *character.aliases, *aliases)
+            if value and value.strip()
+        )
+    )[:6]
+
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        headers=headers,
+    ) as client:
+        for domain in domains:
+            for title in titles:
+                try:
+                    response = await client.get(
+                        f"{domain}/api.php",
+                        params={
+                            "action": "query",
+                            "format": "json",
+                            "redirects": "1",
+                            "prop": "pageimages",
+                            "piprop": "original|thumbnail|name",
+                            "pithumbsize": "1200",
+                            "titles": title,
+                        },
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                except (httpx.HTTPError, ValueError):
+                    payload = {}
+
+                pages = (
+                    payload.get("query", {}).get("pages", {})
+                    if isinstance(payload, dict)
+                    else {}
+                )
+                if isinstance(pages, dict):
+                    for page in pages.values():
+                        if not isinstance(page, dict) or page.get("missing") is not None:
+                            continue
+                        page_title = str(page.get("title") or "")
+                        if _candidate_score(
+                            character,
+                            aliases,
+                            f"{page_title} {title} {character.series}",
+                        ) <= 0:
+                            continue
+                        original = page.get("original") or {}
+                        thumbnail = page.get("thumbnail") or {}
+                        image_urls = []
+                        if isinstance(original, dict):
+                            image_urls.append(str(original.get("source") or ""))
+                        if isinstance(thumbnail, dict):
+                            image_urls.append(str(thumbnail.get("source") or ""))
+                        for image_url in dict.fromkeys(
+                            value.strip() for value in image_urls if value and value.strip()
+                        ):
+                            if not image_url.startswith(("https://", "http://")):
+                                continue
+                            try:
+                                return await _download_image(
+                                    client,
+                                    image_url,
+                                    f"{domain}/{quote(page_title or title)}",
+                                    settings,
+                                )
+                            except (
+                                httpx.HTTPError,
+                                RuntimeError,
+                                OSError,
+                                ValueError,
+                            ):
+                                continue
+
+                # HTML fallback: use the canonical page and accept only images
+                # that are attached to a page whose title clearly matches.
+                page_url = f"{domain}/{quote(title)}"
+                try:
+                    response = await client.get(page_url)
+                    response.raise_for_status()
+                    parser = _CharacterPageImageParser()
+                    parser.feed(response.text)
+                except (httpx.HTTPError, ValueError):
+                    continue
+
+                page_score = _candidate_score(
+                    character,
+                    aliases,
+                    f"{parser.title} {response.url} {title} {character.series}",
+                )
+                if page_score <= 0:
+                    continue
+
+                candidates: list[tuple[int, str]] = []
+                for source, label in parser.images:
+                    image_url = urljoin(str(response.url), html.unescape(source))
+                    score = _candidate_score(
+                        character,
+                        aliases,
+                        f"{label} {image_url}",
+                    )
+                    if score > 0:
+                        candidates.append((score + 20, image_url))
+                if parser.og_image:
+                    og_url = urljoin(
+                        str(response.url),
+                        html.unescape(parser.og_image),
+                    )
+                    if not any(
+                        token in og_url.casefold()
+                        for token in ("logo", "favicon", "siteicon", "wordmark")
+                    ):
+                        candidates.append((page_score, og_url))
+
+                for _, image_url in sorted(
+                    candidates,
+                    key=lambda item: item[0],
+                    reverse=True,
+                ):
+                    if not image_url.startswith(("https://", "http://")):
+                        continue
+                    try:
+                        return await _download_image(
+                            client,
+                            image_url,
+                            str(response.url),
+                            settings,
+                        )
+                    except (
+                        httpx.HTTPError,
+                        RuntimeError,
+                        OSError,
+                        ValueError,
+                    ):
+                        continue
+    return None
+
+
 async def _web_page_character_image(
     character: AnimeCharacter,
     aliases: tuple[str, ...],
@@ -1637,6 +1798,7 @@ async def resolve_anime_character_image(
         ("VNDB", _vndb_image),
         ("Bangumi", _bangumi_image),
         ("AniList", _anilist_image),
+        ("萌娘百科", _moegirl_image),
         ("角色/官方网页", _web_page_character_image),
         ("Wikipedia", _wikipedia_image),
         ("百度图片", _baidu_image),
