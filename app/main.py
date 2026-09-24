@@ -1980,7 +1980,8 @@ async def resolve_ultraman_card_image(hero, llm=None) -> ImageResolution:
         )
     for source_name, resolver, require_positive_review in fallback_factories:
         try:
-            async with asyncio.timeout(14.0):
+            fallback_timeout = 35.0 if source_name == "萌娘百科" else 14.0
+            async with asyncio.timeout(fallback_timeout):
                 result = await resolver()
             candidate = coerce_image_resolution(
                 result,

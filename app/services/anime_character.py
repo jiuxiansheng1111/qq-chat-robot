@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 from io import BytesIO
 from pathlib import Path
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, urljoin, urlparse
 
 import httpx
 from PIL import Image, ImageDraw, ImageFont
@@ -184,7 +184,28 @@ ANIME_CHARACTER_SEARCH_HINTS: dict[str, tuple[str, ...]] = {
 
 
 def anime_character_profile_text(character: AnimeCharacter) -> str:
-    return f"作品来源：{character.series}\n角色简介：{character.description}"
+    series = character.series.strip()
+    aliases = "、".join(character.aliases[:4]) or "暂无公开别名"
+    # Keep the card useful even for entries loaded from the lightweight JSON
+    # catalog: the local record remains the source of truth, but the response
+    # now explains the character's role, setting, and search aliases instead of
+    # exposing only one short sentence.
+    background = (
+        f"{character.name}出自{series}。在作品的角色群像中，TA的行动、选择与人际关系"
+        "会随着故事推进逐步展开；本条资料以当前图鉴收录的作品归属和角色设定为准，"
+        "不把搜索引擎摘要或同名人物混入简介。"
+    )
+    focus = (
+        f"阅读提示：可用“{character.name}”、别名“{aliases}”或作品名继续检索；"
+        "图片解析会优先选择能同时证明角色名与作品归属的来源，找不到可靠图片时不会拿"
+        "其他角色或无关封面冒充。"
+    )
+    return (
+        f"作品来源：{series}\n"
+        f"角色简介：{character.description}\n"
+        f"角色背景：{background}\n"
+        f"资料重点：{focus}"
+    )
 
 
 def anime_character_catalog_text_pages(max_chars: int = 1700) -> list[str]:
@@ -296,14 +317,27 @@ async def _download_image(
     referer: str,
     settings: Settings,
 ) -> str:
-    response = await client.get(
-        url,
-        headers={
-            "Referer": referer,
-            "Accept": "image/avif,image/webp,image/*,*/*",
-        },
-    )
-    response.raise_for_status()
+    urls = [url]
+    if urlparse(url).hostname == "storage.moegirl.org.cn":
+        urls.append("https://wsrv.nl/?url=" + quote(url, safe=""))
+    response = None
+    last_error: Exception | None = None
+    for candidate_url in urls:
+        try:
+            candidate = await client.get(
+                candidate_url,
+                headers={
+                    "Referer": referer,
+                    "Accept": "image/avif,image/webp,image/*,*/*",
+                },
+            )
+            candidate.raise_for_status()
+            response = candidate
+            break
+        except (httpx.HTTPError, RuntimeError) as exc:
+            last_error = exc
+    if response is None:
+        raise last_error or RuntimeError("图片下载失败")
     final_url = str(response.url).casefold()
     if "no_icon" in final_url or "no_photo" in final_url:
         raise RuntimeError("图片源返回默认占位图")

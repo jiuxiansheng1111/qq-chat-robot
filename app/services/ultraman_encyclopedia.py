@@ -515,11 +515,26 @@ async def _download_verified_image(
     page_url: str,
     settings: Settings,
 ) -> str:
-    response = await client.get(
-        image_url,
-        headers={"Referer": page_url, "Accept": "image/avif,image/webp,image/*,*/*"},
-    )
-    response.raise_for_status()
+    urls = [image_url]
+    if (urlparse(image_url).hostname or "").casefold() == "storage.moegirl.org.cn":
+        # The storage CDN can fail TLS from some domestic hosts. wsrv.nl is
+        # used only as a transport mirror; attribution remains the Moegirl page.
+        urls.append("https://wsrv.nl/?url=" + quote(image_url, safe=""))
+    response = None
+    last_error: Exception | None = None
+    for candidate_url in urls:
+        try:
+            candidate = await client.get(
+                candidate_url,
+                headers={"Referer": page_url, "Accept": "image/avif,image/webp,image/*,*/*"},
+            )
+            candidate.raise_for_status()
+            response = candidate
+            break
+        except (httpx.HTTPError, RuntimeError) as exc:
+            last_error = exc
+    if response is None:
+        raise last_error or RuntimeError("百科图片下载失败")
     content_type = response.headers.get("content-type", "").casefold()
     if not content_type.startswith("image/"):
         raise RuntimeError("百科图片响应不是图片")
@@ -578,7 +593,7 @@ async def moegirl_ultraman_image(
         "https://moegirl.icu",
         "https://moegirl.uk",
     )
-    timeout = max(4.0, min(float(settings.media_timeout_seconds), 12.0))
+    timeout = max(8.0, min(float(settings.media_timeout_seconds), 30.0))
     headers = {
         "User-Agent": ENCYCLOPEDIA_USER_AGENT,
         "Accept-Language": "zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7",
@@ -619,9 +634,13 @@ async def moegirl_ultraman_image(
                     if not isinstance(page, dict) or page.get("missing") is not None:
                         continue
                     page_title = str(page.get("title") or query).strip()
-                    if not _matches_specific(f"{page_title} {query}", terms):
+                    # The exact-title endpoint must prove the requested form
+                    # from the returned page title itself; the query string is
+                    # user input and cannot be identity evidence.
+                    if not _matches_specific(page_title, terms):
                         continue
-                    page_titles.append(page_title)
+                    if _matches_specific(page_title, terms):
+                        page_titles.append(page_title)
 
                     image_urls = []
                     for key in ("original", "thumbnail"):
@@ -650,7 +669,7 @@ async def moegirl_ultraman_image(
                             continue
                         return EncyclopediaImage(
                             data=data_b64,
-                            source="萌娘百科角色页",
+                            source="萌娘百科",
                             page_url=page_url,
                             label=page_title or query,
                         )
@@ -687,11 +706,10 @@ async def moegirl_ultraman_image(
                     page_title = str(page.get("title") or "").strip()
                     if not page_title:
                         continue
-                    page_titles.append(page_title)
-
                     # Prefer a direct search-result lead image when the result
                     # itself clearly names the requested hero/form.
-                    if _matches_specific(f"{page_title} {query}", terms):
+                    if _matches_specific(page_title, terms):
+                        page_titles.append(page_title)
                         image_urls = []
                         for key in ("original", "thumbnail"):
                             image = page.get(key) or {}
@@ -2011,14 +2029,15 @@ async def encyclopedia_ultraman_image(
     aliases: tuple[str, ...],
     settings: Settings,
 ) -> EncyclopediaImage:
-    # Prefer Moegirlpedia: exact character page -> internal search ->
-    # character/series page image metadata. Other encyclopedias remain fallback.
-    moegirl = await moegirl_ultraman_image(name, aliases, settings)
-    if moegirl is not None:
-        return moegirl
     baidu = await baidu_baike_ultraman_image(name, aliases, settings)
     if baidu is not None:
         return baidu
+    # Moegirlpedia: exact character page -> internal search ->
+    # character/series page image metadata. Use it after Baidu so existing
+    # encyclopedia callers keep their established source order.
+    moegirl = await moegirl_ultraman_image(name, aliases, settings)
+    if moegirl is not None:
+        return moegirl
     wikipedia = await wikipedia_ultraman_image(name, aliases, settings)
     if wikipedia is not None:
         return wikipedia
