@@ -124,6 +124,8 @@ async def test_resolver_races_sources_and_uses_first_image_fallback(
     async def first(*args, **kwargs):
         return expected
 
+    monkeypatch.setattr(anime, "_vndb_image", none)
+    monkeypatch.setattr(anime, "_anilist_image", none)
     monkeypatch.setattr(anime, "_web_page_character_image", none)
     monkeypatch.setattr(anime, "_wikipedia_image", none)
     monkeypatch.setattr(anime, "_baidu_image", none)
@@ -161,6 +163,8 @@ async def test_resolver_persists_cache_and_skips_network_next_time(
     async def none(*args, **kwargs):
         return None
 
+    monkeypatch.setattr(anime, "_vndb_image", none)
+    monkeypatch.setattr(anime, "_anilist_image", none)
     monkeypatch.setattr(anime, "_web_page_character_image", strict_success)
     monkeypatch.setattr(anime, "_wikipedia_image", none)
     monkeypatch.setattr(anime, "_baidu_image", none)
@@ -193,6 +197,8 @@ async def test_resolver_hard_deadline_prevents_long_hang(monkeypatch, tmp_path):
         await __import__("asyncio").sleep(1)
 
     for name in (
+        "_vndb_image",
+        "_anilist_image",
         "_web_page_character_image",
         "_wikipedia_image",
         "_baidu_image",
@@ -209,3 +215,62 @@ async def test_resolver_hard_deadline_prevents_long_hang(monkeypatch, tmp_path):
     )
     with pytest.raises(RuntimeError, match="没有找到"):
         await anime.resolve_anime_character_image(character, settings)
+
+
+
+@pytest.mark.asyncio
+async def test_vndb_resolves_murasame_character_art(monkeypatch):
+    character = anime.ANIME_CHARACTER_BY_NAME["丛雨"]
+    raw = jpeg_data(256, 300)
+
+    async def handler(request: httpx.Request):
+        if request.url.host == "api.vndb.org":
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "id": "c-test",
+                            "name": "Murasame",
+                            "original": "ムラサメ",
+                            "aliases": ["丛雨"],
+                            "image": {
+                                "url": "https://img.example/murasame.jpg",
+                                "dims": [256, 300],
+                            },
+                            "vns": [
+                                {
+                                    "title": "Senren * Banka",
+                                    "alttitle": "千恋＊万花",
+                                }
+                            ],
+                        }
+                    ]
+                },
+            )
+        if request.url.host == "img.example":
+            return httpx.Response(
+                200,
+                headers={"content-type": "image/jpeg"},
+                content=raw,
+            )
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mocked_client(**kwargs):
+        kwargs["transport"] = transport
+        return original_client(**kwargs)
+
+    monkeypatch.setattr(anime.httpx, "AsyncClient", mocked_client)
+    result = await anime._vndb_image(
+        character,
+        character.aliases,
+        Settings(_env_file=None),
+    )
+    assert result is not None
+    decoded = base64.b64decode(result.removeprefix("base64://"))
+    with Image.open(BytesIO(decoded)) as image:
+        assert image.width == 256
+        assert image.height == 300
