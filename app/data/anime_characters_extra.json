@@ -3,19 +3,31 @@
     "name": "中之岛妙",
     "series": "《ぶらばん！》",
     "description": "《ぶらばん！》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "中ノ島妙",
+      "Nakanojima Tae",
+      "Tae Nakanojima"
+    ]
   },
   {
     "name": "海老原美奈濑",
     "series": "《ぶらばん！》",
     "description": "《ぶらばん！》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "海老原みなせ",
+      "Ebihara Minase",
+      "Minase Ebihara"
+    ]
   },
   {
     "name": "悠",
     "series": "《E×E》",
     "description": "《E×E》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "悠",
+      "Yuu",
+      "Yu"
+    ]
   },
   {
     "name": "夏希",
@@ -63,7 +75,11 @@
     "name": "七条沙沙罗",
     "series": "《夏空カナタ》",
     "description": "《夏空カナタ》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "七条沙々羅",
+      "Shichijou Sasara",
+      "Shichijo Sasara"
+    ]
   },
   {
     "name": "三好双叶",
@@ -75,7 +91,10 @@
     "name": "美穗",
     "series": "《夏空カナタ》",
     "description": "《夏空カナタ》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "ミホ",
+      "Miho"
+    ]
   },
   {
     "name": "卯花之佐久夜姬",
@@ -141,13 +160,20 @@
     "name": "艾莉娜·奥列戈芙娜·阿文",
     "series": "《DRACU-RIOT!》",
     "description": "《DRACU-RIOT!》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "エリナ・オレゴヴナ・アヴェーン",
+      "Elina Olegovna Oven",
+      "Элина Олеговна Овен"
+    ]
   },
   {
     "name": "夏莉·沃里克",
     "series": "《天色＊アイルノーツ》",
     "description": "《天色＊アイルノーツ》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "シャーリィ・ウォリック",
+      "Shirley Warwick"
+    ]
   },
   {
     "name": "天雾夕音",
@@ -165,25 +191,38 @@
     "name": "真咲·盖亚尔",
     "series": "《天色＊アイルノーツ》",
     "description": "《天色＊アイルノーツ》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "真咲・ガイヤール",
+      "Masaki Gaillard"
+    ]
   },
   {
     "name": "椎叶紬",
     "series": "《魔女的夜宴》",
     "description": "《魔女的夜宴》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "椎葉紬",
+      "Tsumugi Shiiba"
+    ]
   },
   {
     "name": "户隐憧子",
     "series": "《魔女的夜宴》",
     "description": "《魔女的夜宴》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "戸隠憧子",
+      "Touko Togakushi",
+      "Toko Togakushi"
+    ]
   },
   {
     "name": "假屋和奏",
     "series": "《魔女的夜宴》",
     "description": "《魔女的夜宴》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "仮屋和奏",
+      "Wakana Kariya"
+    ]
   },
   {
     "name": "鞍马小春",
@@ -213,7 +252,10 @@
     "name": "式部茉优",
     "series": "《RIDDLE JOKER》",
     "description": "《RIDDLE JOKER》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "式部茉優",
+      "Mayu Shikibe"
+    ]
   },
   {
     "name": "二条院羽月",
@@ -249,7 +291,10 @@
     "name": "伊势笃纪",
     "series": "《RIDDLE JOKER》",
     "description": "《RIDDLE JOKER》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "伊勢篤紀",
+      "Atsunori Ise"
+    ]
   },
   {
     "name": "明月栞那",
@@ -279,7 +324,10 @@
     "name": "汐山凉音",
     "series": "《喫茶ステラと死神の蝶》",
     "description": "《喫茶ステラと死神の蝶》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "汐山涼音",
+      "Suzune Shioyama"
+    ]
   },
   {
     "name": "白雪乃爱",
@@ -303,13 +351,19 @@
     "name": "星河辉耶",
     "series": "《天使☆騒々 RE-BOOT!》",
     "description": "《天使☆騒々 RE-BOOT!》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "星河かぐ耶",
+      "Kaguya Hoshikawa"
+    ]
   },
   {
     "name": "高楯欧莉叶",
     "series": "《天使☆騒々 RE-BOOT!》",
     "description": "《天使☆騒々 RE-BOOT!》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "高楯オリエ",
+      "Orie Takadate"
+    ]
   },
   {
     "name": "百里风实花",
@@ -417,7 +471,10 @@
     "name": "加菲尔",
     "series": "《Re:从零开始的异世界生活》",
     "description": "《Re:从零开始的异世界生活》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "ガーフィール・ティンゼル",
+      "Garfiel Tinsel"
+    ]
   },
   {
     "name": "艾姬多娜",
@@ -501,7 +558,11 @@
     "name": "PA小姐",
     "series": "《孤独摇滚！》",
     "description": "《孤独摇滚！》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "PAさん",
+      "PA-san",
+      "PA San"
+    ]
   },
   {
     "name": "胡桃",
@@ -597,7 +658,10 @@
     "name": "比企谷八幡",
     "series": "《我的青春恋爱物语果然有问题。》",
     "description": "《我的青春恋爱物语果然有问题。》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "比企谷八幡",
+      "Hachiman Hikigaya"
+    ]
   },
   {
     "name": "一色彩羽",
@@ -639,7 +703,11 @@
     "name": "泽村·斯潘塞·英梨梨",
     "series": "《路人女主的养成方法》",
     "description": "《路人女主的养成方法》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "澤村・スペンサー・英梨々",
+      "沢村・スペンサー・英梨々",
+      "Eriri Spencer Sawamura"
+    ]
   },
   {
     "name": "波岛出海",
@@ -753,19 +821,28 @@
     "name": "洛伊德·福杰",
     "series": "《间谍过家家》",
     "description": "《间谍过家家》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "ロイド・フォージャー",
+      "Loid Forger"
+    ]
   },
   {
     "name": "达米安·德斯蒙德",
     "series": "《间谍过家家》",
     "description": "《间谍过家家》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "ダミアン・デズモンド",
+      "Damian Desmond"
+    ]
   },
   {
     "name": "贝姬·布莱克贝尔",
     "series": "《间谍过家家》",
     "description": "《间谍过家家》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "ベッキー・ブラックベル",
+      "Becky Blackbell"
+    ]
   },
   {
     "name": "尤里·布莱尔",
@@ -795,7 +872,10 @@
     "name": "欣梅尔",
     "series": "《葬送的芙莉莲》",
     "description": "《葬送的芙莉莲》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "ヒンメル",
+      "Himmel"
+    ]
   },
   {
     "name": "海塔",
@@ -825,7 +905,10 @@
     "name": "拉欧芬",
     "series": "《葬送的芙莉莲》",
     "description": "《葬送的芙莉莲》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "ラオフェン",
+      "Laufen"
+    ]
   },
   {
     "name": "邓肯",
@@ -957,7 +1040,10 @@
     "name": "红美铃",
     "series": "《东方Project》",
     "description": "《东方Project》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "紅美鈴",
+      "Hong Meiling"
+    ]
   },
   {
     "name": "帕秋莉·诺蕾姬",
@@ -975,7 +1061,10 @@
     "name": "芙兰朵露·斯卡蕾特",
     "series": "《东方Project》",
     "description": "《东方Project》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "フランドール・スカーレット",
+      "Flandre Scarlet"
+    ]
   },
   {
     "name": "魂魄妖梦",
@@ -1005,7 +1094,11 @@
     "name": "橙",
     "series": "《东方Project》",
     "description": "《东方Project》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "橙",
+      "Chen",
+      "Chen Touhou"
+    ]
   },
   {
     "name": "东风谷早苗",
@@ -1371,7 +1464,11 @@
     "name": "由依",
     "series": "《Angel Beats!》",
     "description": "《Angel Beats!》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "ユイ",
+      "Yui",
+      "Yui Angel Beats"
+    ]
   },
   {
     "name": "直井文人",
@@ -1455,7 +1552,10 @@
     "name": "赤木律子",
     "series": "《EVA》",
     "description": "《EVA》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "赤木リツコ",
+      "Ritsuko Akagi"
+    ]
   },
   {
     "name": "艾伦·耶格尔",
@@ -1473,7 +1573,10 @@
     "name": "阿尔敏·阿诺德",
     "series": "《进击的巨人》",
     "description": "《进击的巨人》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "アルミン・アルレルト",
+      "Armin Arlert"
+    ]
   },
   {
     "name": "利威尔",
@@ -1485,13 +1588,20 @@
     "name": "韩吉·佐耶",
     "series": "《进击的巨人》",
     "description": "《进击的巨人》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "ハンジ・ゾエ",
+      "Hange Zoë",
+      "Hange Zoe"
+    ]
   },
   {
     "name": "埃尔文·史密斯",
     "series": "《进击的巨人》",
     "description": "《进击的巨人》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "エルヴィン・スミス",
+      "Erwin Smith"
+    ]
   },
   {
     "name": "莱纳·布朗",
@@ -1503,13 +1613,19 @@
     "name": "阿尼·利昂纳德",
     "series": "《进击的巨人》",
     "description": "《进击的巨人》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "アニ・レオンハート",
+      "Annie Leonhart"
+    ]
   },
   {
     "name": "希斯特利亚·雷斯",
     "series": "《进击的巨人》",
     "description": "《进击的巨人》中的主要或代表性角色。",
-    "aliases": []
+    "aliases": [
+      "ヒストリア・レイス",
+      "Historia Reiss"
+    ]
   },
   {
     "name": "虎杖悠仁",
