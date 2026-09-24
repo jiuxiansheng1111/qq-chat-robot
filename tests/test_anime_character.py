@@ -342,3 +342,77 @@ async def test_bangumi_resolves_chinese_character_art(monkeypatch):
     with Image.open(BytesIO(decoded)) as image:
         assert image.width == 300
         assert image.height == 420
+
+
+
+def test_anime_catalog_renders_as_single_jpeg():
+    rendered = anime.render_anime_character_catalog()
+    assert rendered.startswith("base64://")
+    raw = base64.b64decode(rendered.removeprefix("base64://"))
+    with Image.open(BytesIO(raw)) as image:
+        assert image.format == "JPEG"
+        assert image.width >= 1600
+        assert image.height >= 2000
+
+
+@pytest.mark.asyncio
+async def test_bangumi_uses_dedicated_character_image_endpoint_when_payload_has_no_image(
+    monkeypatch,
+):
+    character = anime.ANIME_CHARACTER_BY_NAME["丛雨"]
+    raw = jpeg_data(250, 300)
+
+    async def handler(request: httpx.Request):
+        if request.url.host == "api.bgm.tv" and request.url.path.endswith(
+            "/v0/search/characters"
+        ):
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": 456,
+                            "name": "ムラサメ",
+                            "images": None,
+                            "infobox": [
+                                {"key": "别名", "value": [{"k": "中文名", "v": "丛雨"}]}
+                            ],
+                        }
+                    ]
+                },
+            )
+        if request.url.host == "api.bgm.tv" and request.url.path.endswith(
+            "/v0/characters/456/subjects"
+        ):
+            return httpx.Response(
+                200,
+                json=[{"name": "千恋＊万花", "name_cn": "千恋＊万花"}],
+            )
+        if request.url.host == "api.bgm.tv" and request.url.path.endswith(
+            "/v0/characters/456/image"
+        ):
+            return httpx.Response(
+                200,
+                headers={"content-type": "image/jpeg"},
+                content=raw,
+            )
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mocked_client(**kwargs):
+        kwargs["transport"] = transport
+        return original_client(**kwargs)
+
+    monkeypatch.setattr(anime.httpx, "AsyncClient", mocked_client)
+    result = await anime._bangumi_image(
+        character,
+        character.aliases,
+        Settings(_env_file=None),
+    )
+    assert result is not None
+    decoded = base64.b64decode(result.removeprefix("base64://"))
+    with Image.open(BytesIO(decoded)) as image:
+        assert image.width == 250
+        assert image.height == 300

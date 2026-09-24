@@ -53,6 +53,7 @@ from app.services.anime_character import (
     ANIME_CHARACTER_ROSTER,
     anime_character_catalog_text_pages,
     anime_character_profile_text,
+    render_anime_character_catalog,
     resolve_anime_character_image,
     resolve_anime_character_query,
 )
@@ -2849,8 +2850,14 @@ async def onebot_webhook(
                 f"本命二次元角色：{favorite}{source}（出现 {favorite_count} 次）",
             )
     elif bot_mentioned(event) and text in ANIME_CHARACTER_CATALOG_COMMANDS:
-        for page in anime_character_catalog_text_pages():
-            await send_group_message(group_id, page)
+        try:
+            await send_group_image(group_id, render_anime_character_catalog())
+        except (RuntimeError, ValueError, OSError, httpx.HTTPError) as exc:
+            logger.warning("anime character catalog image failed: %s", exc)
+            # Rare fallback only: if image delivery itself is unavailable, keep
+            # the old text pages so the command still works.
+            for page in anime_character_catalog_text_pages():
+                await send_group_message(group_id, page)
     elif bot_mentioned(event) and (anime_character := resolve_anime_character_query(text)):
         request.app.state.recent_anime_character_queries[(group_id, user_id)] = anime_character.name
         caption = (

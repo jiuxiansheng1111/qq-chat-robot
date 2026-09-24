@@ -3,6 +3,7 @@ import base64
 import hashlib
 import html
 import json
+import math
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -12,7 +13,7 @@ from pathlib import Path
 from urllib.parse import quote, urljoin
 
 import httpx
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 from app.config import Settings
 from app.llm.providers import LLMError
@@ -199,6 +200,72 @@ def anime_character_catalog_text_pages(max_chars: int = 1700) -> list[str]:
     return pages
 
 
+ANIME_CATALOG_FONT_CANDIDATES = (
+    "C:/Windows/Fonts/msyh.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "DejaVuSans.ttf",
+)
+
+
+def _load_catalog_font(size: int):
+    for candidate in ANIME_CATALOG_FONT_CANDIDATES:
+        try:
+            return ImageFont.truetype(candidate, size)
+        except OSError:
+            continue
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def render_anime_character_catalog() -> str:
+    """Render the full character roster as one JPEG to avoid flooding QQ."""
+    columns = 4
+    rows = math.ceil(len(ANIME_CHARACTER_ROSTER) / columns)
+    width = 2200
+    header_height = 180
+    row_height = 44
+    footer_height = 80
+    height = header_height + rows * row_height + footer_height
+
+    canvas = Image.new("RGB", (width, height), (16, 18, 28))
+    draw = ImageDraw.Draw(canvas)
+    title_font = _load_catalog_font(62)
+    subtitle_font = _load_catalog_font(28)
+    item_font = _load_catalog_font(27)
+    footer_font = _load_catalog_font(25)
+
+    draw.text((70, 38), "小丛雨 · 二次元角色图鉴", font=title_font, fill=(247, 244, 252))
+    draw.text(
+        (74, 118),
+        f"共收录 {len(ANIME_CHARACTER_ROSTER)} 位角色 · @机器人 + 角色名 可查看图片和资料",
+        font=subtitle_font,
+        fill=(192, 188, 220),
+    )
+    column_width = width // columns
+    for index, character in enumerate(ANIME_CHARACTER_ROSTER):
+        column = index // rows
+        row = index % rows
+        x = 58 + column * column_width
+        y = header_height + row * row_height
+        name = character.name if len(character.name) <= 18 else character.name[:17] + "…"
+        draw.text((x, y), f"{index + 1:03d}", font=item_font, fill=(171, 137, 255))
+        draw.text((x + 70, y), name, font=item_font, fill=(238, 236, 246))
+
+    draw.text(
+        (70, height - 58),
+        "发送“@机器人 角色名”查看单个角色；图鉴名单本身不会增加收藏次数。",
+        font=footer_font,
+        fill=(165, 164, 181),
+    )
+    output = BytesIO()
+    canvas.save(output, format="JPEG", quality=88, optimize=True)
+    return "base64://" + base64.b64encode(output.getvalue()).decode()
+
+
 def _normalize(value: str) -> str:
     value = unicodedata.normalize("NFKC", value or "").casefold()
     return re.sub(r"[^0-9a-z\u3040-\u30ff\u3400-\u9fff]+", "", value)
@@ -235,6 +302,9 @@ async def _download_image(
         },
     )
     response.raise_for_status()
+    final_url = str(response.url).casefold()
+    if "no_icon" in final_url or "no_photo" in final_url:
+        raise RuntimeError("图片源返回默认占位图")
     if not response.headers.get("content-type", "").casefold().startswith("image/"):
         raise RuntimeError("搜索结果不是图片")
     if len(response.content) > max(settings.media_max_bytes * 3, 12 * 1024 * 1024):
@@ -245,7 +315,13 @@ async def _download_image(
             width, height = source.size
             if width < 180 or height < 180 or width * height < 50_000:
                 raise RuntimeError("图片尺寸过小")
-            image = source.convert("RGB")
+            if source.mode in {"RGBA", "LA"} or "transparency" in source.info:
+                rgba = source.convert("RGBA")
+                background = Image.new("RGBA", rgba.size, (248, 248, 248, 255))
+                background.alpha_composite(rgba)
+                image = background.convert("RGB")
+            else:
+                image = source.convert("RGB")
             image.thumbnail((1800, 1800), Image.Resampling.LANCZOS)
             output = BytesIO()
             image.save(output, format="JPEG", quality=90, optimize=True)
@@ -501,7 +577,6 @@ async def _bangumi_image(
     timeout = max(3.0, min(float(settings.media_timeout_seconds), 7.0))
     headers = {
         "User-Agent": "qq-chatrobot/0.1 anime-character-image",
-        "Content-Type": "application/json",
     }
 
     async with httpx.AsyncClient(
@@ -598,33 +673,42 @@ async def _bangumi_image(
                             continue
 
                 images = item.get("images") or {}
-                image_url = ""
+                image_candidates: list[str] = []
                 if isinstance(images, dict):
-                    image_url = str(
-                        images.get("large")
-                        or images.get("medium")
-                        or images.get("grid")
-                        or images.get("small")
-                        or ""
+                    image_candidates.extend(
+                        str(images.get(key) or "")
+                        for key in ("large", "medium", "grid", "small")
                     )
-                if not image_url:
-                    image_url = str(item.get("img") or "")
-                if not image_url.startswith(("https://", "http://")):
-                    continue
-                try:
-                    return await _download_image(
-                        client,
-                        image_url,
-                        "https://bgm.tv/",
-                        settings,
+                image_candidates.append(str(item.get("img") or ""))
+                if character_id:
+                    # Bangumi OpenAPI exposes a dedicated character-image
+                    # endpoint. It redirects to the actual CDN image and is a
+                    # useful fallback when search payload image fields are empty
+                    # or stale.
+                    image_candidates.append(
+                        f"https://api.bgm.tv/v0/characters/{character_id}/image?type=large"
                     )
-                except (
-                    httpx.HTTPError,
-                    RuntimeError,
-                    OSError,
-                    ValueError,
+                for image_url in dict.fromkeys(
+                    value.strip()
+                    for value in image_candidates
+                    if value and value.strip()
                 ):
-                    continue
+                    if not image_url.startswith(("https://", "http://")):
+                        continue
+                    try:
+                        return await _download_image(
+                            client,
+                            image_url,
+                            "https://bgm.tv/",
+                            settings,
+                        )
+                    except (
+                        httpx.HTTPError,
+                        RuntimeError,
+                        OSError,
+                        ValueError,
+                    ):
+                        continue
     return None
 
 
@@ -1521,8 +1605,10 @@ async def _delayed_anime_first_image(
     aliases: tuple[str, ...],
     settings: Settings,
 ) -> str:
-    # Give stricter sources a short head start. After that, responsiveness wins.
-    await asyncio.sleep(1.2)
+    # Give structured/official sources enough time before accepting a generic
+    # search-engine image. This reduces wrong-character hits without losing the
+    # final fallback.
+    await asyncio.sleep(3.0)
     image = await _search_engine_first_image(character, aliases, settings)
     if image is None:
         raise RuntimeError("搜索引擎首图 no-match")
@@ -1535,12 +1621,12 @@ async def resolve_anime_character_image(
     settings: Settings,
     llm=None,
 ) -> str:
-    """Resolve every catalog character with cache, parallel search and hard deadline.
+    """Resolve every catalog character with structured sources and fallbacks.
 
-    LLM is intentionally not part of the critical image path. Exact character
-    names, series names and known aliases are deterministic and faster.
+    Structured APIs remain on the fast path. If they all fail, the configured
+    LLM may generate disambiguated multilingual search aliases; the model never
+    invents an image URL.
     """
-    del llm
 
     cached = _load_anime_image_cache(character, settings)
     if cached is not None:
@@ -1603,6 +1689,22 @@ async def resolve_anime_character_image(
     cached = _load_anime_image_cache(character, settings)
     if cached is not None:
         return cached
+
+    llm_aliases = await _llm_search_aliases(character, llm)
+    if llm_aliases:
+        merged_aliases = tuple(dict.fromkeys((*aliases, *llm_aliases)))
+        try:
+            async with asyncio.timeout(8.0):
+                image = await _search_engine_first_image(
+                    character,
+                    merged_aliases,
+                    settings,
+                )
+            if image is not None:
+                _save_anime_image_cache(character, settings, image)
+                return image
+        except (TimeoutError, httpx.HTTPError, RuntimeError, OSError, ValueError) as exc:
+            errors.append(f"LLM搜索兜底: {exc}")
 
     detail = "; ".join(errors[-6:])
     raise RuntimeError(
