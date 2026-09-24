@@ -39,7 +39,7 @@ def test_murasame_has_disambiguated_search_terms():
 
 
 def test_every_catalog_character_has_name_series_and_search_queries():
-    assert len(anime.ANIME_CHARACTER_ROSTER) >= 40
+    assert len(anime.ANIME_CHARACTER_ROSTER) == 300
     for character in anime.ANIME_CHARACTER_ROSTER:
         assert character.name.strip()
         assert character.series.strip()
