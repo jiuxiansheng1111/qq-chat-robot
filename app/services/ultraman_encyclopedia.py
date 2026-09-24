@@ -1464,6 +1464,8 @@ async def search_engine_first_ultraman_image(
     aliases: tuple[str, ...],
     settings: Settings,
     extra_queries: tuple[str, ...] = (),
+    *,
+    require_metadata_match: bool = True,
 ) -> EncyclopediaImage | None:
     """Last-resort exact-name image search.
 
@@ -1485,7 +1487,7 @@ async def search_engine_first_ultraman_image(
     )
     queries = list(dict.fromkeys(query_values))[:8]
     strict_terms = _specific_terms(name, aliases)
-    if not strict_terms:
+    if require_metadata_match and not strict_terms:
         return None
     timeout = max(3.0, min(float(settings.media_timeout_seconds), 6.0))
     headers = {
@@ -1566,7 +1568,9 @@ async def search_engine_first_ultraman_image(
                         )
                         if part
                     )
-                    if not _matches_specific(descriptor, strict_terms):
+                    if require_metadata_match and not _matches_specific(
+                        descriptor, strict_terms
+                    ):
                         continue
                     try:
                         data_b64 = await _download_verified_image(
@@ -1634,7 +1638,9 @@ async def search_engine_first_ultraman_image(
                     )
                     if part
                 )
-                if not _matches_specific(descriptor, strict_terms):
+                if require_metadata_match and not _matches_specific(
+                    descriptor, strict_terms
+                ):
                     continue
                 referer = (
                     page_url

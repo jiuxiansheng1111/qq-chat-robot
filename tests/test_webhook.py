@@ -832,9 +832,9 @@ async def test_image_send_retries_with_normalized_jpeg(monkeypatch, tmp_path):
         settings.database_path = previous_database_path
 
     assert len(calls) == 2
-    assert calls[0].startswith("file://")
-    assert calls[1].startswith("base64://")
-    assert calls[1] != original
+    assert calls[0].startswith("base64://")
+    assert calls[0] != original
+    assert calls[1].startswith("file://")
 
 
 def test_default_murasame_voice_uses_chinese_markers():

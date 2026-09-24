@@ -104,10 +104,10 @@ from app.services.translation import (
 from app.services.ultraman import (
     ULTRAMAN_BY_NAME,
     ULTRAMAN_ROSTER,
-    official_ultraman_image,
-    official_ultraman_search_image,
     is_ultraman_form_variant,
     normalize_ultraman_source_image,
+    official_ultraman_image,
+    official_ultraman_search_image,
     render_ultraman_card,
     render_ultraman_catalog,
     resolve_ultraman_query,
@@ -1511,7 +1511,7 @@ async def llm_confirm_ultraman_image_candidate(
     the requested Ultraman/independent form. Ambiguous evidence is rejected.
     """
     if llm is None:
-        return True
+        return None
 
     aliases = ultraman_image_aliases(hero)
     try:
@@ -1807,7 +1807,7 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
         return cached
 
     llm_queries = await _llm_ultraman_search_queries(hero, llm)
-    fallback_factories = (
+    fallback_factories = [
         (
             "Bing精确最终兜底",
             lambda: bing_image_relaxed_ultraman_image(hero.name, aliases, settings),
@@ -1823,7 +1823,21 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
             ),
             False,
         ),
-    )
+    ]
+    if llm is not None:
+        fallback_factories.append(
+            (
+                "LLM复核宽松图片兜底",
+                lambda: search_engine_first_ultraman_image(
+                    hero.name,
+                    aliases,
+                    settings,
+                    extra_queries=llm_queries,
+                    require_metadata_match=False,
+                ),
+                True,
+            )
+        )
     for source_name, resolver, require_positive_review in fallback_factories:
         try:
             async with asyncio.timeout(14.0):
@@ -1978,13 +1992,12 @@ async def send_group_image(group_id: str, image_file: str, caption: str = "") ->
     normalized = _qq_safe_image_variant(image_file)
     candidates: list[str] = []
     if normalized:
+        # 标准 baseline JPEG base64 先发；NapCat 若确实拒绝，再退到 file://。
+        # 避免 file:// 被 OneBot 接口表面接受、QQ 客户端却没有真正显示图片。
+        candidates.append(normalized)
         file_uri = _persist_outgoing_image(normalized)
         if file_uri:
-            # Local NapCat is more reliable with a real baseline JPEG file than
-            # a large base64 payload; remote/container deployments simply fall
-            # through to the normalized base64 candidate when file:// is invalid.
             candidates.append(file_uri)
-        candidates.append(normalized)
     candidates.append(image_file)
 
     last_error: Exception | None = None
