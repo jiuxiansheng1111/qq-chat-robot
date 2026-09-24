@@ -130,7 +130,7 @@ ANIME_SERIES_ALIASES: dict[str, tuple[str, ...]] = {
     "《葬送的芙莉莲》": ("Frieren: Beyond Journey's End", "葬送のフリーレン"),
     "《药屋少女的呢喃》": ("The Apothecary Diaries", "薬屋のひとりごと"),
     "《鬼灭之刃》": ("Demon Slayer: Kimetsu no Yaiba", "鬼滅の刃"),
-    "《东方Project》": ("Touhou Project", "東方Project"),
+    "《东方Project》": ("Touhou Project", "東方Project", "Touhou", "東方"),
 }
 
 ANIME_CHARACTER_SEARCH_HINTS: dict[str, tuple[str, ...]] = {
