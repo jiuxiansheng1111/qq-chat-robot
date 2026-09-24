@@ -963,80 +963,175 @@ async def _llm_search_aliases(
     return tuple(values[:8])
 
 
+def _anime_image_cache_path(
+    character: AnimeCharacter,
+    settings: Settings,
+) -> Path:
+    cache_dir = Path(settings.anime_image_cache_dir).expanduser().resolve()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(
+        f"{character.name}|{character.series}".encode("utf-8")
+    ).hexdigest()[:24]
+    return cache_dir / f"{digest}.jpg"
+
+
+def _load_anime_image_cache(
+    character: AnimeCharacter,
+    settings: Settings,
+) -> str | None:
+    path = _anime_image_cache_path(character, settings)
+    if not path.exists():
+        return None
+    try:
+        raw = path.read_bytes()
+        if not raw:
+            return None
+        with Image.open(BytesIO(raw)) as source:
+            width, height = source.size
+            if width < 180 or height < 180:
+                return None
+        return "base64://" + base64.b64encode(raw).decode()
+    except (OSError, ValueError):
+        return None
+
+
+def _save_anime_image_cache(
+    character: AnimeCharacter,
+    settings: Settings,
+    image_file: str,
+) -> None:
+    if not image_file.startswith("base64://"):
+        return
+    try:
+        raw = base64.b64decode(
+            image_file.removeprefix("base64://"),
+            validate=True,
+        )
+        with Image.open(BytesIO(raw)) as source:
+            width, height = source.size
+            if width < 180 or height < 180:
+                return
+        path = _anime_image_cache_path(character, settings)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_bytes(raw)
+        tmp.replace(path)
+    except (OSError, ValueError):
+        return
+
+
+async def _anime_source_result(
+    character: AnimeCharacter,
+    aliases: tuple[str, ...],
+    settings: Settings,
+    source_name: str,
+    resolver,
+) -> str:
+    image = await resolver(character, aliases, settings)
+    if image is None:
+        raise RuntimeError(f"{source_name} no-match")
+    _save_anime_image_cache(character, settings, image)
+    return image
+
+
+async def _delayed_anime_first_image(
+    character: AnimeCharacter,
+    aliases: tuple[str, ...],
+    settings: Settings,
+) -> str:
+    # Give stricter sources a short head start. After that, responsiveness wins.
+    await asyncio.sleep(1.2)
+    image = await _search_engine_first_image(character, aliases, settings)
+    if image is None:
+        raise RuntimeError("搜索引擎首图 no-match")
+    _save_anime_image_cache(character, settings, image)
+    return image
+
+
 async def resolve_anime_character_image(
     character: AnimeCharacter,
     settings: Settings,
     llm=None,
 ) -> str:
-    """Resolve a QQ-safe character image from several independent web sources.
+    """Resolve every catalog character with cache, parallel search and hard deadline.
 
-    LLM output is only used to expand search terms. It never invents or supplies
-    an image URL, so a provider timeout cannot invalidate a good deterministic
-    image candidate.
+    LLM is intentionally not part of the critical image path. Exact character
+    names, series names and known aliases are deterministic and faster.
     """
-    aliases = tuple(character.aliases)
-    errors: list[str] = []
+    del llm
 
-    for source_name, resolver in (
+    cached = _load_anime_image_cache(character, settings)
+    if cached is not None:
+        return cached
+
+    aliases = tuple(character.aliases)
+    source_specs = (
         ("角色/官方网页", _web_page_character_image),
         ("Wikipedia", _wikipedia_image),
         ("百度图片", _baidu_image),
         ("Bing图片", _bing_image),
-    ):
-        try:
-            image = await resolver(character, aliases, settings)
-        except (httpx.HTTPError, RuntimeError, OSError, ValueError) as exc:
-            errors.append(f"{source_name}: {type(exc).__name__}: {exc}")
-            continue
-        if image is not None:
-            return image
-        errors.append(f"{source_name}: no-match")
-
-    generated = await _llm_search_aliases(character, llm)
-    if generated:
-        assisted_aliases = tuple(
-            dict.fromkeys((*aliases, *generated))
+        ("Bing放宽匹配", _bing_image_relaxed),
+    )
+    tasks = [
+        asyncio.create_task(
+            _anime_source_result(
+                character,
+                aliases,
+                settings,
+                source_name,
+                resolver,
+            )
         )
-        for source_name, resolver in (
-            ("角色/官方网页+LLM", _web_page_character_image),
-            ("Wikipedia+LLM", _wikipedia_image),
-            ("百度图片+LLM", _baidu_image),
-            ("Bing图片+LLM", _bing_image),
-        ):
-            try:
-                image = await resolver(character, assisted_aliases, settings)
-            except (httpx.HTTPError, RuntimeError, OSError, ValueError) as exc:
-                errors.append(f"{source_name}: {type(exc).__name__}: {exc}")
+        for source_name, resolver in source_specs
+    ]
+    tasks.append(
+        asyncio.create_task(
+            _delayed_anime_first_image(character, aliases, settings)
+        )
+    )
+
+    timeout = max(
+        0.2,
+        min(float(settings.anime_image_resolve_timeout_seconds), 10.0),
+    )
+    errors: list[str] = []
+    try:
+        async with asyncio.timeout(timeout):
+            for completed in asyncio.as_completed(tasks):
+                try:
+                    return await completed
+                except (
+                    httpx.HTTPError,
+                    RuntimeError,
+                    OSError,
+                    ValueError,
+                ) as exc:
+                    errors.append(str(exc))
+    except TimeoutError:
+        errors.append(f"总搜索超过 {timeout:.1f}s")
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        for task in tasks:
+            if task.done():
                 continue
-            if image is not None:
-                return image
-            errors.append(f"{source_name}: no-match")
+            try:
+                await task
+            except (
+                asyncio.CancelledError,
+                httpx.HTTPError,
+                RuntimeError,
+                OSError,
+                ValueError,
+            ):
+                pass
 
-    try:
-        relaxed = await _bing_image_relaxed(character, aliases, settings)
-    except (httpx.HTTPError, RuntimeError, OSError, ValueError) as exc:
-        errors.append(f"Bing放宽兜底: {type(exc).__name__}: {exc}")
-    else:
-        if relaxed is not None:
-            return relaxed
-        errors.append("Bing放宽兜底: no-match")
+    cached = _load_anime_image_cache(character, settings)
+    if cached is not None:
+        return cached
 
-    try:
-        first_image = await _search_engine_first_image(
-            character,
-            aliases,
-            settings,
-        )
-    except (httpx.HTTPError, RuntimeError, OSError, ValueError) as exc:
-        errors.append(f"搜索引擎首图: {type(exc).__name__}: {exc}")
-    else:
-        if first_image is not None:
-            return first_image
-        errors.append("搜索引擎首图: no-match")
-
-    detail = "; ".join(errors[-8:])
+    detail = "; ".join(errors[-6:])
     raise RuntimeError(
         f"没有找到“{character.name}”的可下载角色图片"
         + (f"；{detail}" if detail else "")
     )
-
