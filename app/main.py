@@ -1208,6 +1208,20 @@ ROMANCE_COMFORT_HINTS = (
     "被骂",
     "被欺负",
     "好难受",
+    "难受",
+    "烦",
+    "烦躁",
+    "郁闷",
+    "心累",
+    "撑不住",
+    "无助",
+    "绝望",
+    "担心",
+    "紧张",
+    "疲惫",
+    "哄我",
+    "陪陪我",
+    "鼓励我",
     "心情不好",
 )
 
@@ -1226,9 +1240,10 @@ def ensure_romance_comfort_length(answer: str, prompt: str) -> str:
         return answer
     return (
         answer.rstrip()
-        + "\n听起来你会这样难受，是因为这件事确实碰到了你在意的地方，"
-        "这并不说明你脆弱或做得不够好。先慢慢呼吸，喝点水，把眼前能处理的一小步做完；"
-        "我会陪你把问题一点点理清，等心情缓下来，再一起想下一步，好吗？"
+        + "\n唔……你会这么难受，是因为你真的在乎这件事，也已经撑了一阵子，"
+        "这种反应很正常，不是你太脆弱，更不是你做得不够好。先慢慢呼吸、喝点水，"
+        "把眼前最急的一小步做完，不用马上解决所有问题；我会陪你把事情一点点理清，"
+        "等心情缓下来，再一起想下一步，好吗？"
     )
 
 
@@ -1250,6 +1265,16 @@ def ensure_default_murasame_voice(
         # never append the old fixed “杂鱼” flourish.
         answer = re.sub(r"^\s*苟修金，吾辈来说：\s*", "", answer)
         answer = re.sub(r"杂鱼(?:[~～\s]*杂鱼)?", "", answer)
+        for marker, replacement in (
+            ("苟修金", "你"),
+            ("吾辈", "我"),
+            ("汝", "你"),
+            ("Ciallo～", ""),
+            ("Ciallo~", ""),
+            ("Ciallo", ""),
+        ):
+            answer = answer.replace(marker, replacement)
+        answer = re.sub(r"^[\s，,：:、]+", "", answer)
         answer = answer.strip()
         if not answer:
             answer = "唔……我还在认真想呢，给我一点点时间，好不好？"
