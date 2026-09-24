@@ -62,6 +62,15 @@ from app.services.bilibili import (
     choose_bilibili_video,
     search_bilibili_videos,
 )
+from app.services.character_catalog import (
+    ANIME_CATALOG_ALIASES,
+    ANIME_FAVORITE_ALIASES,
+    CHARACTER_CATALOG_COMMANDS,
+    ULTRAMAN_CATALOG_ALIASES,
+    ULTRAMAN_FAVORITE_ALIASES,
+    character_catalog_menu,
+    extract_catalog_lookup,
+)
 from app.services.group_memory_logic import (
     format_group_memory_answer,
     group_memory_reasoning_hints,
@@ -126,15 +135,6 @@ from app.services.ultraman_encyclopedia import (
     search_engine_first_ultraman_image,
     web_page_ultraman_image,
     wikipedia_ultraman_image,
-)
-from app.services.character_catalog import (
-    ANIME_CATALOG_ALIASES,
-    ANIME_FAVORITE_ALIASES,
-    CHARACTER_CATALOG_COMMANDS,
-    ULTRAMAN_CATALOG_ALIASES,
-    ULTRAMAN_FAVORITE_ALIASES,
-    character_catalog_menu,
-    extract_catalog_lookup,
 )
 from app.services.weather import WeatherServiceError, fetch_weather, format_weather_report
 from app.services.web_search import SearchResult, search_web
