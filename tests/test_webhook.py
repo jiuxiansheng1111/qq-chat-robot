@@ -811,6 +811,9 @@ def test_romance_voice_avoids_legacy_prefix_and_fixed_tsundere_tail():
         romance_mode=True,
     )
     assert "苟修金，吾辈来说" not in reply
+    assert "苟修金" not in reply
+    assert "吾辈" not in reply
+    assert "汝" not in reply
     assert "杂鱼~杂鱼~" not in reply
     assert len(reply.replace(" ", "").replace("\n", "")) >= 50
 
