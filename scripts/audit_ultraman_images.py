@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from io import BytesIO
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageStat
 
 import app.services.ultraman as ultraman
 from app.config import Settings
@@ -73,9 +73,34 @@ async def audit_one(hero, settings: Settings, semaphore: asyncio.Semaphore) -> A
             with Image.open(BytesIO(raw)) as image:
                 image.verify()
             with Image.open(BytesIO(raw)) as image:
-                width, height = image.size
+                rgb = image.convert("RGB")
+                width, height = rgb.size
+                sample = rgb.copy()
+                sample.thumbnail((256, 256), Image.Resampling.BILINEAR)
+                stats = ImageStat.Stat(sample)
+                mean_luma = sum(stats.mean) / 3
+                channel_spread = max(high - low for low, high in sample.getextrema())
+                entropy = sample.entropy()
             if width < 160 or height < 160 or width * height < 40_000:
                 raise RuntimeError(f"图片尺寸过小: {width}x{height}")
+            if entropy < 0.75:
+                raise RuntimeError(f"图片近似纯色/空白: entropy={entropy:.3f}")
+            if mean_luma < 42 and channel_spread < 35 and entropy < 2.2:
+                raise RuntimeError(
+                    f"图片近似全黑: luma={mean_luma:.1f}, spread={channel_spread}, entropy={entropy:.3f}"
+                )
+            card = ultraman.render_ultraman_card(hero, data)
+            card_raw = base64.b64decode(card.removeprefix("base64://"))
+            with Image.open(BytesIO(card_raw)) as rendered:
+                rendered_rgb = rendered.convert("RGB")
+                card_sample = rendered_rgb.copy()
+                card_sample.thumbnail((256, 256), Image.Resampling.BILINEAR)
+                card_entropy = card_sample.entropy()
+                card_mean = sum(ImageStat.Stat(card_sample).mean) / 3
+            if card_entropy < 1.0 or card_mean < 24:
+                raise RuntimeError(
+                    f"渲染卡片疑似黑屏: luma={card_mean:.1f}, entropy={card_entropy:.3f}"
+                )
             return AuditRow(
                 name=hero.name,
                 status="ok",
