@@ -970,7 +970,7 @@ def _anime_image_cache_path(
     cache_dir = Path(settings.anime_image_cache_dir).expanduser().resolve()
     cache_dir.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256(
-        f"{character.name}|{character.series}".encode("utf-8")
+        f"{character.name}|{character.series}".encode()
     ).hexdigest()[:24]
     return cache_dir / f"{digest}.jpg"
 
