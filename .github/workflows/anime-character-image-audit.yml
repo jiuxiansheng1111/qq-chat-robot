@@ -1,0 +1,36 @@
+name: Anime character image audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/services/anime_character.py"
+      - "app/config.py"
+      - "scripts/audit_anime_character_images.py"
+      - ".github/workflows/anime-character-image-audit.yml"
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install project
+        run: python -m pip install -e .
+      - name: Audit every anime character image
+        run: >
+          python scripts/audit_anime_character_images.py
+          --report anime-character-image-audit.json
+          --concurrency 6
+          --timeout 10
+          --require-all
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: anime-character-image-audit
+          path: anime-character-image-audit.json
