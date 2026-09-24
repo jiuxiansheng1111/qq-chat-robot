@@ -1445,6 +1445,7 @@ async def search_engine_first_ultraman_image(
     name: str,
     aliases: tuple[str, ...],
     settings: Settings,
+    extra_queries: tuple[str, ...] = (),
 ) -> EncyclopediaImage | None:
     """Last-resort exact-name image search.
 
@@ -1453,7 +1454,8 @@ async def search_engine_first_ultraman_image(
     here (Tencent Video, iQIYI, Bilibili, ordinary articles, etc.). We still
     require a real decodable image with a reasonable size.
     """
-    query_values = [name]
+    query_values = [query.strip() for query in extra_queries if query.strip()]
+    query_values.append(name)
     query_values.extend(
         alias
         for alias in aliases
@@ -1463,7 +1465,7 @@ async def search_engine_first_ultraman_image(
             or re.search(r"[\u3040-\u30ff]", alias)
         )
     )
-    queries = list(dict.fromkeys(query_values))[:4]
+    queries = list(dict.fromkeys(query_values))[:8]
     timeout = max(3.0, min(float(settings.media_timeout_seconds), 6.0))
     headers = {
         "User-Agent": ENCYCLOPEDIA_USER_AGENT,
