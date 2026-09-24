@@ -11,10 +11,15 @@ def test_plugin_registry_help():
     assert "@我 随机猪猪" in text
     assert "@我 随机奶龙" in text
     assert "@我 点歌" in text
+    assert "@我 图鉴" in text
     assert "@我 今日奥特曼" in text
-    assert "@我 我的奥特曼" in text
-    assert "@我 奥特曼图鉴" in text
-    assert "@我 贝利亚" in text
+    assert "@我 本命奥特曼" in text
+    assert "@我 随机二次元角色" in text
+    assert "@我 本命二次元角色" in text
+    assert "@我 天气 新加坡" in text
+    assert registry.find("图鉴").name == "character_catalog"
+    assert registry.find("奥特曼图鉴").name == "character_catalog"
+    assert registry.find("二次元角色图鉴").name == "character_catalog"
     assert "/hello" not in text
 
 
