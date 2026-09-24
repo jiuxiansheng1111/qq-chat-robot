@@ -1112,19 +1112,7 @@ async def resolve_anime_character_image(
         for task in tasks:
             if not task.done():
                 task.cancel()
-        for task in tasks:
-            if task.done():
-                continue
-            try:
-                await task
-            except (
-                asyncio.CancelledError,
-                httpx.HTTPError,
-                RuntimeError,
-                OSError,
-                ValueError,
-            ):
-                pass
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     cached = _load_anime_image_cache(character, settings)
     if cached is not None:
