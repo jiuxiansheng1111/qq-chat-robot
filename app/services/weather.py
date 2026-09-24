@@ -192,11 +192,15 @@ def _fmt(value: float | None, suffix: str = "") -> str:
 def format_weather_report(report: WeatherReport) -> str:
     lines = [
         f"☀️ {report.location}天气",
-        f"现在：{report.condition}，{_fmt(report.temperature_c, '°C')}"
-        f"（体感 {_fmt(report.apparent_temperature_c, '°C')}）",
-        f"湿度：{_fmt(report.humidity_percent, '%')}｜"
-        f"风速：{_fmt(report.wind_kph, ' km/h')}｜"
-        f"当前降水：{_fmt(report.precipitation_mm, ' mm')}",
+        (
+            f"现在：{report.condition}，{_fmt(report.temperature_c, '°C')}"
+            f"（体感 {_fmt(report.apparent_temperature_c, '°C')}）"
+        ),
+        (
+            f"湿度：{_fmt(report.humidity_percent, '%')}｜"
+            f"风速：{_fmt(report.wind_kph, ' km/h')}｜"
+            f"当前降水：{_fmt(report.precipitation_mm, ' mm')}"
+        ),
     ]
     if report.days:
         lines.append("")
