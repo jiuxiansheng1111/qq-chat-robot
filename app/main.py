@@ -1805,7 +1805,7 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
     except TimeoutError:
         logger.warning(
             "Ultraman image fast deadline %.1fs reached for %s; "
-            "returning card placeholder while remaining sources warm cache",
+            "no source finished before deadline; continuing with cache/LLM fallback",
             timeout,
             hero.name,
         )
