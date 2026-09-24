@@ -78,7 +78,9 @@ class Settings(BaseSettings):
     media_retry_attempts: int = 2
     ultraman_image_resolve_timeout_seconds: float = 12
     ultraman_image_cache_dir: str = "./data/ultraman_image_cache"
-    anime_image_resolve_timeout_seconds: float = 10
+    # Structured providers can take several seconds when their CDN is cold;
+    # the resolver uses staged fallbacks within this overall deadline.
+    anime_image_resolve_timeout_seconds: float = 24
     anime_image_cache_dir: str = "./data/anime_image_cache"
     # Moegirl restricts automated/off-site image use. Keep disabled until the
     # deployer has obtained the permissions required for their bot/use case.

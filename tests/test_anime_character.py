@@ -151,6 +151,24 @@ async def test_resolver_races_sources_and_uses_first_image_fallback(
 
 
 @pytest.mark.asyncio
+async def test_legacy_provider_result_gets_traceable_source_page():
+    character = anime.ANIME_CHARACTER_BY_NAME["丛雨"]
+
+    async def legacy_provider(*args, **kwargs):
+        return jpeg_base64()
+
+    result = await anime._anime_source_result(
+        character,
+        character.aliases,
+        Settings(_env_file=None),
+        "Bangumi",
+        legacy_provider,
+    )
+    assert result.provider == "Bangumi"
+    assert result.source_page_url.startswith("https://bgm.tv/")
+
+
+@pytest.mark.asyncio
 async def test_resolver_persists_cache_and_skips_network_next_time(
     monkeypatch,
     tmp_path,

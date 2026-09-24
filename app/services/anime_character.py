@@ -124,7 +124,7 @@ def _load_extra_anime_characters() -> tuple[AnimeCharacter, ...]:
 
 ANIME_CHARACTER_ROSTER += _load_extra_anime_characters()
 ANIME_CHARACTER_BY_NAME = {item.name: item for item in ANIME_CHARACTER_ROSTER}
-ANIME_IMAGE_CACHE_VERSION = "v2-attribution-20260924"
+ANIME_IMAGE_CACHE_VERSION = "v3-staged-provenance-20260924"
 
 ANIME_SERIES_ALIASES: dict[str, tuple[str, ...]] = {
     "《千恋＊万花》": ("Senren * Banka", "Senren Banka", "千恋＊万花"),
@@ -2019,6 +2019,43 @@ def _save_anime_image_cache(
         return
 
 
+def _with_anime_source_attribution(
+    character: AnimeCharacter,
+    source_name: str,
+    result: ImageResolution | None,
+) -> ImageResolution | None:
+    if result is None:
+        return None
+    if result.source_page_url:
+        return result
+    # A number of legacy providers intentionally return only the normalized
+    # image payload (their public helpers are also used by older callers). Do
+    # not let that erase provenance at the resolver boundary: keep a stable,
+    # clickable provider search page in the cache sidecar and QQ caption.
+    query = quote(f"{character.name} {character.series}".strip())
+    source_pages = {
+        "VNDB": f"https://vndb.org/c?q={query}",
+        "Bangumi": f"https://bgm.tv/character/browser?keyword={query}",
+        "AniList": f"https://anilist.co/search/characters?search={quote(character.name)}",
+        "角色/官方网页": f"https://www.google.com/search?q={query}",
+        "Wikipedia": f"https://zh.wikipedia.org/w/index.php?search={query}",
+        "百度图片": f"https://image.baidu.com/search/index?word={query}",
+        "Bing图片": f"https://www.bing.com/images/search?q={query}",
+        "Bing放宽匹配": f"https://www.bing.com/images/search?q={query}",
+        "搜索引擎首图": f"https://www.bing.com/images/search?q={query}",
+        "LLM搜索兜底": f"https://www.bing.com/images/search?q={query}",
+    }
+    return ImageResolution(
+        data=result.data,
+        provider=result.provider or source_name,
+        source_page_url=source_pages.get(source_name, ""),
+        image_url=result.image_url,
+        label=result.label or character.name,
+        evidence=result.evidence,
+        cache_hit=result.cache_hit,
+    )
+
+
 async def _anime_source_result(
     character: AnimeCharacter,
     aliases: tuple[str, ...],
@@ -2033,9 +2070,10 @@ async def _anime_source_result(
         label=character.name,
         evidence=f"{source_name} 的角色/作品匹配结果",
     )
-    if result is None:
+    attributed = _with_anime_source_attribution(character, source_name, result)
+    if attributed is None:
         raise RuntimeError(f"{source_name} no-match")
-    return result
+    return attributed
 
 
 async def _delayed_anime_first_image(
@@ -2056,7 +2094,10 @@ async def _delayed_anime_first_image(
     )
     if result is None:
         raise RuntimeError("搜索引擎首图 no-match")
-    return result
+    attributed = _with_anime_source_attribution(character, "搜索引擎首图", result)
+    if attributed is None:
+        raise RuntimeError("搜索引擎首图 no-match")
+    return attributed
 
 
 async def resolve_anime_character_image(
@@ -2077,61 +2118,97 @@ async def resolve_anime_character_image(
         return cached
 
     aliases = tuple(character.aliases)
-    source_specs = (
-        ("萌娘百科角色/作品页", _moegirl_image),
-        ("VNDB", _vndb_image),
-        ("Bangumi", _bangumi_image),
-        ("AniList", _anilist_image),
-        ("角色/官方网页", _web_page_character_image),
-        ("Wikipedia", _wikipedia_image),
-        ("百度图片", _baidu_image),
-        ("Bing图片", _bing_image),
-        ("Bing放宽匹配", _bing_image_relaxed),
+    # Do not hammer every remote provider at the same time. Some of the
+    # structured APIs throttle concurrent requests, which made a valid
+    # Murasame/Bangumi result arrive just after the old 10-second deadline.
+    # Groups keep the fast structured sources first, then widen to web/search
+    # fallbacks while still cancelling unfinished work after each stage.
+    source_groups = (
+        (
+            (
+                ("萌娘百科角色/作品页", _moegirl_image),
+            ),
+            12.0,
+        ),
+        (
+            (
+                ("VNDB", _vndb_image),
+                ("Bangumi", _bangumi_image),
+                ("AniList", _anilist_image),
+            ),
+            10.0,
+        ),
+        (
+            (
+                ("角色/官方网页", _web_page_character_image),
+                ("Wikipedia", _wikipedia_image),
+            ),
+            6.0,
+        ),
+        (
+            (
+                ("百度图片", _baidu_image),
+                ("Bing图片", _bing_image),
+                ("Bing放宽匹配", _bing_image_relaxed),
+                ("搜索引擎首图", _delayed_anime_first_image),
+            ),
+            8.0,
+        ),
     )
-    tasks = [
-        asyncio.create_task(
-            _anime_source_result(
-                character,
-                aliases,
-                settings,
-                source_name,
-                resolver,
-            )
-        )
-        for source_name, resolver in source_specs
-    ]
-    tasks.append(
-        asyncio.create_task(
-            _delayed_anime_first_image(character, aliases, settings)
-        )
-    )
-
     timeout = max(
         0.2,
-        min(float(settings.anime_image_resolve_timeout_seconds), 10.0),
+        min(float(settings.anime_image_resolve_timeout_seconds), 30.0),
     )
     errors: list[str] = []
     winner: ImageResolution | None = None
-    try:
-        async with asyncio.timeout(timeout):
-            for completed in asyncio.as_completed(tasks):
-                try:
-                    winner = await completed
-                    break
-                except (
-                    httpx.HTTPError,
-                    RuntimeError,
-                    OSError,
-                    ValueError,
-                ) as exc:
-                    errors.append(str(exc))
-    except TimeoutError:
-        errors.append(f"总搜索超过 {timeout:.1f}s")
-    finally:
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+    deadline = asyncio.get_running_loop().time() + timeout
+
+    for source_specs, group_timeout in source_groups:
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            errors.append(f"总搜索超过 {timeout:.1f}s")
+            break
+        tasks = [
+            asyncio.create_task(
+                _anime_source_result(
+                    character,
+                    aliases,
+                    settings,
+                    source_name,
+                    resolver,
+                )
+            )
+            for source_name, resolver in source_specs
+            if source_name != "搜索引擎首图"
+        ]
+        if any(source_name == "搜索引擎首图" for source_name, _ in source_specs):
+            tasks.append(
+                asyncio.create_task(
+                    _delayed_anime_first_image(character, aliases, settings)
+                )
+            )
+        try:
+            async with asyncio.timeout(min(group_timeout, remaining)):
+                for completed in asyncio.as_completed(tasks):
+                    try:
+                        winner = await completed
+                        break
+                    except (
+                        httpx.HTTPError,
+                        RuntimeError,
+                        OSError,
+                        ValueError,
+                    ) as exc:
+                        errors.append(str(exc))
+        except TimeoutError:
+            errors.append(f"当前来源组超过 {min(group_timeout, remaining):.1f}s")
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+        if winner is not None:
+            break
 
     if winner is not None:
         # Only the chosen result reaches durable cache.  In particular, a
@@ -2159,9 +2236,14 @@ async def resolve_anime_character_image(
                 label=character.name,
                 evidence="LLM生成查询词后的搜索引擎候选",
             )
-            if result is not None:
-                _save_anime_image_cache(character, settings, result)
-                return result
+            attributed = _with_anime_source_attribution(
+                character,
+                "LLM搜索兜底",
+                result,
+            )
+            if attributed is not None:
+                _save_anime_image_cache(character, settings, attributed)
+                return attributed
         except (TimeoutError, httpx.HTTPError, RuntimeError, OSError, ValueError) as exc:
             errors.append(f"LLM搜索兜底: {exc}")
 
