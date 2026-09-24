@@ -78,6 +78,8 @@ class Settings(BaseSettings):
     media_retry_attempts: int = 2
     ultraman_image_resolve_timeout_seconds: float = 8
     ultraman_image_cache_dir: str = "./data/ultraman_image_cache"
+    anime_image_resolve_timeout_seconds: float = 6
+    anime_image_cache_dir: str = "./data/anime_image_cache"
     daily_news_enabled: bool = True
     daily_news_hour: int = 12
     daily_news_minute: int = 0
