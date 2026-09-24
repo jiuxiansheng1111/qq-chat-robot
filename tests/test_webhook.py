@@ -818,6 +818,44 @@ def test_romance_voice_avoids_legacy_prefix_and_fixed_tsundere_tail():
     assert len(reply.replace(" ", "").replace("\n", "")) >= 50
 
 
+def test_romance_chat_starts_natural_then_advances_after_delivered_replies(tmp_path):
+    previous_database_path = settings.database_path
+    previous_api_base = settings.onebot_api_base
+    previous_self_id = settings.onebot_self_id
+    settings.database_path = str(tmp_path / "romance-turns.db")
+    settings.onebot_api_base = ""
+    settings.onebot_self_id = "bot-1"
+    try:
+        with TestClient(app) as client:
+            client.portal.call(
+                client.app.state.db.set_romance_mode,
+                "romance-group",
+                "romance-user",
+                True,
+            )
+            client.app.state.llm.ask = AsyncMock(return_value="今天也要好好过。")
+
+            payload = event("我想和你聊聊", "romance-group", "romance-user")
+            payload["self_id"] = "bot-1"
+            payload["message_id"] = "romance-turn-1"
+            payload["message"] = [
+                {"type": "at", "data": {"qq": "bot-1"}},
+                {"type": "text", "data": {"text": "我想和你聊聊"}},
+            ]
+            assert post_event(client, payload).json()["ok"] is True
+            initial_system = client.app.state.llm.ask.await_args.args[0][0]["content"]
+            assert "当前亲密节奏：刚开始" in initial_system
+            assert client.portal.call(
+                client.app.state.db.romance_turn_count,
+                "romance-group",
+                "romance-user",
+            ) == 1
+    finally:
+        settings.database_path = previous_database_path
+        settings.onebot_api_base = previous_api_base
+        settings.onebot_self_id = previous_self_id
+
+
 @pytest.mark.asyncio
 async def test_image_send_retries_with_normalized_jpeg(monkeypatch, tmp_path):
     previous_api_base = settings.onebot_api_base

@@ -42,6 +42,19 @@ def test_romance_mode_prompt_is_cute_context_aware_and_supportive():
     assert "为什么会这样难受" in prompt
 
 
+def test_romance_mode_tone_grows_only_after_real_conversation_turns():
+    opening = romance_mode_prompt(0)
+    familiar = romance_mode_prompt(4)
+    deeper = romance_mode_prompt(8)
+
+    assert "当前亲密节奏：刚开始" in opening
+    assert "不要主动撒娇" in opening
+    assert "当前亲密节奏：逐渐熟络" in familiar
+    assert "每条最多一处" in familiar
+    assert "当前亲密节奏：话题已深入" in deeper
+    assert "技术、事实、求助、悲伤和争执话题仍然正常" in deeper
+
+
 def test_rule_based_affection_caps_positive_and_negative():
     positive = rule_based_affection("你刚才回答得太好了，完美！", "上一轮回答")
     assert positive.delta == 4

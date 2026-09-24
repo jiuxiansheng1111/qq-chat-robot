@@ -1805,7 +1805,7 @@ async def llm_confirm_ultraman_image_candidate(
     return result
 
 
-ULTRAMAN_IMAGE_CACHE_VERSION = "v4-form-direct-source-20260924"
+ULTRAMAN_IMAGE_CACHE_VERSION = "v5-geed-tamashii-framing-20260924"
 
 
 def _ultraman_image_cache_path(hero) -> Path:
@@ -3954,8 +3954,12 @@ async def onebot_webhook(
         long_memories = await request.app.state.db.long_term_memories(group_id, user_id)
         possession = active_possession
         persona_context: list[str] = []
+        romance_turn_count = 0
         if not active_possession and romance_mode:
-            persona_context.append(romance_mode_prompt())
+            romance_turn_count = await request.app.state.db.romance_turn_count(
+                group_id, user_id
+            )
+            persona_context.append(romance_mode_prompt(romance_turn_count))
         possession_name = ""
         imitate_current_possession = False
         sender_name = sender_display_name(event)
@@ -4215,6 +4219,8 @@ async def onebot_webhook(
             if not possession_name:
                 request.app.state.last_murasame_replies[(group_id, user_id)] = answer[-1800:]
             await send_group_long_message(group_id, answer)
+            if romance_mode and not possession_name:
+                await request.app.state.db.record_romance_turn(group_id, user_id)
             if imitate_current_possession and possession:
                 target_id = possession[0]
                 image_pool = request.app.state.possession_style_images.get(

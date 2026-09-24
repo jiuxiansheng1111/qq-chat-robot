@@ -9,7 +9,7 @@ from io import BytesIO
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import httpx
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 from app.config import Settings
 from app.services.web_search import search_web
@@ -1351,14 +1351,41 @@ def render_ultraman_card(
     with Image.open(BytesIO(raw)) as source:
         source = normalize_ultraman_source_image(source)
         target_width, target_height = 900, 1200
-        scale = max(target_width / source.width, target_height / source.height)
-        resized = source.resize(
-            (round(source.width * scale), round(source.height * scale)),
-            Image.Resampling.LANCZOS,
-        )
-        left = max(0, (resized.width - target_width) // 2)
-        top = max(0, (resized.height - target_height) // 2)
-        card = resized.crop((left, top, left + target_width, top + target_height))
+        source_ratio = source.width / max(1, source.height)
+        if source_ratio > 1.2:
+            # A cover crop of a broad banner often removes the actual hero —
+            # Geed Royal Mega-Master's old two-pose banner was cut exactly
+            # between its subjects. Keep the complete source on a subdued
+            # fitted backdrop instead, so a form's silhouette stays legible.
+            backdrop = ImageOps.fit(
+                source,
+                (target_width, target_height),
+                method=Image.Resampling.LANCZOS,
+            ).filter(ImageFilter.GaussianBlur(radius=20))
+            backdrop = Image.blend(
+                backdrop,
+                Image.new("RGB", backdrop.size, ULTRAMAN_IMAGE_BACKGROUND),
+                0.42,
+            )
+            foreground = ImageOps.contain(
+                source,
+                (840, 760),
+                method=Image.Resampling.LANCZOS,
+            )
+            card = backdrop.copy()
+            card.paste(
+                foreground,
+                ((target_width - foreground.width) // 2, 150),
+            )
+        else:
+            scale = max(target_width / source.width, target_height / source.height)
+            resized = source.resize(
+                (round(source.width * scale), round(source.height * scale)),
+                Image.Resampling.LANCZOS,
+            )
+            left = max(0, (resized.width - target_width) // 2)
+            top = max(0, (resized.height - target_height) // 2)
+            card = resized.crop((left, top, left + target_width, top + target_height))
 
     overlay = Image.new("RGBA", card.size, (0, 0, 0, 0))
     gradient = ImageDraw.Draw(overlay)

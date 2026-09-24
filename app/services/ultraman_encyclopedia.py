@@ -65,21 +65,21 @@ BAIDU_DIRECT_PAGES = {
 }
 
 # Some form pages are represented as tabs inside a general Moegirl character
-# page, so a normal pageimage lookup only returns Geed's base artwork. Keep the
-# tab's original file URL and the page that labels it as the form. The second
-# entry is an official Ultraman Card Game image, used only if the Moegirl CDN
-# is temporarily unavailable.
+# page, so a normal pageimage lookup only returns Geed's base artwork. Prefer
+# an official single-subject product image for Royal Mega-Master: the older
+# Moegirl banner contains two poses side by side and becomes misleading when a
+# portrait collection card crops its centre.
 DIRECT_FORM_IMAGE_URLS = {
     "捷德奥特曼·尊皇形态": (
+        (
+            "https://tamashiiweb.com/storage/images/products/imported/item_0000012488_EDoDynPQ_01.jpg",
+            "https://tamashiiweb.com/item/12488/?dmode=pc&wovn=en",
+            "TAMASHII WEB 官方单体图",
+        ),
         (
             "https://storage.moegirl.org.cn/moegirl/commons/8/82/Geed_Profile_2.jpg",
             "https://zh.moegirl.org.cn/%E6%8D%B7%E5%BE%B7%E5%A5%A5%E7%89%B9%E6%9B%BC%28%E8%A7%92%E8%89%B2%29",
             "萌娘百科形态专图",
-        ),
-        (
-            "https://img.ultraman-cardgame.com/images/news_t/133c582aa4fd53040e86ce1314a7dac6bb9633ab.png",
-            "https://ultraman-cardgame.com/page/jp/news/news-detail/205",
-            "ULTRAMAN CARD GAME 官方图",
         ),
     ),
 }

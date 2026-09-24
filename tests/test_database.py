@@ -22,6 +22,27 @@ async def test_plugin_settings_default_enabled_and_configurable(tmp_path):
     assert not await db.plugin_enabled("100", "weather")
 
 
+async def test_romance_turns_are_scoped_resettable_and_expire(tmp_path):
+    db = Database(Settings(_env_file=None, database_path=str(tmp_path / "romance.db")))
+    await db.init()
+
+    assert await db.romance_turn_count("100", "200") == 0
+    assert await db.record_romance_turn("100", "200") == 1
+    assert await db.record_romance_turn("100", "200") == 2
+    assert await db.romance_turn_count("100", "other-user") == 0
+    assert await db.romance_turn_count("other-group", "200") == 0
+
+    await db.set_romance_mode("100", "200", True)
+    assert await db.romance_turn_count("100", "200") == 0
+    await db.record_romance_turn("100", "200")
+    await db.execute(
+        "UPDATE user_preferences SET romance_last_turn_at = datetime('now', '-46 minutes') "
+        "WHERE group_id = ? AND user_id = ?",
+        ("100", "200"),
+    )
+    assert await db.romance_turn_count("100", "200") == 0
+
+
 async def test_long_term_memory_is_persistent_pruned_and_clearable(tmp_path):
     db = Database(Settings(_env_file=None, database_path=str(tmp_path / "memory.db")))
     await db.init()

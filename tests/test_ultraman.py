@@ -106,6 +106,32 @@ def test_long_form_name_renders_inside_collection_card(monkeypatch):
     assert rendered.size == (900, 1200)
 
 
+def test_wide_source_card_keeps_both_source_edges_visible(monkeypatch):
+    monkeypatch.setattr(
+        ultraman_module,
+        "FONT_CANDIDATES",
+        ("/font-that-does-not-exist.ttc", "DejaVuSans.ttf"),
+    )
+    source = Image.new("RGB", (1600, 800), (30, 35, 45))
+    source.paste((235, 35, 25), (0, 0, 260, 800))
+    source.paste((25, 35, 235), (1340, 0, 1600, 800))
+    payload = BytesIO()
+    source.save(payload, format="JPEG")
+    hero = ultraman_module.ULTRAMAN_BY_NAME["捷德奥特曼·尊皇形态"]
+
+    result = render_ultraman_card(
+        hero, "base64://" + base64.b64encode(payload.getvalue()).decode()
+    )
+    rendered = Image.open(
+        BytesIO(base64.b64decode(result.removeprefix("base64://")))
+    ).convert("RGB")
+
+    left = rendered.getpixel((55, 350))
+    right = rendered.getpixel((845, 350))
+    assert left[0] > left[2] + 80
+    assert right[2] > right[0] + 80
+
+
 def test_catalog_aliases_resolve_without_fuzzy_chat_matches():
     assert resolve_ultraman_query("奥特之父").name == "奥特之父"
     assert resolve_ultraman_query("贝利亚").name == "贝利亚奥特曼"

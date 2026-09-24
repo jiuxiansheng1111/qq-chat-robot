@@ -48,6 +48,8 @@ class Database:
                     user_id TEXT NOT NULL,
                     memory_enabled INTEGER NOT NULL DEFAULT 0,
                     romance_mode INTEGER NOT NULL DEFAULT 0,
+                    romance_turn_count INTEGER NOT NULL DEFAULT 0,
+                    romance_last_turn_at TEXT,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (group_id, user_id)
                 );
@@ -225,6 +227,14 @@ class Database:
                 await db.execute(
                     "ALTER TABLE user_preferences ADD COLUMN romance_mode INTEGER NOT NULL DEFAULT 0"
                 )
+            if "romance_turn_count" not in {column[1] for column in preference_columns}:
+                await db.execute(
+                    "ALTER TABLE user_preferences ADD COLUMN romance_turn_count INTEGER NOT NULL DEFAULT 0"
+                )
+            if "romance_last_turn_at" not in {column[1] for column in preference_columns}:
+                await db.execute(
+                    "ALTER TABLE user_preferences ADD COLUMN romance_last_turn_at TEXT"
+                )
             affection_daily_columns = await db.execute_fetchall("PRAGMA table_info(group_affection_daily)")
             if "severe_hostility_count" not in {column[1] for column in affection_daily_columns}:
                 await db.execute(
@@ -352,10 +362,44 @@ class Database:
 
     async def set_romance_mode(self, group_id: str, user_id: str, enabled: bool) -> None:
         await self.execute(
-            "INSERT INTO user_preferences(group_id, user_id, romance_mode) VALUES (?, ?, ?) "
-            "ON CONFLICT(group_id, user_id) DO UPDATE SET romance_mode = excluded.romance_mode, updated_at = CURRENT_TIMESTAMP",
+            "INSERT INTO user_preferences("
+            "group_id, user_id, romance_mode, romance_turn_count, romance_last_turn_at"
+            ") VALUES (?, ?, ?, 0, NULL) "
+            "ON CONFLICT(group_id, user_id) DO UPDATE SET "
+            "romance_mode = excluded.romance_mode, romance_turn_count = 0, "
+            "romance_last_turn_at = NULL, updated_at = CURRENT_TIMESTAMP",
             (group_id, user_id, int(enabled)),
         )
+
+    async def romance_turn_count(self, group_id: str, user_id: str) -> int:
+        """Return recent successful romance-chat turns for this group/member.
+
+        The count expires after a quiet period so a later factual question does
+        not inherit an overly coy tone from an unrelated old conversation.
+        """
+        row = await self.fetchone(
+            "SELECT romance_turn_count FROM user_preferences "
+            "WHERE group_id = ? AND user_id = ? "
+            "AND romance_last_turn_at >= datetime('now', '-45 minutes')",
+            (group_id, user_id),
+        )
+        return max(0, min(int(row[0]), 12)) if row else 0
+
+    async def record_romance_turn(self, group_id: str, user_id: str) -> int:
+        """Record one delivered LLM reply, resetting after 45 minutes idle."""
+        await self.execute(
+            "INSERT INTO user_preferences("
+            "group_id, user_id, romance_turn_count, romance_last_turn_at"
+            ") VALUES (?, ?, 1, CURRENT_TIMESTAMP) "
+            "ON CONFLICT(group_id, user_id) DO UPDATE SET "
+            "romance_turn_count = CASE "
+            "WHEN romance_last_turn_at IS NULL "
+            "OR romance_last_turn_at < datetime('now', '-45 minutes') THEN 1 "
+            "ELSE MIN(romance_turn_count + 1, 12) END, "
+            "romance_last_turn_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP",
+            (group_id, user_id),
+        )
+        return await self.romance_turn_count(group_id, user_id)
 
     async def record_severe_hostility(
         self, group_id: str, user_id: str, activity_date: str
