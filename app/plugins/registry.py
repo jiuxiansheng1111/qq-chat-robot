@@ -84,6 +84,9 @@ class PluginRegistry:
             "┗ @我 帮助 或 /help ┛\n\n"
             + character_catalog_menu(roster_count, anime_character_count)
         )
+
+
+registry = PluginRegistry()
 registry.register(
     PluginSpec(
         "character_catalog",
