@@ -23,13 +23,13 @@ async def audit_character(character, settings: Settings, semaphore: asyncio.Sema
             "aliases": list(character.aliases),
         }
         try:
-            image_file = await resolve_anime_character_image(
+            result = await resolve_anime_character_image(
                 character,
                 settings,
                 None,
             )
             raw = base64.b64decode(
-                image_file.removeprefix("base64://"),
+                result.data.removeprefix("base64://"),
                 validate=True,
             )
             with Image.open(BytesIO(raw)) as image:
@@ -46,9 +46,16 @@ async def audit_character(character, settings: Settings, semaphore: asyncio.Sema
                     "format": image_format,
                     "bytes": len(raw),
                     "sha256": hashlib.sha256(raw).hexdigest(),
+                    "provider": result.provider,
+                    "source_page": result.source_page_url,
+                    "image_url": result.image_url,
+                    "label": result.label,
+                    "cache_hit": result.cache_hit,
                 }
             )
-        except Exception as exc:
+        # Audits must report a failure for this character and continue through
+        # the complete catalog, regardless of which provider/decoder failed.
+        except Exception as exc:  # noqa: BLE001
             row.update(
                 {
                     "status": "missing",

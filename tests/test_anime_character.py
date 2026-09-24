@@ -1,4 +1,5 @@
 import base64
+import json
 from io import BytesIO
 
 import httpx
@@ -7,6 +8,7 @@ from PIL import Image
 
 from app.config import Settings
 from app.services import anime_character as anime
+from app.services.image_resolution import ImageResolution
 
 
 def jpeg_data(width: int = 640, height: int = 800) -> bytes:
@@ -144,7 +146,8 @@ async def test_resolver_races_sources_and_uses_first_image_fallback(
         settings,
         object(),
     )
-    assert result == expected
+    assert result.data == expected
+    assert result.provider == "搜索引擎首图"
 
 
 @pytest.mark.asyncio
@@ -165,6 +168,7 @@ async def test_resolver_persists_cache_and_skips_network_next_time(
         return None
 
     monkeypatch.setattr(anime, "_vndb_image", none)
+    monkeypatch.setattr(anime, "_bangumi_image", none)
     monkeypatch.setattr(anime, "_anilist_image", none)
     monkeypatch.setattr(anime, "_web_page_character_image", strict_success)
     monkeypatch.setattr(anime, "_wikipedia_image", none)
@@ -179,7 +183,7 @@ async def test_resolver_persists_cache_and_skips_network_next_time(
         anime_image_resolve_timeout_seconds=1,
     )
     first = await anime.resolve_anime_character_image(character, settings)
-    assert first == expected
+    assert first.data == expected
     assert calls == 1
 
     async def explode(*args, **kwargs):
@@ -187,7 +191,184 @@ async def test_resolver_persists_cache_and_skips_network_next_time(
 
     monkeypatch.setattr(anime, "_web_page_character_image", explode)
     second = await anime.resolve_anime_character_image(character, settings)
-    assert second == expected
+    assert second.data == expected
+    assert second.cache_hit is True
+
+
+@pytest.mark.asyncio
+async def test_moegirl_api_returns_attributed_exact_character_image(monkeypatch):
+    character = anime.ANIME_CHARACTER_BY_NAME["丛雨"]
+    raw = jpeg_data(480, 720)
+
+    async def handler(request: httpx.Request):
+        if request.url.host == "zh.moegirl.org.cn":
+            assert request.url.params["action"] == "query"
+            assert request.url.params["generator"] == "search"
+            assert "千恋" in request.url.params["gsrsearch"]
+            assert request.url.params["prop"] == "pageimages|info|extracts|categories"
+            assert "imageinfo" not in request.url.params
+            return httpx.Response(
+                200,
+                json={
+                    "query": {
+                        "pages": [
+                            {
+                                "title": "丛雨",
+                                "fullurl": "https://zh.moegirl.org.cn/丛雨",
+                                "extract": "《千恋＊万花》中的角色。",
+                                "categories": [{"title": "分类:千恋＊万花"}],
+                                "original": {"source": "https://img.example/murasame.jpg"},
+                            }
+                        ]
+                    }
+                },
+            )
+        if request.url.host == "img.example":
+            return httpx.Response(
+                200,
+                headers={"content-type": "image/jpeg"},
+                content=raw,
+            )
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mocked_client(**kwargs):
+        kwargs["transport"] = transport
+        return original_client(**kwargs)
+
+    monkeypatch.setattr(anime.httpx, "AsyncClient", mocked_client)
+    async def fake_download(client, url, referer, settings):
+        assert url.endswith("murasame.jpg")
+        assert referer.endswith("/丛雨")
+        return jpeg_base64(480, 720)
+
+    monkeypatch.setattr(anime, "_download_image", fake_download)
+    result = await anime._moegirl_image(
+        character,
+        character.aliases,
+        Settings(_env_file=None, moegirl_image_provider_enabled=True),
+    )
+    assert result is not None
+    assert result.provider == "萌娘百科"
+    assert result.source_page_url.endswith("/丛雨")
+    assert result.image_url.endswith("murasame.jpg")
+    assert "千恋" in result.evidence
+
+
+@pytest.mark.asyncio
+async def test_moegirl_rejects_wrong_character_even_when_work_matches(monkeypatch):
+    character = anime.ANIME_CHARACTER_BY_NAME["丛雨"]
+
+    async def handler(request: httpx.Request):
+        if request.url.host == "zh.moegirl.org.cn":
+            return httpx.Response(
+                200,
+                json={
+                    "query": {
+                        "pages": [
+                            {
+                                "title": "朝武芳乃",
+                                "extract": "《千恋＊万花》中的角色。",
+                                "original": {"source": "https://img.example/wrong.jpg"},
+                            }
+                        ]
+                    }
+                },
+            )
+        raise AssertionError("wrong identity image must not be downloaded")
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mocked_client(**kwargs):
+        kwargs["transport"] = transport
+        return original_client(**kwargs)
+
+    monkeypatch.setattr(anime.httpx, "AsyncClient", mocked_client)
+    result = await anime._moegirl_image(
+        character,
+        character.aliases,
+        Settings(_env_file=None, moegirl_image_provider_enabled=True),
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_anime_cache_sidecar_preserves_attribution(monkeypatch, tmp_path):
+    character = anime.ANIME_CHARACTER_BY_NAME["丛雨"]
+    expected = jpeg_base64(720, 960)
+    source = ImageResolution(
+        data=expected,
+        provider="测试来源",
+        source_page_url="https://example.test/character",
+        image_url="https://example.test/image.jpg",
+        label="丛雨（千恋＊万花）",
+        evidence="测试证据",
+    )
+
+    async def success(*args, **kwargs):
+        return source
+
+    async def none(*args, **kwargs):
+        return None
+
+    for name in (
+        "_bangumi_image", "_anilist_image", "_web_page_character_image",
+        "_wikipedia_image", "_moegirl_image", "_baidu_image", "_bing_image",
+        "_bing_image_relaxed", "_search_engine_first_image",
+    ):
+        monkeypatch.setattr(anime, name, none)
+    monkeypatch.setattr(anime, "_vndb_image", success)
+    settings = Settings(_env_file=None, anime_image_cache_dir=str(tmp_path))
+    first = await anime.resolve_anime_character_image(character, settings)
+    metadata_path = anime._anime_image_cache_metadata_path(
+        anime._anime_image_cache_path(character, settings)
+    )
+    assert json.loads(metadata_path.read_text(encoding="utf-8"))["provider"] == "测试来源"
+    second = await anime.resolve_anime_character_image(character, settings)
+    assert first.cache_hit is False
+    assert second.cache_hit is True
+    assert second.source_page_url == source.source_page_url
+
+
+@pytest.mark.asyncio
+async def test_anime_winner_cancels_late_source_before_cache_write(monkeypatch, tmp_path):
+    character = anime.ANIME_CHARACTER_BY_NAME["丛雨"]
+    fast = ImageResolution(data=jpeg_base64(), provider="fast", label=character.name)
+    late = ImageResolution(data=jpeg_base64(800, 900), provider="late", label=character.name)
+    cancelled = False
+
+    async def quick(*args, **kwargs):
+        return fast
+
+    async def slow(*args, **kwargs):
+        nonlocal cancelled
+        try:
+            await __import__("asyncio").sleep(10)
+        except __import__("asyncio").CancelledError:
+            cancelled = True
+            raise
+        return late
+
+    async def none(*args, **kwargs):
+        return None
+
+    for name in (
+        "_bangumi_image", "_anilist_image", "_web_page_character_image",
+        "_wikipedia_image", "_moegirl_image", "_baidu_image", "_bing_image",
+        "_bing_image_relaxed", "_search_engine_first_image",
+    ):
+        monkeypatch.setattr(anime, name, none)
+    monkeypatch.setattr(anime, "_vndb_image", quick)
+    monkeypatch.setattr(anime, "_bangumi_image", slow)
+    settings = Settings(_env_file=None, anime_image_cache_dir=str(tmp_path))
+    result = await anime.resolve_anime_character_image(character, settings)
+    cached = anime._load_anime_image_cache(character, settings)
+    assert result.provider == "fast"
+    assert cached is not None and cached.provider == "fast"
+    assert cancelled is True
 
 
 @pytest.mark.asyncio

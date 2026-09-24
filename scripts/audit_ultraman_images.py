@@ -9,8 +9,8 @@ from pathlib import Path
 
 from PIL import Image, ImageStat
 
-import app.services.ultraman as ultraman
 from app.config import Settings
+from app.services import ultraman
 from app.services.ultraman_encyclopedia import encyclopedia_ultraman_image
 
 
@@ -19,8 +19,12 @@ class AuditRow:
     name: str
     status: str
     source: str = ""
+    provider: str = ""
     label: str = ""
     page_url: str = ""
+    source_page: str = ""
+    image_url: str = ""
+    cache_hit: bool = False
     sha256: str = ""
     width: int = 0
     height: int = 0
@@ -45,23 +49,26 @@ async def resolve_exact_image(hero, settings: Settings) -> tuple[str, str, str, 
                 hero.name,
             )
         return data, "Tsuburaya exact page image", "", hero.name
-    except Exception as exc:
+    # Try each independent source and preserve its diagnostic in the report.
+    except Exception as exc:  # noqa: BLE001
         first_error = f"official: {type(exc).__name__}: {exc}"
 
     try:
         data = await ultraman.official_ultraman_search_image(hero, settings)
         return data, "Tsuburaya exact labelled search", "", hero.name
-    except Exception as exc:
+    # A single unavailable provider must not stop the audit fallback chain.
+    except Exception as exc:  # noqa: BLE001
         second_error = f"official-search: {type(exc).__name__}: {exc}"
 
     try:
         aliases = ultraman.ultraman_image_aliases(hero)
         image = await encyclopedia_ultraman_image(hero.name, aliases, settings)
         return image.data, image.source, image.page_url, image.label
-    except Exception as exc:
+    # The audit needs a combined diagnostic if every source is unavailable.
+    except Exception as exc:  # noqa: BLE001
         third_error = f"encyclopedia: {type(exc).__name__}: {exc}"
 
-    raise RuntimeError("; ".join((first_error, second_error, third_error)))
+    raise RuntimeError(f"{first_error}; {second_error}; {third_error}")
 
 
 async def audit_one(hero, settings: Settings, semaphore: asyncio.Semaphore) -> AuditRow:
@@ -118,13 +125,17 @@ async def audit_one(hero, settings: Settings, semaphore: asyncio.Semaphore) -> A
                 name=hero.name,
                 status="ok",
                 source=source,
+                provider=source,
                 label=label,
                 page_url=page_url,
+                source_page=page_url,
                 sha256=digest,
                 width=width,
                 height=height,
             )
-        except Exception as exc:
+        # Keep auditing remaining heroes even if this candidate is corrupt or
+        # a provider fails unexpectedly; the row records the exact exception.
+        except Exception as exc:  # noqa: BLE001
             return AuditRow(
                 name=hero.name,
                 status="missing",

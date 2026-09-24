@@ -1,3 +1,6 @@
+from datetime import timedelta
+from zoneinfo import ZoneInfoNotFoundError
+
 import pytest
 
 from app import main
@@ -31,3 +34,18 @@ def test_daily_news_defaults_to_noon_shanghai():
     assert main.settings.daily_news_hour == 12
     assert main.settings.daily_news_minute == 0
     assert main.settings.daily_news_timezone == "Asia/Shanghai"
+
+
+def test_daily_news_timezone_uses_utc8_without_tzdata(monkeypatch):
+    calls: list[str] = []
+
+    def unavailable(name: str):
+        calls.append(name)
+        raise ZoneInfoNotFoundError(name)
+
+    monkeypatch.setattr(main, "ZoneInfo", unavailable)
+    tz = main._daily_news_timezone()
+
+    assert calls == [main.settings.daily_news_timezone]
+    assert tz.utcoffset(None) == timedelta(hours=8)
+    assert tz.tzname(None) == "Asia/Shanghai"

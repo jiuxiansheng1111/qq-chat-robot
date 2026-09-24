@@ -57,6 +57,7 @@ from app.main import (
     split_qq_text,
     webhook_token_valid,
 )
+from app.services.image_resolution import ImageResolution
 from app.services.ultraman_encyclopedia import EncyclopediaImage
 
 
@@ -989,7 +990,7 @@ def test_ultraman_followup_reuses_last_resolved_form(monkeypatch, tmp_path):
     sent: list[tuple[str, str]] = []
 
     async def fake_resolve_image(hero, llm=None):
-        return "base64://ZmFrZQ=="
+        return ImageResolution(data="base64://ZmFrZQ==", provider="测试")
 
     def fake_render_card(hero, image, heading="今日奥特曼"):
         return f"card://{hero.name}"
@@ -1047,9 +1048,18 @@ async def test_ultraman_image_resolution_returns_first_parallel_success(
     output = BytesIO()
     Image.new("RGB", (640, 900), (50, 80, 120)).save(output, format="JPEG")
     expected = "base64://" + base64.b64encode(output.getvalue()).decode()
+    cancelled = False
 
     async def fail(*args, **kwargs):
         raise RuntimeError("source unavailable")
+
+    async def slow_official(*args, **kwargs):
+        nonlocal cancelled
+        try:
+            await __import__("asyncio").sleep(10)
+        except __import__("asyncio").CancelledError:
+            cancelled = True
+            raise
 
     async def success(name, aliases, runtime_settings):
         assert name == "测试形态"
@@ -1060,26 +1070,32 @@ async def test_ultraman_image_resolution_returns_first_parallel_success(
             label="测试形态",
         )
 
-    monkeypatch.setattr("app.main.official_ultraman_image", fail)
+    monkeypatch.setattr("app.main.official_ultraman_image", slow_official)
     monkeypatch.setattr("app.main.official_ultraman_search_image", fail)
     monkeypatch.setattr("app.main.baidu_baike_ultraman_image", success)
     monkeypatch.setattr("app.main.wikipedia_ultraman_image", fail)
     monkeypatch.setattr("app.main.baidu_image_search_ultraman_image", fail)
     monkeypatch.setattr("app.main.bing_image_search_ultraman_image", fail)
+    monkeypatch.setattr("app.main.official_merch_ultraman_image", fail)
     monkeypatch.setattr("app.main.web_page_ultraman_image", fail)
     monkeypatch.setattr("app.main.bing_image_relaxed_ultraman_image", fail)
     monkeypatch.setattr("app.main.ultraman_image_aliases", lambda hero: (hero.name,))
 
     try:
         result = await resolve_ultraman_card_image(hero)
-        assert result == expected
+        assert result.data == expected
+        assert result.provider == "百度百科"
+        assert result.source_page_url == "https://baike.baidu.com/item/test"
+        assert cancelled is True
 
         async def should_not_run(*args, **kwargs):
             raise AssertionError("cache hit should not call network sources")
 
         monkeypatch.setattr("app.main.baidu_baike_ultraman_image", should_not_run)
         cached = await resolve_ultraman_card_image(hero)
-        assert cached == expected
+        assert cached.data == expected
+        assert cached.provider == "百度百科"
+        assert cached.cache_hit is True
     finally:
         settings.ultraman_image_cache_dir = previous_cache_dir
         settings.ultraman_image_resolve_timeout_seconds = previous_timeout
@@ -1107,6 +1123,7 @@ async def test_ultraman_image_resolution_has_deadline_and_rejects_unverified_pla
         "wikipedia_ultraman_image",
         "baidu_image_search_ultraman_image",
         "bing_image_search_ultraman_image",
+        "official_merch_ultraman_image",
         "web_page_ultraman_image",
         "bing_image_relaxed_ultraman_image",
     ):

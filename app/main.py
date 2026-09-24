@@ -2,13 +2,14 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import json
 import logging
 import re
 import secrets
 from collections import deque
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone, tzinfo
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -79,6 +80,11 @@ from app.services.group_memory_logic import (
     rewrite_relation_pronouns,
 )
 from app.services.http_routing import install_outbound_proxy_environment
+from app.services.image_resolution import (
+    ImageResolution,
+    append_image_attribution,
+    coerce_image_resolution,
+)
 from app.services.music import (
     MusicIdentity,
     MusicTrack,
@@ -254,15 +260,18 @@ class PluginContext:
     args: str = ""
 
 
-def _daily_news_timezone() -> ZoneInfo:
+def _daily_news_timezone() -> tzinfo:
     try:
         return ZoneInfo(settings.daily_news_timezone)
     except ZoneInfoNotFoundError:
         logger.warning(
-            "Unknown daily news timezone %s; falling back to Asia/Shanghai",
+            "Unknown daily news timezone %s; falling back to fixed UTC+8",
             settings.daily_news_timezone,
         )
-        return ZoneInfo("Asia/Shanghai")
+        # Windows hosts may lack both the IANA zone database and optional
+        # tzdata. Shanghai has no daylight-saving transition, so a standard
+        # library UTC+8 instance is an accurate, dependency-free fallback.
+        return timezone(timedelta(hours=8), name="Asia/Shanghai")
 
 
 async def build_daily_news_digest() -> str:
@@ -524,24 +533,6 @@ async def lifespan(app: FastAPI):
             app.state.daily_news_task.cancel()
             with suppress(asyncio.CancelledError):
                 await app.state.daily_news_task
-        current_loop = asyncio.get_running_loop()
-        owned_prefetch_tasks = [
-            task
-            for task in list(_ultraman_prefetch_tasks)
-            if task.get_loop() is current_loop
-        ]
-        for task in owned_prefetch_tasks:
-            if not task.done():
-                task.cancel()
-        for task in owned_prefetch_tasks:
-            with suppress(
-                asyncio.CancelledError,
-                RuntimeError,
-                ValueError,
-                OSError,
-            ):
-                await task
-        _ultraman_prefetch_tasks.difference_update(owned_prefetch_tasks)
         await app.state.llm.aclose()
 
 
@@ -1702,10 +1693,7 @@ async def llm_confirm_ultraman_image_candidate(
     return result
 
 
-_ultraman_prefetch_tasks: set[asyncio.Task] = set()
-
-
-ULTRAMAN_IMAGE_CACHE_VERSION = "v2-verified-20260924"
+ULTRAMAN_IMAGE_CACHE_VERSION = "v3-attribution-20260924"
 
 
 def _ultraman_image_cache_path(hero) -> Path:
@@ -1714,6 +1702,10 @@ def _ultraman_image_cache_path(hero) -> Path:
     cache_key = f"{ULTRAMAN_IMAGE_CACHE_VERSION}\0{hero.name}"
     digest = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:24]
     return cache_dir / f"{digest}.img"
+
+
+def _ultraman_image_cache_metadata_path(path: Path) -> Path:
+    return path.with_suffix(path.suffix + ".json")
 
 
 def _ultraman_image_payload_usable(image_file: str) -> bool:
@@ -1750,7 +1742,7 @@ def _ultraman_image_payload_usable(image_file: str) -> bool:
     return True
 
 
-def _load_ultraman_image_cache(hero) -> str | None:
+def _load_ultraman_image_cache(hero) -> ImageResolution | None:
     path = _ultraman_image_cache_path(hero)
     if not path.exists():
         return None
@@ -1758,17 +1750,23 @@ def _load_ultraman_image_cache(hero) -> str | None:
         raw = path.read_bytes()
         if not raw:
             return None
-        image_file = "base64://" + base64.b64encode(raw).decode()
-        if not _ultraman_image_payload_usable(image_file):
+        data = "base64://" + base64.b64encode(raw).decode()
+        if not _ultraman_image_payload_usable(data):
             logger.warning("discarding unusable Ultraman image cache for %s", hero.name)
             path.unlink(missing_ok=True)
             return None
-        return image_file
+        metadata_path = _ultraman_image_cache_metadata_path(path)
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            metadata = None
+        return ImageResolution.from_cache_metadata(data, metadata)
     except (OSError, ValueError):
         return None
 
 
-def _save_ultraman_image_cache(hero, image_file: str) -> None:
+def _save_ultraman_image_cache(hero, result: ImageResolution) -> None:
+    image_file = result.data
     if not _ultraman_image_payload_usable(image_file):
         logger.info("refusing unusable Ultraman image cache for %s", hero.name)
         return
@@ -1778,38 +1776,31 @@ def _save_ultraman_image_cache(hero, image_file: str) -> None:
         tmp = path.with_suffix(".tmp")
         tmp.write_bytes(raw)
         tmp.replace(path)
+        metadata_path = _ultraman_image_cache_metadata_path(path)
+        metadata_tmp = metadata_path.with_suffix(metadata_path.suffix + ".tmp")
+        metadata_tmp.write_text(
+            json.dumps(result.cache_metadata(), ensure_ascii=False, sort_keys=True),
+            encoding="utf-8",
+        )
+        metadata_tmp.replace(metadata_path)
     except (OSError, ValueError):
         return
 
 
-async def _resolve_ultraman_source(hero, source_name: str, resolver) -> str:
-    result = await resolver()
-    if isinstance(result, str):
-        image = result
-    elif result is not None:
-        image = result.data
-    else:
+async def _resolve_ultraman_source(hero, source_name: str, resolver) -> ImageResolution:
+    raw = await resolver()
+    result = coerce_image_resolution(
+        raw,
+        provider=source_name,
+        label=hero.name,
+        evidence=f"{source_name} 的精确角色/形态匹配结果",
+    )
+    if result is None:
         raise RuntimeError(f"{source_name} no match")
-    if not _ultraman_image_payload_usable(image):
+    if not _ultraman_image_payload_usable(result.data):
         raise RuntimeError(f"{source_name} returned blank/dark/unusable image")
-    _save_ultraman_image_cache(hero, image)
     logger.info("Ultraman image resolved from %s for %s", source_name, hero.name)
-    return image
-
-
-def _track_ultraman_prefetch(task: asyncio.Task) -> None:
-    _ultraman_prefetch_tasks.add(task)
-
-    def _consume(done: asyncio.Task) -> None:
-        _ultraman_prefetch_tasks.discard(done)
-        if done.cancelled():
-            return
-        try:
-            done.exception()
-        except (asyncio.CancelledError, RuntimeError):
-            return
-
-    task.add_done_callback(_consume)
+    return result
 
 
 async def _llm_ultraman_search_queries(hero, llm) -> tuple[str, ...]:
@@ -1854,13 +1845,12 @@ async def _llm_ultraman_search_queries(hero, llm) -> tuple[str, ...]:
     return tuple(queries)
 
 
-async def resolve_ultraman_card_image(hero, llm=None) -> str:
+async def resolve_ultraman_card_image(hero, llm=None) -> ImageResolution:
     """Resolve a hero image with a strict response deadline and persistent cache.
 
-    All independent sources race in parallel instead of accumulating their
-    individual timeouts. If the deadline expires, unfinished searches keep
-    warming the cache in the background while the caller receives a guaranteed
-    renderable card immediately.
+    Independent sources race in parallel instead of accumulating individual
+    timeouts. The selected winner is the only source permitted to write cache;
+    unfinished contenders are cancelled before returning to the caller.
     """
     cached = _load_ultraman_image_cache(hero)
     if cached is not None:
@@ -1913,18 +1903,17 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
         )
         for source_name, resolver in source_factories
     ]
-    for task in tasks:
-        _track_ultraman_prefetch(task)
-
     timeout = max(
         0.05,
         min(float(settings.ultraman_image_resolve_timeout_seconds), 15.0),
     )
+    winner: ImageResolution | None = None
     try:
         async with asyncio.timeout(timeout):
             for completed in asyncio.as_completed(tasks):
                 try:
-                    return await completed
+                    winner = await completed
+                    break
                 except (RuntimeError, ValueError, OSError, httpx.HTTPError) as exc:
                     logger.debug(
                         "Ultraman parallel image source failed for %s: %s",
@@ -1938,6 +1927,15 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
             timeout,
             hero.name,
         )
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    if winner is not None:
+        _save_ultraman_image_cache(hero, winner)
+        return winner
 
     cached = _load_ultraman_image_cache(hero)
     if cached is not None:
@@ -1979,31 +1977,37 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
         try:
             async with asyncio.timeout(14.0):
                 result = await resolver()
-            if result is None or not _ultraman_image_payload_usable(result.data):
+            candidate = coerce_image_resolution(
+                result,
+                provider=source_name,
+                label=hero.name,
+                evidence=f"{source_name} 经过最终身份复核",
+            )
+            if candidate is None or not _ultraman_image_payload_usable(candidate.data):
                 continue
             verdict = await llm_confirm_ultraman_image_candidate(
                 hero,
                 llm,
                 source=source_name,
-                label=result.label,
-                page_url=result.page_url,
+                label=candidate.label,
+                page_url=candidate.source_page_url,
             )
             if verdict is False or (require_positive_review and verdict is not True):
                 logger.info(
                     "Ultraman fallback candidate rejected for %s from %s: %s",
                     hero.name,
                     source_name,
-                    result.label,
+                    candidate.label,
                 )
                 continue
-            _save_ultraman_image_cache(hero, result.data)
+            _save_ultraman_image_cache(hero, candidate)
             logger.info(
                 "Ultraman image resolved from reviewed fallback %s for %s: %s",
                 source_name,
                 hero.name,
-                result.label,
+                candidate.label,
             )
-            return result.data
+            return candidate
         except (TimeoutError, RuntimeError, ValueError, OSError, httpx.HTTPError) as exc:
             logger.info("Ultraman fallback %s failed for %s: %s", source_name, hero.name, exc)
 
@@ -3043,7 +3047,9 @@ async def onebot_webhook(
             image = await resolve_anime_character_image(
                 character, settings, request.app.state.llm
             )
-            await send_group_image(group_id, image, caption)
+            if image.source_page_url:
+                caption = append_image_attribution(caption, image)
+            await send_group_image(group_id, image.data, caption)
         except (RuntimeError, httpx.HTTPError) as exc:
             logger.warning("anime character image failed: %s", exc)
             await send_group_message(
@@ -3092,7 +3098,9 @@ async def onebot_webhook(
             image = await resolve_anime_character_image(
                 anime_character, settings, request.app.state.llm
             )
-            await send_group_image(group_id, image, caption)
+            if image.source_page_url:
+                caption = append_image_attribution(caption, image)
+            await send_group_image(group_id, image.data, caption)
         except (RuntimeError, httpx.HTTPError) as exc:
             logger.warning("anime character encyclopedia image failed: %s", exc)
             await send_group_message(group_id, caption + "\n图片暂时没有找到可靠来源。")
@@ -3136,7 +3144,9 @@ async def onebot_webhook(
         )
         try:
             image = await resolve_ultraman_card_image(hero, request.app.state.llm)
-            card = render_ultraman_card(hero, image)
+            card = render_ultraman_card(hero, image.data)
+            if image.source_page_url:
+                caption = append_image_attribution(caption, image)
             await send_group_image(group_id, card, caption)
         except (RuntimeError, httpx.HTTPError) as exc:
             logger.warning("official Ultraman image failed: %s", exc)
@@ -3180,7 +3190,9 @@ async def onebot_webhook(
         )
         try:
             image = await resolve_ultraman_card_image(catalog_hero, request.app.state.llm)
-            card = render_ultraman_card(catalog_hero, image, heading="奥特曼图鉴")
+            card = render_ultraman_card(catalog_hero, image.data, heading="奥特曼图鉴")
+            if image.source_page_url:
+                caption = append_image_attribution(caption, image)
             await send_group_image(group_id, card, caption)
         except (RuntimeError, httpx.HTTPError) as exc:
             logger.warning("Ultraman encyclopedia image failed: %s", exc)
@@ -3204,9 +3216,11 @@ async def onebot_webhook(
                 image = await resolve_ultraman_card_image(recent_ultraman, request.app.state.llm)
                 card = render_ultraman_card(
                     recent_ultraman,
-                    image,
+                    image.data,
                     heading="奥特曼图鉴",
                 )
+                if image.source_page_url:
+                    caption = append_image_attribution(caption, image)
                 await send_group_image(group_id, card, caption)
             except (RuntimeError, httpx.HTTPError) as exc:
                 logger.warning("Ultraman follow-up image failed: %s", exc)

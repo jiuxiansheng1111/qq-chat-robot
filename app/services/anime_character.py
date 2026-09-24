@@ -17,6 +17,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from app.config import Settings
 from app.llm.providers import LLMError
+from app.services.image_resolution import ImageResolution, coerce_image_resolution
 from app.services.web_search import search_web
 
 
@@ -123,6 +124,7 @@ def _load_extra_anime_characters() -> tuple[AnimeCharacter, ...]:
 
 ANIME_CHARACTER_ROSTER += _load_extra_anime_characters()
 ANIME_CHARACTER_BY_NAME = {item.name: item for item in ANIME_CHARACTER_ROSTER}
+ANIME_IMAGE_CACHE_VERSION = "v2-attribution-20260924"
 
 ANIME_SERIES_ALIASES: dict[str, tuple[str, ...]] = {
     "《千恋＊万花》": ("Senren * Banka", "Senren Banka", "千恋＊万花"),
@@ -1779,6 +1781,116 @@ async def _llm_search_aliases(
     return tuple(values[:8])
 
 
+async def _moegirl_image(
+    character: AnimeCharacter,
+    aliases: tuple[str, ...],
+    settings: Settings,
+) -> ImageResolution | None:
+    """Resolve a strictly identified character image from Moegirl's API.
+
+    Moegirl's terms require permission for automated/off-site image use, so the
+    provider is opt-in.  Do not use ``imageinfo`` here: that action is not
+    enabled by the public API.  ``pageimages`` supplies the original/thumbnail
+    URLs allowed by this query shape instead.
+    """
+    if not settings.moegirl_image_provider_enabled:
+        return None
+
+    timeout = max(3.0, min(float(settings.media_timeout_seconds), 10.0))
+    headers = {"User-Agent": "qq-chatrobot/0.1 (image attribution resolver)"}
+    series = character.series.strip("《》 ")
+    queries = tuple(
+        dict.fromkeys(
+            f"{name} {series}"
+            for name in (character.name, *character.aliases, *aliases)
+            if name.strip()
+        )
+    )[:8]
+    series_terms = _series_match_terms(character)
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        headers=headers,
+    ) as client:
+        for query in queries:
+            try:
+                response = await client.get(
+                    "https://zh.moegirl.org.cn/api.php",
+                    params={
+                        "action": "query",
+                        "generator": "search",
+                        "gsrsearch": query,
+                        "gsrnamespace": "0",
+                        "gsrlimit": "10",
+                        "prop": "pageimages|info|extracts|categories",
+                        "piprop": "original|thumbnail",
+                        "pithumbsize": "1200",
+                        "inprop": "url",
+                        "exintro": "1",
+                        "explaintext": "1",
+                        "exsentences": "3",
+                        "cllimit": "max",
+                        "format": "json",
+                        "formatversion": "2",
+                    },
+                )
+                response.raise_for_status()
+                pages = response.json().get("query", {}).get("pages", [])
+            except (httpx.HTTPError, ValueError, AttributeError):
+                continue
+
+            if not isinstance(pages, list):
+                continue
+            for page in pages:
+                if not isinstance(page, dict):
+                    continue
+                title = str(page.get("title") or "")
+                category_titles = [
+                    str(item.get("title") or "")
+                    for item in page.get("categories", [])
+                    if isinstance(item, dict)
+                ]
+                evidence_text = " ".join(
+                    (title, str(page.get("extract") or ""), *category_titles)
+                )
+                normalized_evidence = _normalize(evidence_text)
+                # Identity must be in the page title; work evidence may live
+                # in the intro/categories because many correct character pages
+                # (for example “丛雨”) intentionally use only the name as title.
+                if not _candidate_name_matches(character, aliases, [title]):
+                    continue
+                if not any(term in normalized_evidence for term in series_terms):
+                    continue
+                original = page.get("original")
+                thumbnail = page.get("thumbnail")
+                image_url = ""
+                if isinstance(original, dict):
+                    image_url = str(original.get("source") or "")
+                if not image_url and isinstance(thumbnail, dict):
+                    image_url = str(thumbnail.get("source") or "")
+                if not image_url:
+                    continue
+                page_url = str(page.get("fullurl") or "")
+                if not page_url:
+                    page_url = "https://zh.moegirl.org.cn/" + quote(title.replace(" ", "_"))
+                try:
+                    data = await _download_image(client, image_url, page_url, settings)
+                except (httpx.HTTPError, RuntimeError, OSError, ValueError):
+                    continue
+                return ImageResolution(
+                    data=data,
+                    provider="萌娘百科",
+                    source_page_url=page_url,
+                    image_url=image_url,
+                    label=title,
+                    evidence=(
+                        "角色名/别名命中条目标题；作品名命中条目标题、简介或分类："
+                        + evidence_text[:400]
+                    ),
+                )
+    return None
+
+
 def _anime_image_cache_path(
     character: AnimeCharacter,
     settings: Settings,
@@ -1786,15 +1898,19 @@ def _anime_image_cache_path(
     cache_dir = Path(settings.anime_image_cache_dir).expanduser().resolve()
     cache_dir.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256(
-        f"{character.name}|{character.series}".encode()
+        f"{ANIME_IMAGE_CACHE_VERSION}|{character.name}|{character.series}".encode()
     ).hexdigest()[:24]
     return cache_dir / f"{digest}.jpg"
+
+
+def _anime_image_cache_metadata_path(path: Path) -> Path:
+    return path.with_suffix(path.suffix + ".json")
 
 
 def _load_anime_image_cache(
     character: AnimeCharacter,
     settings: Settings,
-) -> str | None:
+) -> ImageResolution | None:
     path = _anime_image_cache_path(character, settings)
     if not path.exists():
         return None
@@ -1806,7 +1922,13 @@ def _load_anime_image_cache(
             width, height = source.size
             if width < 180 or height < 180:
                 return None
-        return "base64://" + base64.b64encode(raw).decode()
+        data = "base64://" + base64.b64encode(raw).decode()
+        metadata_path = _anime_image_cache_metadata_path(path)
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            metadata = None
+        return ImageResolution.from_cache_metadata(data, metadata)
     except (OSError, ValueError):
         return None
 
@@ -1814,8 +1936,9 @@ def _load_anime_image_cache(
 def _save_anime_image_cache(
     character: AnimeCharacter,
     settings: Settings,
-    image_file: str,
+    result: ImageResolution,
 ) -> None:
+    image_file = result.data
     if not image_file.startswith("base64://"):
         return
     try:
@@ -1831,6 +1954,13 @@ def _save_anime_image_cache(
         tmp = path.with_suffix(".tmp")
         tmp.write_bytes(raw)
         tmp.replace(path)
+        metadata_path = _anime_image_cache_metadata_path(path)
+        metadata_tmp = metadata_path.with_suffix(metadata_path.suffix + ".tmp")
+        metadata_tmp.write_text(
+            json.dumps(result.cache_metadata(), ensure_ascii=False, sort_keys=True),
+            encoding="utf-8",
+        )
+        metadata_tmp.replace(metadata_path)
     except (OSError, ValueError):
         return
 
@@ -1841,40 +1971,51 @@ async def _anime_source_result(
     settings: Settings,
     source_name: str,
     resolver,
-) -> str:
-    image = await resolver(character, aliases, settings)
-    if image is None:
+) -> ImageResolution:
+    raw = await resolver(character, aliases, settings)
+    result = coerce_image_resolution(
+        raw,
+        provider=source_name,
+        label=character.name,
+        evidence=f"{source_name} 的角色/作品匹配结果",
+    )
+    if result is None:
         raise RuntimeError(f"{source_name} no-match")
-    _save_anime_image_cache(character, settings, image)
-    return image
+    return result
 
 
 async def _delayed_anime_first_image(
     character: AnimeCharacter,
     aliases: tuple[str, ...],
     settings: Settings,
-) -> str:
+) -> ImageResolution:
     # Give structured/official sources enough time before accepting a generic
     # search-engine image. This reduces wrong-character hits without losing the
     # final fallback.
     await asyncio.sleep(1.5)
     image = await _search_engine_first_image(character, aliases, settings)
-    if image is None:
+    result = coerce_image_resolution(
+        image,
+        provider="搜索引擎首图",
+        label=character.name,
+        evidence="严格角色名/作品匹配的搜索引擎候选",
+    )
+    if result is None:
         raise RuntimeError("搜索引擎首图 no-match")
-    _save_anime_image_cache(character, settings, image)
-    return image
+    return result
 
 
 async def resolve_anime_character_image(
     character: AnimeCharacter,
     settings: Settings,
     llm=None,
-) -> str:
+) -> ImageResolution:
     """Resolve every catalog character with structured sources and fallbacks.
 
     Structured APIs remain on the fast path. If they all fail, the configured
     LLM may generate disambiguated multilingual search aliases; the model never
-    invents an image URL.
+    invents an image URL. The selected winner is the only source permitted to
+    write cache, and unfinished contenders are cancelled before returning.
     """
 
     cached = _load_anime_image_cache(character, settings)
@@ -1916,11 +2057,13 @@ async def resolve_anime_character_image(
         min(float(settings.anime_image_resolve_timeout_seconds), 10.0),
     )
     errors: list[str] = []
+    winner: ImageResolution | None = None
     try:
         async with asyncio.timeout(timeout):
             for completed in asyncio.as_completed(tasks):
                 try:
-                    return await completed
+                    winner = await completed
+                    break
                 except (
                     httpx.HTTPError,
                     RuntimeError,
@@ -1936,6 +2079,12 @@ async def resolve_anime_character_image(
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
+    if winner is not None:
+        # Only the chosen result reaches durable cache.  In particular, a
+        # delayed candidate cannot overwrite a source already sent to QQ.
+        _save_anime_image_cache(character, settings, winner)
+        return winner
+
     cached = _load_anime_image_cache(character, settings)
     if cached is not None:
         return cached
@@ -1950,9 +2099,15 @@ async def resolve_anime_character_image(
                     merged_aliases,
                     settings,
                 )
-            if image is not None:
-                _save_anime_image_cache(character, settings, image)
-                return image
+            result = coerce_image_resolution(
+                image,
+                provider="LLM搜索兜底",
+                label=character.name,
+                evidence="LLM生成查询词后的搜索引擎候选",
+            )
+            if result is not None:
+                _save_anime_image_cache(character, settings, result)
+                return result
         except (TimeoutError, httpx.HTTPError, RuntimeError, OSError, ValueError) as exc:
             errors.append(f"LLM搜索兜底: {exc}")
 
