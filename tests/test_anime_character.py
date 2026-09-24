@@ -647,10 +647,11 @@ async def test_moegirl_pageimages_resolves_hange(monkeypatch):
     result = await anime._moegirl_image(
         character,
         character.aliases,
-        Settings(_env_file=None),
+        Settings(_env_file=None, moegirl_image_provider_enabled=True),
     )
     assert result is not None
-    decoded = base64.b64decode(result.removeprefix("base64://"))
+    assert result.provider == "萌娘百科"
+    decoded = base64.b64decode(result.data.removeprefix("base64://"))
     with Image.open(BytesIO(decoded)) as image:
         assert image.width == 420
         assert image.height == 640

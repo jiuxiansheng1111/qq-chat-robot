@@ -990,7 +990,7 @@ class _CharacterPageImageParser(HTMLParser):
             self._title_parts.append(data)
 
 
-async def _moegirl_image(
+async def _moegirl_legacy_image(
     character: AnimeCharacter,
     aliases: tuple[str, ...],
     settings: Settings,
@@ -1807,6 +1807,7 @@ async def _moegirl_image(
         )
     )[:8]
     series_terms = _series_match_terms(character)
+    saw_pages = False
     async with httpx.AsyncClient(
         timeout=timeout,
         follow_redirects=True,
@@ -1835,12 +1836,17 @@ async def _moegirl_image(
                     },
                 )
                 response.raise_for_status()
-                pages = response.json().get("query", {}).get("pages", [])
+                pages_payload = response.json().get("query", {}).get("pages", [])
+                if isinstance(pages_payload, dict):
+                    pages = list(pages_payload.values())
+                else:
+                    pages = pages_payload
             except (httpx.HTTPError, ValueError, AttributeError):
                 continue
 
             if not isinstance(pages, list):
                 continue
+            saw_pages = saw_pages or bool(pages)
             for page in pages:
                 if not isinstance(page, dict):
                     continue
@@ -1851,7 +1857,7 @@ async def _moegirl_image(
                     if isinstance(item, dict)
                 ]
                 evidence_text = " ".join(
-                    (title, str(page.get("extract") or ""), *category_titles)
+                    (title, query, str(page.get("extract") or ""), *category_titles)
                 )
                 normalized_evidence = _normalize(evidence_text)
                 # Identity must be in the page title; work evidence may live
@@ -1888,6 +1894,20 @@ async def _moegirl_image(
                         + evidence_text[:400]
                     ),
                 )
+    # Keep the remote branch's direct/work-page strategy as a last resort, but
+    # adapt its legacy string payload to the shared provenance contract.
+    legacy_data = None
+    if not saw_pages:
+        legacy_data = await _moegirl_legacy_image(character, aliases, settings)
+    if legacy_data:
+        page_url = "https://zh.moegirl.org.cn/" + quote(character.name)
+        return ImageResolution(
+            data=legacy_data,
+            provider="萌娘百科",
+            source_page_url=page_url,
+            label=character.name,
+            evidence="萌娘百科角色页/作品页兼容兜底",
+        )
     return None
 
 

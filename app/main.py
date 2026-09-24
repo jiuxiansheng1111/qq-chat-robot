@@ -3002,7 +3002,9 @@ async def onebot_webhook(
                 )
                 try:
                     image = await resolve_ultraman_card_image(hero, request.app.state.llm)
-                    card = render_ultraman_card(hero, image, heading="特摄角色图鉴")
+                    card = render_ultraman_card(hero, image.data, heading="特摄角色图鉴")
+                    if image.source_page_url:
+                        caption = append_image_attribution(caption, image)
                     await send_group_image(group_id, card, caption)
                 except (RuntimeError, httpx.HTTPError) as exc:
                     logger.warning("catalog hub Ultraman image failed: %s", exc)
@@ -3023,7 +3025,9 @@ async def onebot_webhook(
                     image = await resolve_anime_character_image(
                         character, settings, request.app.state.llm
                     )
-                    await send_group_image(group_id, image, caption)
+                    if image.source_page_url:
+                        caption = append_image_attribution(caption, image)
+                    await send_group_image(group_id, image.data, caption)
                 except (RuntimeError, httpx.HTTPError) as exc:
                     logger.warning("catalog hub anime image failed: %s", exc)
                     await send_group_message(group_id, caption + "\n图片暂时没有找到可靠来源。")
