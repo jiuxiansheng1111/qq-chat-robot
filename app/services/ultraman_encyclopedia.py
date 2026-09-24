@@ -563,6 +563,110 @@ async def _download_verified_image(
     return "base64://" + base64.b64encode(payload).decode()
 
 
+async def moegirl_ultraman_image(
+    name: str,
+    aliases: tuple[str, ...],
+    settings: Settings,
+) -> EncyclopediaImage | None:
+    """Resolve an exact Ultraman/Ultra-form page from Moegirlpedia.
+
+    Moegirlpedia is treated as a trusted encyclopedia source, but it is never
+    allowed to weaken identity checks: the resolved page title itself must
+    contain a strong character/form term before its lead image is accepted.
+    """
+    terms = _specific_terms(name, aliases)
+    if not terms:
+        return None
+    queries = _encyclopedia_search_terms(name, aliases)
+    domains = (
+        "https://zh.moegirl.org.cn",
+        "https://moegirl.icu",
+        "https://moegirl.uk",
+    )
+    timeout = max(4.0, min(float(settings.media_timeout_seconds), 9.0))
+    headers = {
+        "User-Agent": ENCYCLOPEDIA_USER_AGENT,
+        "Accept-Language": "zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7",
+    }
+
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        headers=headers,
+    ) as client:
+        for domain in domains:
+            for query in queries[:8]:
+                try:
+                    response = await client.get(
+                        f"{domain}/api.php",
+                        params={
+                            "action": "query",
+                            "format": "json",
+                            "redirects": "1",
+                            "prop": "pageimages",
+                            "piprop": "original|thumbnail|name",
+                            "pithumbsize": "1400",
+                            "titles": query,
+                        },
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                except (httpx.HTTPError, ValueError):
+                    continue
+
+                pages = (
+                    payload.get("query", {}).get("pages", {})
+                    if isinstance(payload, dict)
+                    else {}
+                )
+                if not isinstance(pages, dict):
+                    continue
+                for page in pages.values():
+                    if not isinstance(page, dict) or page.get("missing") is not None:
+                        continue
+                    page_title = str(page.get("title") or "")
+                    if not _matches_specific(page_title, terms):
+                        continue
+
+                    image_urls: list[str] = []
+                    original = page.get("original") or {}
+                    thumbnail = page.get("thumbnail") or {}
+                    if isinstance(original, dict):
+                        image_urls.append(str(original.get("source") or ""))
+                    if isinstance(thumbnail, dict):
+                        image_urls.append(str(thumbnail.get("source") or ""))
+
+                    page_url = f"{domain}/{quote(page_title or query)}"
+                    for image_url in dict.fromkeys(
+                        value.strip()
+                        for value in image_urls
+                        if value and value.strip()
+                    ):
+                        if not image_url.startswith(("https://", "http://")):
+                            continue
+                        try:
+                            data_b64 = await _download_verified_image(
+                                client,
+                                image_url,
+                                page_url,
+                                settings,
+                            )
+                        except (
+                            httpx.HTTPError,
+                            RuntimeError,
+                            OSError,
+                            ValueError,
+                        ):
+                            continue
+                        return EncyclopediaImage(
+                            data=data_b64,
+                            source="萌娘百科",
+                            page_url=page_url,
+                            label=page_title or query,
+                        )
+    return None
+
+
 async def baidu_baike_ultraman_image(
     name: str,
     aliases: tuple[str, ...],
@@ -1805,6 +1909,9 @@ async def encyclopedia_ultraman_image(
     wikipedia = await wikipedia_ultraman_image(name, aliases, settings)
     if wikipedia is not None:
         return wikipedia
+    moegirl = await moegirl_ultraman_image(name, aliases, settings)
+    if moegirl is not None:
+        return moegirl
     baidu_image = await baidu_image_search_ultraman_image(name, aliases, settings)
     if baidu_image is not None:
         return baidu_image

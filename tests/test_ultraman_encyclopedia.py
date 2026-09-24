@@ -12,6 +12,7 @@ from app.services.ultraman_encyclopedia import (
     baidu_page_image_candidates,
     encyclopedia_reference_matches,
     encyclopedia_ultraman_image,
+    moegirl_ultraman_image,
     wikipedia_ultraman_image,
 )
 from app.services.web_search import SearchResult
@@ -782,3 +783,90 @@ async def test_search_engine_first_image_skips_wrong_form_metadata(monkeypatch):
     )
     assert result is not None
     assert "刚燃形态" in result.label
+
+
+
+@pytest.mark.asyncio
+async def test_moegirl_ultraman_source_accepts_exact_character_page(monkeypatch):
+    image_data = png_bytes()
+
+    async def handler(request: httpx.Request):
+        if request.url.path.endswith("/api.php"):
+            return httpx.Response(
+                200,
+                json={
+                    "query": {
+                        "pages": {
+                            "42": {
+                                "pageid": 42,
+                                "title": "迪迦奥特曼·强力型",
+                                "original": {
+                                    "source": "https://img.moegirl.example/tiga-power.png"
+                                },
+                            }
+                        }
+                    }
+                },
+            )
+        if request.url.host == "img.moegirl.example":
+            return httpx.Response(
+                200,
+                headers={"content-type": "image/png"},
+                content=image_data,
+            )
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mocked_client(**kwargs):
+        kwargs["transport"] = transport
+        return original_client(**kwargs)
+
+    monkeypatch.setattr(encyclopedia_module.httpx, "AsyncClient", mocked_client)
+    result = await moegirl_ultraman_image(
+        "迪迦奥特曼·强力型",
+        ("ウルトラマンティガ パワータイプ", "Ultraman Tiga Power Type"),
+        Settings(_env_file=None),
+    )
+    assert result is not None
+    assert result.source == "萌娘百科"
+    assert "强力型" in result.label
+
+
+@pytest.mark.asyncio
+async def test_moegirl_ultraman_source_rejects_parent_page_for_specific_form(monkeypatch):
+    async def handler(request: httpx.Request):
+        if request.url.path.endswith("/api.php"):
+            return httpx.Response(
+                200,
+                json={
+                    "query": {
+                        "pages": {
+                            "42": {
+                                "pageid": 42,
+                                "title": "迪迦奥特曼",
+                                "original": {
+                                    "source": "https://img.moegirl.example/base.png"
+                                },
+                            }
+                        }
+                    }
+                },
+            )
+        raise AssertionError("base image must never be downloaded for a form")
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mocked_client(**kwargs):
+        kwargs["transport"] = transport
+        return original_client(**kwargs)
+
+    monkeypatch.setattr(encyclopedia_module.httpx, "AsyncClient", mocked_client)
+    result = await moegirl_ultraman_image(
+        "迪迦奥特曼·强力型",
+        ("ウルトラマンティガ パワータイプ", "Ultraman Tiga Power Type"),
+        Settings(_env_file=None),
+    )
+    assert result is None

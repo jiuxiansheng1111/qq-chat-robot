@@ -121,6 +121,7 @@ from app.services.ultraman_encyclopedia import (
     baidu_image_search_ultraman_image,
     bing_image_relaxed_ultraman_image,
     bing_image_search_ultraman_image,
+    moegirl_ultraman_image,
     official_merch_ultraman_image,
     search_engine_first_ultraman_image,
     web_page_ultraman_image,
@@ -1752,6 +1753,10 @@ async def resolve_ultraman_card_image(hero, llm=None) -> str:
         (
             "Wikipedia/Wikimedia",
             lambda: wikipedia_ultraman_image(hero.name, aliases, settings),
+        ),
+        (
+            "萌娘百科",
+            lambda: moegirl_ultraman_image(hero.name, aliases, settings),
         ),
         (
             "百度图片",
