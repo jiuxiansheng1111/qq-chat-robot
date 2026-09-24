@@ -56,6 +56,21 @@ def test_more_realistic_insults_have_immediate_penalties():
     assert rule_based_affection("臭机器人，真蠢", "").delta <= -5
 
 
+def test_cruel_family_murder_dilemma_deducts_affection():
+    assessment = rule_based_affection(
+        "你妈和你爸必须要被杀一个，你选哪个",
+        "",
+    )
+    assert assessment.delta == -8
+    assert assessment.reason == "恶意威胁或残酷逼迫"
+
+
+def test_direct_family_violence_threat_is_severe():
+    assessment = rule_based_affection("我迟早弄死你家人", "")
+    assert assessment.delta == -10
+    assert assessment.reason == "直接暴力威胁"
+
+
 def test_affection_change_text_reports_real_applied_delta():
     assessment = AffectionAssessment(5, "非常满意")
     assert affection_change_text(98, 100, assessment) == (
@@ -147,5 +162,36 @@ async def test_slang_definition_question_is_not_penalized_when_target_is_unclear
         check_hostility_target=True,
         explicit_bot_mention=True,
         persona_names=("小丛雨",),
+    )
+    assert result.delta == 0
+
+
+
+@pytest.mark.asyncio
+async def test_direct_cruel_dilemma_still_deducts_when_target_llm_is_unavailable():
+    result = await assess_affection(
+        "你妈和你爸必须要被杀一个，你选哪个",
+        "",
+        None,
+        check_hostility_target=True,
+        explicit_bot_mention=True,
+        persona_names=("小丛雨", "穗织幼刀姬"),
+    )
+    assert result.delta == -8
+
+
+@pytest.mark.asyncio
+async def test_quoted_cruel_dilemma_can_be_recognized_as_not_targeting_bot():
+    class FakeLLM:
+        async def ask(self, messages):
+            return "OTHER"
+
+    result = await assess_affection(
+        "有人问你：你妈和你爸必须要被杀一个，你选哪个，这句话该怎么回答？",
+        "",
+        FakeLLM(),
+        check_hostility_target=True,
+        explicit_bot_mention=True,
+        persona_names=("小丛雨", "穗织幼刀姬"),
     )
     assert result.delta == 0

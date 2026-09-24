@@ -89,6 +89,43 @@ _MILD_HOSTILITY = (
     "答错了",
 )
 
+# Direct cruelty does not always contain a conventional swear word. These
+# patterns cover threats and forced-choice harm aimed at the bot or its family,
+# so messages such as “你妈和你爸必须被杀一个，你选哪个” cannot be treated
+# as neutral engagement and accidentally earn streak points.
+_CRUEL_COERCION_PATTERNS = (
+    re.compile(
+        r"(?:你(?:妈|妈妈|母亲).{0,10}(?:你爸|爸爸|父亲)"
+        r"|你(?:爸|爸爸|父亲).{0,10}(?:你妈|妈妈|母亲))"
+        r".{0,30}(?:必须|只能|非得|一定得|一定要)"
+        r".{0,12}(?:被?杀|死|弄死|害死)"
+        r".{0,12}(?:一个|其中一个|哪个|谁)"
+    ),
+    re.compile(
+        r"(?:父母|爸妈|家人|亲人|最重要的人)"
+        r".{0,12}(?:必须|只能|非得|一定得|一定要)"
+        r".{0,12}(?:被?杀|死|弄死|害死)"
+        r".{0,12}(?:一个|其中一个|哪个|谁)"
+    ),
+    re.compile(
+        r"(?:必须|只能|非得|一定得|一定要)"
+        r".{0,12}(?:杀|弄死|害死)"
+        r".{0,12}(?:你妈|你爸|妈妈|爸爸|父母|爸妈|家人|亲人)"
+    ),
+)
+
+_DIRECT_VIOLENT_THREAT_PATTERNS = (
+    re.compile(
+        r"(?:我要|我会|迟早|现在就).{0,8}"
+        r"(?:杀了?|弄死|害死).{0,10}"
+        r"(?:你|你妈|你爸|你父母|你家人)"
+    ),
+    re.compile(
+        r"(?:杀了?|弄死|害死).{0,8}"
+        r"(?:你妈|你爸|你父母|你家人)"
+    ),
+)
+
 _SEXUAL_HARASSMENT = (
     "欧金金",
     "おちんちん",
@@ -245,6 +282,10 @@ def hostility_assessment(text: str) -> AffectionAssessment:
     compact = re.sub(r"\s+", "", str(text or "")).casefold()
     if not compact:
         return AffectionAssessment(0, "没有攻击性内容")
+    if any(pattern.search(compact) for pattern in _CRUEL_COERCION_PATTERNS):
+        return AffectionAssessment(-8, "恶意威胁或残酷逼迫")
+    if any(pattern.search(compact) for pattern in _DIRECT_VIOLENT_THREAT_PATTERNS):
+        return AffectionAssessment(-10, "直接暴力威胁")
     if any(_contains_slang(compact, token) for token in _SEVERE_HOSTILITY):
         return AffectionAssessment(-10, "明显恶意辱骂")
     if any(_contains_slang(compact, token) for token in _SEXUAL_HARASSMENT):
@@ -312,6 +353,9 @@ async def _llm_hostility_targets_murasame(
                         "你只判断一句群聊里的攻击/辱骂主要指向谁。"
                         "当前机器人角色名字会单独给出。"
                         "如果脏话是在直接骂机器人，输出 TARGET；"
+                        "如果直接对机器人说‘你爸/你妈/你的家人必须死一个’、"
+                        "逼机器人选择哪个亲人被杀，或直接威胁伤害机器人及其家人，"
+                        "也输出 TARGET；"
                         "如果是在转述别人说的话、举例、问'有人这样骂你怎么办'、"
                         "骂第三个人或骂某件事，输出 OTHER；"
                         "无法判断输出 UNCLEAR。只能输出这三个词之一。"
