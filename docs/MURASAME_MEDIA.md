@@ -15,7 +15,7 @@
 多角色/中日音色通过 `VOICE_PROFILES_JSON` 配置，例如：
 
 ```json
-{"default":{"label":"默认中文","voice":"cn_voice","language":"zh"},"murasame":{"label":"小丛雨（中文/English 同一音色）","voice":"murasame","language":"auto","target_language":"auto","prompt_lang":"zh","prompt_text":"不要把我当小孩子","ref_audio_path":"data/murasame_voice_dataset/audio/murasame_0001.mp3"},"murasame_ja":{"label":"丛雨日语","voice":"ja_voice","language":"ja"}}
+{"default":{"label":"默认中文","voice":"cn_voice","language":"zh"},"murasame":{"label":"小丛雨（中文/English 同一音色）","voice":"murasame","language":"auto","target_language":"auto","prompt_lang":"zh","prompt_text":"不要把我当小孩子","ref_audio_path":"data/murasame_voice_dataset/audio/murasame_0001.mp3"},"murasame_ja":{"label":"小丛雨（日语）","voice":"murasame_ja","language":"ja","target_language":"ja","prompt_lang":"ja","prompt_text":"","ref_audio_path":"data/murasame_assets/voices/murasame/MUR_SYS_01.wav"}}
 ```
 
 群里发送“音色列表”查看菜单，发送“选择音色 murasame_ja”（或“切换音色 murasame_ja”）切换。这里的

@@ -10,6 +10,14 @@ def test_voice_profile_includes_bilingual_murasame_reference():
     assert profile["ref_audio_path"].endswith("murasame_0001.mp3")
 
 
+def test_voice_profile_includes_japanese_murasame_reference():
+    settings = Settings(_env_file=None)
+    profile = voice_profiles(settings)["murasame_ja"]
+    assert profile["target_language"] == "ja"
+    assert profile["prompt_lang"] == "ja"
+    assert profile["ref_audio_path"].endswith("MUR_SYS_01.wav")
+
+
 def test_detect_speech_language_for_chinese_and_english():
     assert detect_speech_language("你好，今天开心吗？") == "zh"
     assert detect_speech_language("Hello, are you okay?") == "en"

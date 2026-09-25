@@ -118,7 +118,10 @@ class Settings(BaseSettings):
         '"murasame":{"label":"小丛雨（中文/English 同一音色）",'
         '"voice":"murasame","language":"auto","target_language":"auto",'
         '"prompt_lang":"zh","prompt_text":"不要把我当小孩子",'
-        '"ref_audio_path":"data/murasame_voice_dataset/audio/murasame_0001.mp3"}}'
+        '"ref_audio_path":"data/murasame_voice_dataset/audio/murasame_0001.mp3"},'
+        '"murasame_ja":{"label":"小丛雨（日语）","voice":"murasame_ja",'
+        '"language":"ja","target_language":"ja","prompt_lang":"ja",'
+        '"prompt_text":"","ref_audio_path":"data/murasame_assets/voices/murasame/MUR_SYS_01.wav"}}'
     )
     voice_timeout_seconds: float = 45
     voice_max_chars: int = 360
