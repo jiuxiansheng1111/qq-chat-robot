@@ -15,7 +15,7 @@
 多角色/中日音色通过 `VOICE_PROFILES_JSON` 配置，例如：
 
 ```json
-{"default":{"label":"默认中文","voice":"cn_voice","language":"zh"},"murasame":{"label":"小丛雨","voice":"murasame","language":"zh"},"murasame_ja":{"label":"丛雨日语","voice":"ja_voice","language":"ja"}}
+{"default":{"label":"默认中文","voice":"cn_voice","language":"zh"},"murasame":{"label":"小丛雨（中文/English 同一音色）","voice":"murasame","language":"auto","target_language":"auto","prompt_lang":"zh","prompt_text":"不要把我当小孩子","ref_audio_path":"data/murasame_voice_dataset/audio/murasame_0001.mp3"},"murasame_ja":{"label":"丛雨日语","voice":"ja_voice","language":"ja"}}
 ```
 
 群里发送“音色列表”查看菜单，发送“选择音色 murasame_ja”（或“切换音色 murasame_ja”）切换。这里的
@@ -23,6 +23,20 @@
 语言字段时才设置 `VOICE_SUPPORTS_LANGUAGE_FIELDS=true`。项目不会自动把录音
 训练成音色，也不会声称已经完成训练。若要训练，请先确认录音授权，并在
 外部服务完成训练后把服务提供的 voice/model ID 写入配置。
+
+## GPT-SoVITS 本地后端
+
+GPT-SoVITS 的 `api_v2.py` 默认监听 `9880`。本项目会把
+`target_language=auto` 的文本自动标记为中文或英语，并始终使用同一条
+`ref_audio_path`，让中英文保持同一个“小丛雨”参考音色。配置示例：
+
+```env
+VOICE_ENABLED=true
+VOICE_PROVIDER=gpt_sovits
+VOICE_API_URL=http://127.0.0.1:9880
+```
+
+GPT-SoVITS 服务需要先独立启动并加载模型；参考音频和训练模型均只保存在本机。
 
 录音不会被机器人自动拿去训练或克隆音色。若要接入音色模型，先确认录音者、
 角色相关授权，再把已经部署好的 TTS 服务配置为 OpenAI 兼容的

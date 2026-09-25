@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import random
+import re
 import time
 from pathlib import Path
 
@@ -13,6 +14,8 @@ from app.config import Settings
 
 VOICE_SUFFIXES = frozenset({".mp3", ".wav", ".ogg", ".amr", ".silk", ".m4a"})
 _VOICE_PATH_CACHE: dict[str, tuple[float, tuple[Path, ...]]] = {}
+_CJK_RE = re.compile(r"[\u3400-\u9fff]")
+_LATIN_RE = re.compile(r"[A-Za-z]")
 
 
 def local_voice_paths(settings: Settings, profile_name: str | None = None) -> list[Path]:
@@ -42,7 +45,8 @@ def voice_setup_help(settings: Settings) -> str:
     return (
         "语音功能目前没有可用音频。可以把已获授权的丛雨音频放到：\n"
         f"{Path(settings.voice_local_dir).expanduser()}\n"
-        "或配置 VOICE_API_URL/VOICE_API_KEY 后使用兼容 /v1/audio/speech 的 TTS。"
+        "或配置 VOICE_API_URL/VOICE_API_KEY 后使用兼容 /v1/audio/speech 的 TTS；"
+        "GPT-SoVITS 使用 VOICE_PROVIDER=gpt_sovits 和 /tts。"
     )
 
 
@@ -62,7 +66,17 @@ def voice_profiles(settings: Settings) -> dict[str, dict[str, str]]:
                 continue
             profiles[profile_id] = {
                 field: str(value.get(field) or "").strip()
-                for field in ("label", "voice", "model", "language", "instructions")
+                for field in (
+                    "label",
+                    "voice",
+                    "model",
+                    "language",
+                    "target_language",
+                    "prompt_lang",
+                    "prompt_text",
+                    "ref_audio_path",
+                    "instructions",
+                )
             }
     if not profiles:
         profiles["default"] = {
@@ -70,6 +84,10 @@ def voice_profiles(settings: Settings) -> dict[str, dict[str, str]]:
             "voice": settings.voice_name,
             "model": settings.voice_model,
             "language": "zh",
+            "target_language": "auto",
+            "prompt_lang": "zh",
+            "prompt_text": "",
+            "ref_audio_path": "",
             "instructions": "",
         }
     return profiles
@@ -92,6 +110,24 @@ def voice_profile_menu(settings: Settings) -> str:
     return "\n".join(lines)
 
 
+def detect_speech_language(text: str, preferred: str = "auto") -> str:
+    """Return the target language code used by multilingual TTS backends."""
+    requested = str(preferred or "auto").strip().casefold()
+    if requested in {"zh", "en", "ja", "ko", "yue"}:
+        return requested
+    cjk_count = len(_CJK_RE.findall(text or ""))
+    if cjk_count:
+        return "zh"
+    return "en" if _LATIN_RE.search(text or "") else "zh"
+
+
+def _project_relative_path(value: str) -> str:
+    path = Path(str(value or "").strip()).expanduser()
+    if not path.is_absolute():
+        path = Path(__file__).resolve().parents[2] / path
+    return str(path.resolve())
+
+
 async def random_local_voice(settings: Settings, profile_name: str | None = None) -> str:
     paths = local_voice_paths(settings, profile_name)
     if not paths:
@@ -111,13 +147,16 @@ async def synthesize_voice(
     if not settings.voice_enabled:
         raise RuntimeError("语音功能未开启，请设置 VOICE_ENABLED=true")
     provider = str(settings.voice_provider or "openai_compatible").strip().casefold()
-    if provider not in {"openai_compatible", "openai_compatible_extended"}:
+    if provider not in {
+        "openai_compatible",
+        "openai_compatible_extended",
+        "gpt_sovits",
+        "gpt-sovits",
+    }:
         raise RuntimeError(f"未实现的语音 provider：{settings.voice_provider}")
     endpoint = str(settings.voice_api_url or "").strip().rstrip("/")
     if not endpoint:
         raise RuntimeError("VOICE_API_URL 未配置")
-    if not endpoint.endswith("/audio/speech"):
-        endpoint += "/audio/speech"
     clean = " ".join(str(text or "").split())[: max(20, int(settings.voice_max_chars))]
     if not clean:
         raise ValueError("没有可转换成语音的文字")
@@ -128,18 +167,45 @@ async def synthesize_voice(
     profile = profiles.get(profile_name or settings.voice_profile_default) or profiles.get(
         settings.voice_profile_default
     ) or profiles["default"]
-    payload = {"input": clean, "voice": profile.get("voice") or settings.voice_name}
-    model = profile.get("model") or settings.voice_model
-    if model:
-        payload["model"] = model
-    # Non-standard fields are opt-in because many OpenAI-compatible endpoints
-    # reject unknown JSON keys. Enable them only for a provider documented to
-    # accept multilingual/instruction fields.
-    if settings.voice_supports_language_fields:
-        if profile.get("language"):
-            payload["language"] = profile["language"]
-        if profile.get("instructions"):
-            payload["instructions"] = profile["instructions"]
+    if provider in {"gpt_sovits", "gpt-sovits"}:
+        if not endpoint.endswith("/tts"):
+            endpoint += "/tts"
+        reference = _project_relative_path(profile.get("ref_audio_path", ""))
+        if not Path(reference).is_file():
+            raise RuntimeError(f"GPT-SoVITS 参考音频不存在：{reference}")
+        prompt_text = profile.get("prompt_text", "")
+        prompt_lang = detect_speech_language(
+            prompt_text,
+            profile.get("prompt_lang") or profile.get("language") or "zh",
+        )
+        target_language = detect_speech_language(
+            clean,
+            profile.get("target_language") or profile.get("language") or "auto",
+        )
+        payload = {
+            "text": clean,
+            "text_lang": target_language,
+            "ref_audio_path": reference,
+            "prompt_lang": prompt_lang,
+            "prompt_text": prompt_text,
+            "media_type": "wav",
+            "streaming_mode": False,
+        }
+    else:
+        if not endpoint.endswith("/audio/speech"):
+            endpoint += "/audio/speech"
+        payload = {"input": clean, "voice": profile.get("voice") or settings.voice_name}
+        model = profile.get("model") or settings.voice_model
+        if model:
+            payload["model"] = model
+        # Non-standard fields are opt-in because many OpenAI-compatible endpoints
+        # reject unknown JSON keys. Enable them only for a provider documented to
+        # accept multilingual/instruction fields.
+        if settings.voice_supports_language_fields:
+            if profile.get("language"):
+                payload["language"] = profile["language"]
+            if profile.get("instructions"):
+                payload["instructions"] = profile["instructions"]
     async with httpx.AsyncClient(
         timeout=min(max(float(settings.voice_timeout_seconds), 5), 120),
         follow_redirects=True,

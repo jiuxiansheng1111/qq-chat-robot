@@ -115,8 +115,10 @@ class Settings(BaseSettings):
     # voice, model, language and provider-specific instructions.
     voice_profiles_json: str = (
         '{"default":{"label":"默认音色","voice":"alloy","language":"zh"},'
-        '"murasame":{"label":"小丛雨（需授权音频或服务端音色）",'
-        '"voice":"murasame","language":"zh"}}'
+        '"murasame":{"label":"小丛雨（中文/English 同一音色）",'
+        '"voice":"murasame","language":"auto","target_language":"auto",'
+        '"prompt_lang":"zh","prompt_text":"不要把我当小孩子",'
+        '"ref_audio_path":"data/murasame_voice_dataset/audio/murasame_0001.mp3"}}'
     )
     voice_timeout_seconds: float = 45
     voice_max_chars: int = 360
