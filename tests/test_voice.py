@@ -21,4 +21,6 @@ def test_voice_profile_includes_japanese_murasame_reference():
 def test_detect_speech_language_for_chinese_and_english():
     assert detect_speech_language("你好，今天开心吗？") == "zh"
     assert detect_speech_language("Hello, are you okay?") == "en"
+    assert detect_speech_language("こんにちは、元気ですか？") == "ja"
+    assert detect_speech_language("今日はいい天気ですね") == "ja"
     assert detect_speech_language("Hello 你好") == "zh"

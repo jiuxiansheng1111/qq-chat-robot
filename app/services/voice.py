@@ -15,6 +15,7 @@ from app.config import Settings
 VOICE_SUFFIXES = frozenset({".mp3", ".wav", ".ogg", ".amr", ".silk", ".m4a"})
 _VOICE_PATH_CACHE: dict[str, tuple[float, tuple[Path, ...]]] = {}
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
+_KANA_RE = re.compile(r"[\u3040-\u30ff]")
 _LATIN_RE = re.compile(r"[A-Za-z]")
 
 
@@ -115,6 +116,8 @@ def detect_speech_language(text: str, preferred: str = "auto") -> str:
     requested = str(preferred or "auto").strip().casefold()
     if requested in {"zh", "en", "ja", "ko", "yue"}:
         return requested
+    if _KANA_RE.search(text or ""):
+        return "ja"
     cjk_count = len(_CJK_RE.findall(text or ""))
     if cjk_count:
         return "zh"
