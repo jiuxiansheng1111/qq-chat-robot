@@ -95,6 +95,149 @@ function Request-Elevation {
     Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -Verb RunAs
 }
 
+function Start-GptSovitsSidecar {
+    param([Parameter(Mandatory = $true)][hashtable]$Settings)
+
+    $provider = ([string]$Settings["VOICE_PROVIDER"]).Trim().ToLowerInvariant()
+    $voiceEnabled = ([string]$Settings["VOICE_ENABLED"]).Trim().ToLowerInvariant() -in @("1", "true", "yes", "on")
+    $autoStart = ([string]$Settings["GPT_SOVITS_AUTO_START"]).Trim().ToLowerInvariant()
+    if (-not $autoStart) {
+        $autoStart = "auto"
+    }
+    $shouldStart = $autoStart -eq "true" -or
+        ($autoStart -eq "auto" -and $voiceEnabled -and $provider -in @("gpt_sovits", "gpt-sovits"))
+    if (-not $shouldStart) {
+        Write-Host "[VOICE] GPT-SoVITS sidecar is disabled (set GPT_SOVITS_AUTO_START=true or enable the GPT provider)." -ForegroundColor DarkGray
+        return $false
+    }
+
+    $voiceHost = ([string]$Settings["GPT_SOVITS_HOST"]).Trim()
+    if (-not $voiceHost) {
+        $voiceHost = "127.0.0.1"
+    }
+    $voicePort = 9880
+    $configuredVoicePort = 0
+    if ([int]::TryParse(([string]$Settings["GPT_SOVITS_PORT"]).Trim(), [ref]$configuredVoicePort) -and $configuredVoicePort -gt 0) {
+        $voicePort = $configuredVoicePort
+    }
+    $voiceUrl = ([string]$Settings["VOICE_API_URL"]).Trim()
+    if ($voiceUrl) {
+        try {
+            $parsedVoiceUrl = [Uri]$voiceUrl
+            if ($parsedVoiceUrl.Host) {
+                $voiceHost = $parsedVoiceUrl.Host
+            }
+            if ($parsedVoiceUrl.Port -gt 0) {
+                $voicePort = $parsedVoiceUrl.Port
+            }
+        }
+        catch {
+            Write-Host "[VOICE] VOICE_API_URL is invalid; using http://127.0.0.1:9880." -ForegroundColor Yellow
+        }
+    }
+
+    $localHosts = @("127.0.0.1", "localhost", "::1")
+    if ($voiceHost -notin $localHosts) {
+        Write-Host "[VOICE] Using remote GPT-SoVITS at $voiceUrl; local sidecar will not start." -ForegroundColor Cyan
+        return $true
+    }
+    if (-not $voiceUrl) {
+        # The Python app inherits this value when start_all launches its lifecycle supervisor.
+        $env:VOICE_API_URL = "http://127.0.0.1:$voicePort"
+    }
+
+    if (Test-LocalPort -Port $voicePort) {
+        Write-Host "[VOICE] GPT-SoVITS already listening on $voicePort." -ForegroundColor Green
+        return $true
+    }
+
+    $rootValue = ([string]$Settings["GPT_SOVITS_ROOT"]).Trim()
+    if (-not $rootValue) {
+        $rootValue = "..\qq-chatrobot-voice\GPT-SoVITS"
+    }
+    $gptRoot = if ([System.IO.Path]::IsPathRooted($rootValue)) {
+        [System.IO.Path]::GetFullPath($rootValue)
+    }
+    else {
+        [System.IO.Path]::GetFullPath((Join-Path $projectRoot $rootValue))
+    }
+    $apiScript = Join-Path $gptRoot "api_v2.py"
+    $configValue = ([string]$Settings["GPT_SOVITS_TTS_CONFIG"]).Trim()
+    if (-not $configValue) {
+        $configValue = "GPT_SoVITS\configs\tts_infer.yaml"
+    }
+    $ttsConfig = if ([System.IO.Path]::IsPathRooted($configValue)) {
+        [System.IO.Path]::GetFullPath($configValue)
+    }
+    else {
+        [System.IO.Path]::GetFullPath((Join-Path $gptRoot $configValue))
+    }
+    if (-not (Test-Path -LiteralPath $gptRoot -PathType Container)) {
+        Write-Host "[VOICE] GPT-SoVITS root not found: $gptRoot" -ForegroundColor Yellow
+        return $false
+    }
+    if (-not (Test-Path -LiteralPath $apiScript -PathType Leaf)) {
+        Write-Host "[VOICE] api_v2.py not found: $apiScript" -ForegroundColor Yellow
+        return $false
+    }
+    if (-not (Test-Path -LiteralPath $ttsConfig -PathType Leaf)) {
+        Write-Host "[VOICE] GPT-SoVITS config not found: $ttsConfig" -ForegroundColor Yellow
+        return $false
+    }
+
+    $pythonValue = ([string]$Settings["GPT_SOVITS_PYTHON"]).Trim()
+    if ($pythonValue) {
+        $gptPython = if ([System.IO.Path]::IsPathRooted($pythonValue)) {
+            [System.IO.Path]::GetFullPath($pythonValue)
+        }
+        else {
+            # GPT_SOVITS_PYTHON is relative to the bot project root, like GPT_SOVITS_ROOT.
+            [System.IO.Path]::GetFullPath((Join-Path $projectRoot $pythonValue))
+        }
+    }
+    else {
+        $gptPython = Join-Path $gptRoot ".venv\Scripts\python.exe"
+        if (-not (Test-Path -LiteralPath $gptPython -PathType Leaf)) {
+            $pathPython = Get-Command python.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+            $gptPython = if ($pathPython) { $pathPython.Source } else { "" }
+        }
+    }
+    if (-not $gptPython -or -not (Test-Path -LiteralPath $gptPython -PathType Leaf)) {
+        Write-Host "[VOICE] GPT-SoVITS Python not found. Set GPT_SOVITS_PYTHON in .env." -ForegroundColor Yellow
+        return $false
+    }
+
+    $existing = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -match "^(python|pythonw)(\.exe)?$" -and
+            $_.CommandLine -and
+            $_.CommandLine -match '(?i)api_v2\.py'
+        })
+    if ($existing.Count -gt 0) {
+        Write-Host "[VOICE] GPT-SoVITS process exists; waiting for port $voicePort..." -ForegroundColor Cyan
+    }
+    else {
+        New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
+        $voiceOutLog = Join-Path $logRoot "gpt_sovits.out.log"
+        $voiceErrorLog = Join-Path $logRoot "gpt_sovits.error.log"
+        Write-Host "[VOICE] Starting GPT-SoVITS on $voiceHost`:$voicePort..." -ForegroundColor Yellow
+        Start-Process `
+            -FilePath $gptPython `
+            -ArgumentList @("api_v2.py", "-a", $voiceHost, "-p", [string]$voicePort, "-c", $ttsConfig) `
+            -WorkingDirectory $gptRoot `
+            -RedirectStandardOutput $voiceOutLog `
+            -RedirectStandardError $voiceErrorLog `
+            -WindowStyle Hidden
+    }
+
+    if (Wait-LocalPort -Port $voicePort -TimeoutSeconds 90) {
+        Write-Host "[VOICE] GPT-SoVITS ready: http://$voiceHost`:$voicePort/tts" -ForegroundColor Green
+        return $true
+    }
+    Write-Host "[VOICE] GPT-SoVITS did not become ready. Check logs\gpt_sovits.error.log; bot will still start." -ForegroundColor Yellow
+    return $false
+}
+
 try {
     Write-Host "=== QQ ChatRobot One-Click Start ===" -ForegroundColor Cyan
 
@@ -128,6 +271,8 @@ try {
     if ($qqId -notmatch '^\d{5,12}$') {
         throw "ONEBOT_SELF_ID is invalid in .env."
     }
+
+    $voiceSidecarReady = Start-GptSovitsSidecar -Settings $settings
 
     $napCatWebReady = Test-LocalPort -Port 6099
     $oneBotReady = Test-LocalPort -Port 3000

@@ -12,8 +12,13 @@ qq-chatrobot\start-qq-chatrobot.bat
 2. 检查 NapCat WebUI `6099`，避免重复启动多个 NapCat。
 3. 启动 NapCatQQ Desktop；已运行时不会重复打开。
 4. 等待 OneBot HTTP Server `3000`。
-5. 启动 FastAPI 机器人服务 `8000`。
-6. 输出最终状态。
+5. 如果启用了 `VOICE_PROVIDER=gpt_sovits`，自动启动本地 GPT-SoVITS `api_v2.py` 并等待 `9880`。
+6. 启动 FastAPI 机器人服务 `8000`。
+7. 输出最终状态。
+
+GPT-SoVITS 使用独立 Python 环境，不复用机器人 `.venv`。在 `.env` 中设置
+`GPT_SOVITS_ROOT`、`GPT_SOVITS_PYTHON` 和 `GPT_SOVITS_TTS_CONFIG`；依赖或模型未安装时，
+启动脚本会记录警告并继续启动机器人，日志位于 `logs/gpt_sovits.error.log`。
 
 ## 防止 8000 服务意外消失
 

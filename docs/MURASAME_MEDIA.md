@@ -34,9 +34,15 @@ GPT-SoVITS 的 `api_v2.py` 默认监听 `9880`。本项目会把
 VOICE_ENABLED=true
 VOICE_PROVIDER=gpt_sovits
 VOICE_API_URL=http://127.0.0.1:9880
+GPT_SOVITS_AUTO_START=auto
+GPT_SOVITS_ROOT=../qq-chatrobot-voice/GPT-SoVITS
+GPT_SOVITS_PYTHON=../qq-chatrobot-voice/GPT-SoVITS/.venv/Scripts/python.exe
+GPT_SOVITS_TTS_CONFIG=GPT_SoVITS/configs/tts_infer.yaml
 ```
 
-GPT-SoVITS 服务需要先独立启动并加载模型；参考音频和训练模型均只保存在本机。
+执行 `scripts\\start_all.ps1` 时，如果本地目录、独立 Python 环境和模型配置都存在，
+脚本会自动启动 `api_v2.py` 并等待 `9880/tts` 就绪；缺少依赖时只记录警告，不会阻止
+QQ 机器人启动。参考音频和训练模型均只保存在本机。
 
 录音不会被机器人自动拿去训练或克隆音色。若要接入音色模型，先确认录音者、
 角色相关授权，再把已经部署好的 TTS 服务配置为 OpenAI 兼容的

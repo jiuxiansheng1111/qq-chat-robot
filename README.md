@@ -214,6 +214,10 @@ Windows 一键启动 NapCatQQ Desktop、OneBot 和 FastAPI：
 
 机器人 API 由 `scripts\run_bot.ps1` 生命周期守护脚本管理：NapCat 的 OneBot HTTP Server（默认 `127.0.0.1:3000`）可用时自动启动或接管 Uvicorn；NapCat/OneBot 关闭后会自动停止 Uvicorn，重新打开 NapCat 后会自动使用当前项目代码启动 Uvicorn。不要用手动的 Uvicorn 命令替代一键脚本，否则不会启用这个生命周期联动。
 
+如果 `.env` 配置了 `VOICE_ENABLED=true`、`VOICE_PROVIDER=gpt_sovits`，同一个一键脚本还会按
+`GPT_SOVITS_ROOT`/`GPT_SOVITS_PYTHON` 自动启动 GPT-SoVITS `api_v2.py`，等待 `9880/tts`
+就绪后再启动机器人；语音服务依赖或模型缺失只会写入 `logs/gpt_sovits.error.log`，不阻止普通机器人启动。
+
 为了避免重启电脑或机器人进程退出后出现 `ECONNREFUSED 127.0.0.1:8000`，管理员身份双击：
 
 ```text
