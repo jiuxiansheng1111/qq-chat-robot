@@ -7,14 +7,15 @@
 - `emotes/`：发送“丛雨表情”，支持 PNG/JPG/WebP/GIF。
 - `voices/<音色ID>/`：发送“丛雨语音”，支持 MP3/WAV/OGG/AMR/SILK/M4A；也可放在 `voices/` 作为默认素材。
 
-`开启语音`是每位用户独立的开关；服务端还必须配置
+`启动语音`是每位用户独立的开关；启动后机器人会先显示音色菜单，再用
+`切换音色 <ID>` 选择音色；`关闭语音` 可随时关闭。服务端还必须配置
 `VOICE_ENABLED=true` 和 `VOICE_API_URL` 才会把普通文字回复转成语音。
 如果只想发送本地片段，不需要配置 TTS。
 
 多角色/中日音色通过 `VOICE_PROFILES_JSON` 配置，例如：
 
 ```json
-{"default":{"label":"默认中文","voice":"cn_voice","language":"zh"},"murasame_ja":{"label":"丛雨日语","voice":"ja_voice","language":"ja"}}
+{"default":{"label":"默认中文","voice":"cn_voice","language":"zh"},"murasame":{"label":"小丛雨","voice":"murasame","language":"zh"},"murasame_ja":{"label":"丛雨日语","voice":"ja_voice","language":"ja"}}
 ```
 
 群里发送“音色列表”查看菜单，发送“切换音色 murasame_ja”切换。这里的
@@ -23,7 +24,7 @@
 训练成音色，也不会声称已经完成训练。若要训练，请先确认录音授权，并在
 外部服务完成训练后把服务提供的 voice/model ID 写入配置。
 
-录音不会被机器人自动拿去训练音色。若要接入音色模型，先确认录音者和
+录音不会被机器人自动拿去训练或克隆音色。若要接入音色模型，先确认录音者、
 角色相关授权，再把已经部署好的 TTS 服务配置为 OpenAI 兼容的
 `/v1/audio/speech` 接口。
 

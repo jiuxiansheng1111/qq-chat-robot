@@ -113,7 +113,11 @@ class Settings(BaseSettings):
     voice_supports_language_fields: bool = False
     # JSON object keyed by a safe profile id. Each value may contain label,
     # voice, model, language and provider-specific instructions.
-    voice_profiles_json: str = '{"default":{"label":"默认音色","voice":"alloy","language":"zh"}}'
+    voice_profiles_json: str = (
+        '{"default":{"label":"默认音色","voice":"alloy","language":"zh"},'
+        '"murasame":{"label":"小丛雨（需授权音频或服务端音色）",'
+        '"voice":"murasame","language":"zh"}}'
+    )
     voice_timeout_seconds: float = 45
     voice_max_chars: int = 360
     voice_local_dir: str = "./data/murasame_assets/voices"

@@ -174,7 +174,11 @@ HELP_COMMANDS = frozenset(
     {"/help", "/帮助", "help", "帮助", "/菜单", "菜单", "/功能菜单", "功能菜单"}
 )
 VOICE_ON_COMMANDS = frozenset(
-    {"/开启语音", "开启语音", "/语音开启", "语音开启", "/打开语音模式", "打开语音模式"}
+    {
+        "/开启语音", "开启语音", "/启动语音", "启动语音",
+        "/语音开启", "语音开启", "/打开语音", "打开语音",
+        "/打开语音模式", "打开语音模式", "/启动语音模式", "启动语音模式",
+    }
 )
 VOICE_OFF_COMMANDS = frozenset(
     {"/关闭语音", "关闭语音", "/语音关闭", "语音关闭", "/关闭语音模式", "关闭语音模式"}
@@ -3384,14 +3388,22 @@ async def onebot_webhook(
     elif text in HELP_COMMANDS:
         await send_group_message(group_id, registry.help_text())
     elif text in VOICE_ON_COMMANDS:
+        await request.app.state.db.set_voice_mode(group_id, user_id, True)
         if not settings.voice_enabled:
             await send_group_message(
                 group_id,
-                "语音功能还没在服务端开启；管理员配置 VOICE_ENABLED=true 和 VOICE_API_URL 后再试。",
+                "已记录启动语音并打开音色选择，但管理员还没有配置语音服务；"
+                "现在可以先选好音色，配置完成后会直接生效：\n\n"
+                + voice_profile_menu(settings)
+                + "\n\n发送“切换音色 音色ID”完成选择；发送“关闭语音”即可关闭。",
             )
         else:
-            await request.app.state.db.set_voice_mode(group_id, user_id, True)
-            await send_group_message(group_id, "已开启你的语音回复；发送“关闭语音”即可关闭。")
+            await send_group_message(
+                group_id,
+                "已启动你的语音回复。下一步请选择音色：\n\n"
+                + voice_profile_menu(settings)
+                + "\n\n发送“切换音色 音色ID”完成选择；发送“关闭语音”即可关闭。",
+            )
     elif text in VOICE_OFF_COMMANDS:
         await request.app.state.db.set_voice_mode(group_id, user_id, False)
         await send_group_message(group_id, "已关闭你的语音回复，之后只发送文字。")
