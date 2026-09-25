@@ -170,6 +170,9 @@ MURASAME_EMOJI_COMMANDS = frozenset(
     {"/丛雨表情", "丛雨表情", "丛雨表情包", "小丛雨表情", "小丛雨表情包"}
 )
 IMAGE_GENERATION_COMMANDS = frozenset({"/生成图片", "生成图片", "/画图", "画图"})
+HELP_COMMANDS = frozenset(
+    {"/help", "/帮助", "help", "帮助", "/菜单", "菜单", "/功能菜单", "功能菜单"}
+)
 VOICE_ON_COMMANDS = frozenset(
     {"/开启语音", "开启语音", "/语音开启", "语音开启", "/打开语音模式", "打开语音模式"}
 )
@@ -3378,7 +3381,7 @@ async def onebot_webhook(
             schedule_possession_style_learning(request, group_id, target_id, name)
         else:
             await send_group_message(group_id, "今天还没有候选人：群友当天发言达到 15 条才会加入随机抽取。")
-    elif text in {"/help", "/帮助", "help", "帮助"}:
+    elif text in HELP_COMMANDS:
         await send_group_message(group_id, registry.help_text())
     elif text in VOICE_ON_COMMANDS:
         if not settings.voice_enabled:

@@ -17,6 +17,10 @@ def test_plugin_registry_help():
     assert "@我 随机二次元角色" in text
     assert "@我 本命二次元角色" in text
     assert "@我 天气 新加坡" in text
+    assert "@我 开启语音" in text
+    assert "@我 音色列表" in text
+    assert "@我 丛雨语音" in text
+    assert "@我 生成图片" in text
     assert registry.find("图鉴").name == "character_catalog"
     assert registry.find("奥特曼图鉴").name == "ultraman"
     assert registry.find("二次元角色图鉴").name == "anime_character"
