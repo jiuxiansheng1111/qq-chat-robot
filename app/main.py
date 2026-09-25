@@ -184,7 +184,9 @@ VOICE_OFF_COMMANDS = frozenset(
     {"/关闭语音", "关闭语音", "/语音关闭", "语音关闭", "/关闭语音模式", "关闭语音模式"}
 )
 VOICE_STATUS_COMMANDS = frozenset({"/语音状态", "语音状态"})
-VOICE_PROFILE_LIST_COMMANDS = frozenset({"/音色列表", "音色列表", "/切换音色", "切换音色"})
+VOICE_PROFILE_LIST_COMMANDS = frozenset(
+    {"/音色列表", "音色列表", "/切换音色", "切换音色", "/选择音色", "选择音色"}
+)
 VOICE_MURASAME_COMMANDS = frozenset({"/丛雨语音", "丛雨语音", "小丛雨语音"})
 DAILY_ULTRAMAN_COMMANDS = frozenset({"/今日奥特曼", "今日奥特曼", "抽奥特曼"})
 DAILY_NEWS_COMMANDS = frozenset({"/今日热点", "今日热点", "/今日新闻", "今日新闻"})
@@ -3423,7 +3425,9 @@ async def onebot_webhook(
             )
         else:
             await send_group_message(group_id, "语音回复：服务端未配置（即使个人开关打开也不会发送）。")
-    elif text in VOICE_PROFILE_LIST_COMMANDS or text.startswith(("切换音色 ", "/切换音色 ")):
+    elif text in VOICE_PROFILE_LIST_COMMANDS or text.startswith(
+        ("切换音色 ", "/切换音色 ", "选择音色 ", "/选择音色 ")
+    ):
         if text in VOICE_PROFILE_LIST_COMMANDS:
             await send_group_message(group_id, voice_profile_menu(settings))
         else:

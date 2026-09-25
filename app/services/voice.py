@@ -85,7 +85,10 @@ def voice_profile_menu(settings: Settings) -> str:
         language = profile.get("language") or "未指定"
         label = profile.get("label") or profile_id
         lines.append(f"- {profile_id}：{label}（{language}）")
-    lines.append("切换：发送“切换音色 音色ID”；语言/音色由管理员在 VOICE_PROFILES_JSON 配置。")
+    lines.append(
+        "选择：发送“选择音色 音色ID”（或“切换音色 音色ID”）；"
+        "语言/音色由管理员在 VOICE_PROFILES_JSON 配置。"
+    )
     return "\n".join(lines)
 
 

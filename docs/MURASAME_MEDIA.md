@@ -8,7 +8,7 @@
 - `voices/<音色ID>/`：发送“丛雨语音”，支持 MP3/WAV/OGG/AMR/SILK/M4A；也可放在 `voices/` 作为默认素材。
 
 `启动语音`是每位用户独立的开关；启动后机器人会先显示音色菜单，再用
-`切换音色 <ID>` 选择音色；`关闭语音` 可随时关闭。服务端还必须配置
+`选择音色 <ID>`（或 `切换音色 <ID>`）选择音色；`关闭语音` 可随时关闭。服务端还必须配置
 `VOICE_ENABLED=true` 和 `VOICE_API_URL` 才会把普通文字回复转成语音。
 如果只想发送本地片段，不需要配置 TTS。
 
@@ -18,7 +18,7 @@
 {"default":{"label":"默认中文","voice":"cn_voice","language":"zh"},"murasame":{"label":"小丛雨","voice":"murasame","language":"zh"},"murasame_ja":{"label":"丛雨日语","voice":"ja_voice","language":"ja"}}
 ```
 
-群里发送“音色列表”查看菜单，发送“切换音色 murasame_ja”切换。这里的
+群里发送“音色列表”查看菜单，发送“选择音色 murasame_ja”（或“切换音色 murasame_ja”）切换。这里的
 `voice`、`model` 和语言字段由已部署的 TTS 服务解释；只有确认服务支持额外
 语言字段时才设置 `VOICE_SUPPORTS_LANGUAGE_FIELDS=true`。项目不会自动把录音
 训练成音色，也不会声称已经完成训练。若要训练，请先确认录音授权，并在
