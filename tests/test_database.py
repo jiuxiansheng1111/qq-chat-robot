@@ -49,9 +49,9 @@ async def test_voice_mode_and_profile_are_scoped(tmp_path):
     assert not await db.voice_mode("100", "200")
     assert await db.voice_profile("100", "200") == "default"
     await db.set_voice_mode("100", "200", True)
-    await db.set_voice_profile("100", "200", "murasame_ja")
+    await db.set_voice_profile("100", "200", "murasame")
     assert await db.voice_mode("100", "200")
-    assert await db.voice_profile("100", "200") == "murasame_ja"
+    assert await db.voice_profile("100", "200") == "murasame"
     assert not await db.voice_mode("100", "other")
 
 

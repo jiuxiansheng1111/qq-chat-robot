@@ -1,26 +1,22 @@
-# 丛雨图片、表情和语音素材
+# 丛雨图片、表情和角色语音
 
 机器人不会自动下载或训练丛雨素材。将已获授权的文件放入配置的
 `MURASAME_ASSET_DIR`（默认 `./data/murasame_assets`）下：
 
 - `images/`：发送“丛雨图片”，支持 PNG/JPG/WebP/GIF。
 - `emotes/`：发送“丛雨表情”，支持 PNG/JPG/WebP/GIF。
-- `voices/<音色ID>/`：发送“丛雨语音”，支持 MP3/WAV/OGG/AMR/SILK/M4A；也可放在 `voices/` 作为默认素材。
 
-`启动语音`是每位用户独立的开关；启动后机器人会先显示音色菜单，再用
-`选择音色 <ID>`（或 `切换音色 <ID>`）选择音色；`关闭语音` 可随时关闭。服务端还必须配置
-`VOICE_ENABLED=true` 和 `VOICE_API_URL` 才会把普通文字回复转成语音。
-如果只想发送本地片段，不需要配置 TTS。
+`启动语音`是每位用户独立的开关。群内发送“可用角色”查看菜单，发送
+`选择角色 小丛雨` 选择角色；`关闭语音` 可随时关闭。当前“小丛雨”由同一角色档案处理
+中文、日语和英语，按文字自动识别语言，不再提供单独发送本地语音素材的指令。
 
-多角色/中日音色通过 `VOICE_PROFILES_JSON` 配置，例如：
+后续新增角色时，每个角色都使用一个统一档案；中 / 日 / 英支持通过 `languages` 标注，例如：
 
 ```json
-{"default":{"label":"默认中文","voice":"cn_voice","language":"zh"},"murasame":{"label":"小丛雨（中文/English 同一音色）","voice":"murasame","language":"auto","target_language":"auto","prompt_lang":"zh","prompt_text":"不要把我当小孩子","ref_audio_path":"data/murasame_voice_dataset/audio/murasame_0001.mp3"},"murasame_ja":{"label":"小丛雨（日语）","voice":"murasame_ja","language":"ja","target_language":"ja","prompt_lang":"ja","prompt_text":"","ref_audio_path":"data/murasame_assets/voices/murasame/MUR_SYS_01.wav"}}
+{"murasame":{"label":"小丛雨","voice":"murasame","language":"auto","languages":"中 / 日 / 英","target_language":"auto","prompt_lang":"zh","prompt_text":"不要把我当小孩子","ref_audio_path":"data/murasame_voice_dataset/audio/murasame_0001.mp3"}}
 ```
 
-群里发送“音色列表”查看菜单，发送“选择音色 murasame_ja”（或“切换音色 murasame_ja”）切换。这里的
-`voice`、`model` 和语言字段由已部署的 TTS 服务解释；只有确认服务支持额外
-语言字段时才设置 `VOICE_SUPPORTS_LANGUAGE_FIELDS=true`。项目不会自动把录音
+群里只显示角色名称，不显示内部 ID 或部署字段。项目不会自动把录音
 训练成音色，也不会在后台隐式训练。若要在本机显式训练，请先确认录音授权，
 再运行 `powershell -ExecutionPolicy Bypass -File .\scripts\train_murasame_voice.ps1`；
 该脚本会复用已完成的预处理并在 CPU 上生成本地 SoVITS 权重。训练模型和录音都在
@@ -29,8 +25,8 @@
 ## GPT-SoVITS 本地后端
 
 GPT-SoVITS 的 `api_v2.py` 默认监听 `9880`。本项目会把
-`target_language=auto` 的文本自动标记为中文或英语，并始终使用同一条
-`ref_audio_path`，让中英文保持同一个“小丛雨”参考音色。配置示例：
+`target_language=auto` 的文本自动识别为中文、日语或英语，并始终使用同一条
+`ref_audio_path`，让三种语言保持同一个“小丛雨”参考音色。配置示例：
 
 ```env
 VOICE_ENABLED=true
@@ -40,8 +36,8 @@ GPT_SOVITS_AUTO_START=auto
 GPT_SOVITS_ROOT=../qq-chatrobot-voice/GPT-SoVITS
 GPT_SOVITS_PYTHON=../qq-chatrobot-voice/GPT-SoVITS/.venv/Scripts/python.exe
 GPT_SOVITS_TTS_CONFIG=GPT_SoVITS/configs/tts_infer.yaml
-# 训练完成后可填写；start_all.ps1 会在 9880 就绪后自动加载它。
-GPT_SOVITS_SOVITS_WEIGHTS=./data/murasame_voice_dataset/SoVITS_weights/murasame_voice_e2_s332.pth
+# 质量训练完成并通过语音检查后再填写；留空使用基础模型。
+GPT_SOVITS_SOVITS_WEIGHTS=./data/murasame_voice_dataset/SoVITS_weights_quality/murasame_voice_e10_s1660.pth
 ```
 
 执行 `scripts\\start_all.ps1` 时，如果本地目录、独立 Python 环境和模型配置都存在，

@@ -1286,7 +1286,7 @@ def test_zero_affection_still_replies_coldly_and_allows_status(tmp_path):
 
 
 
-def test_intimacy_actions_unlock_at_sixty_and_do_not_repeat_farm(tmp_path):
+def test_intimacy_actions_do_not_change_affection_anymore(tmp_path):
     previous_database_path = settings.database_path
     previous_onebot_api_base = settings.onebot_api_base
     previous_self_id = settings.onebot_self_id
@@ -1306,6 +1306,7 @@ def test_intimacy_actions_unlock_at_sixty_and_do_not_repeat_farm(tmp_path):
 
     try:
         with TestClient(app) as client:
+            client.app.state.llm.ask = AsyncMock(return_value="收到啦")
             client.portal.call(
                 client.app.state.db.reset_affection,
                 "integration-group",
@@ -1313,7 +1314,7 @@ def test_intimacy_actions_unlock_at_sixty_and_do_not_repeat_farm(tmp_path):
                 59,
             )
             locked = post_event(client, action_event("action-locked")).json()
-            assert locked["source"] == "affection_action_locked"
+            assert locked.get("source") != "affection_action"
             assert client.portal.call(
                 client.app.state.db.affection_score,
                 "integration-group",
@@ -1327,20 +1328,20 @@ def test_intimacy_actions_unlock_at_sixty_and_do_not_repeat_farm(tmp_path):
                 60,
             )
             unlocked = post_event(client, action_event("action-unlocked")).json()
-            assert unlocked["source"] == "affection_action"
+            assert unlocked.get("source") != "affection_action"
             assert client.portal.call(
                 client.app.state.db.affection_score,
                 "integration-group",
                 "action-user",
-            ) == 61
+            ) == 60
 
             repeated = post_event(client, action_event("action-repeat")).json()
-            assert repeated["source"] == "affection_action"
+            assert repeated.get("source") != "affection_action"
             assert client.portal.call(
                 client.app.state.db.affection_score,
                 "integration-group",
                 "action-user",
-            ) == 61
+            ) == 60
     finally:
         settings.database_path = previous_database_path
         settings.onebot_api_base = previous_onebot_api_base

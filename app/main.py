@@ -147,11 +147,10 @@ from app.services.ultraman_encyclopedia import (
     wikipedia_ultraman_image,
 )
 from app.services.voice import (
-    random_local_voice,
+    resolve_character_profile,
     synthesize_voice,
     voice_profile_menu,
     voice_profiles,
-    voice_setup_help,
 )
 from app.services.weather import WeatherServiceError, fetch_weather, format_weather_report
 from app.services.web_search import SearchResult, search_web
@@ -184,10 +183,19 @@ VOICE_OFF_COMMANDS = frozenset(
     {"/关闭语音", "关闭语音", "/语音关闭", "语音关闭", "/关闭语音模式", "关闭语音模式"}
 )
 VOICE_STATUS_COMMANDS = frozenset({"/语音状态", "语音状态"})
-VOICE_PROFILE_LIST_COMMANDS = frozenset(
-    {"/音色列表", "音色列表", "/切换音色", "切换音色", "/选择音色", "选择音色"}
+VOICE_CHARACTER_LIST_COMMANDS = frozenset(
+    {
+        "/可用角色", "可用角色", "/角色列表", "角色列表",
+        # Kept as quiet compatibility aliases for people who used the old menu.
+        "/音色列表", "音色列表", "/切换音色", "切换音色", "/选择音色", "选择音色",
+        "/选择角色", "选择角色", "/切换角色", "切换角色",
+    }
 )
-VOICE_MURASAME_COMMANDS = frozenset({"/丛雨语音", "丛雨语音", "小丛雨语音"})
+VOICE_CHARACTER_SELECT_PREFIXES = (
+    "选择角色 ", "/选择角色 ", "切换角色 ", "/切换角色 ",
+    # Old command wording remains accepted but is no longer displayed.
+    "选择音色 ", "/选择音色 ", "切换音色 ", "/切换音色 ",
+)
 DAILY_ULTRAMAN_COMMANDS = frozenset({"/今日奥特曼", "今日奥特曼", "抽奥特曼"})
 DAILY_NEWS_COMMANDS = frozenset({"/今日热点", "今日热点", "/今日新闻", "今日新闻"})
 MY_ULTRAMAN_COMMANDS = frozenset(
@@ -3394,62 +3402,62 @@ async def onebot_webhook(
         if not settings.voice_enabled:
             await send_group_message(
                 group_id,
-                "已记录启动语音并打开音色选择，但管理员还没有配置语音服务；"
-                "现在可以先选好音色，配置完成后会直接生效：\n\n"
+                "已开启你的语音回复。语音服务恢复后会自动使用已选角色。\n\n"
                 + voice_profile_menu(settings)
-                + "\n\n发送“切换音色 音色ID”完成选择；发送“关闭语音”即可关闭。",
+                + "\n\n发送“关闭语音”即可关闭。",
             )
         else:
             await send_group_message(
                 group_id,
-                "已启动你的语音回复。下一步请选择音色：\n\n"
+                "已开启你的语音回复。\n\n"
                 + voice_profile_menu(settings)
-                + "\n\n发送“切换音色 音色ID”完成选择；发送“关闭语音”即可关闭。",
+                + "\n\n发送“关闭语音”即可关闭。",
             )
     elif text in VOICE_OFF_COMMANDS:
         await request.app.state.db.set_voice_mode(group_id, user_id, False)
         await send_group_message(group_id, "已关闭你的语音回复，之后只发送文字。")
     elif text in VOICE_STATUS_COMMANDS:
         enabled = await request.app.state.db.voice_mode(group_id, user_id)
+        profiles = voice_profiles(settings)
         profile_id = await request.app.state.db.voice_profile(
             group_id, user_id, settings.voice_profile_default
         )
-        profile = voice_profiles(settings).get(profile_id, {})
-        profile_hint = (
-            f"；音色：{profile.get('label') or profile_id}（{profile.get('language') or '未指定'}）"
-        )
+        # Older databases may still contain a removed internal profile such as
+        # ``murasame_ja``.  Never expose that ID in a group message; treat it
+        # as the current default character until the user selects another one.
+        profile = profiles.get(profile_id)
+        if profile is None:
+            profile_id = settings.voice_profile_default
+            profile = profiles.get(profile_id) or next(iter(profiles.values()), {})
+        profile_hint = f"；角色：{profile.get('label') or '默认角色'}"
         if settings.voice_enabled:
             await send_group_message(
                 group_id,
                 ("你的语音回复：已开启" if enabled else "你的语音回复：未开启") + profile_hint,
             )
         else:
-            await send_group_message(group_id, "语音回复：服务端未配置（即使个人开关打开也不会发送）。")
-    elif text in VOICE_PROFILE_LIST_COMMANDS or text.startswith(
-        ("切换音色 ", "/切换音色 ", "选择音色 ", "/选择音色 ")
-    ):
-        if text in VOICE_PROFILE_LIST_COMMANDS:
+            await send_group_message(
+                group_id,
+                ("你的语音回复：已开启" if enabled else "你的语音回复：未开启")
+                + profile_hint
+                + "；当前语音服务暂不可用。",
+            )
+    elif text in VOICE_CHARACTER_LIST_COMMANDS or text.startswith(VOICE_CHARACTER_SELECT_PREFIXES):
+        if text in VOICE_CHARACTER_LIST_COMMANDS:
             await send_group_message(group_id, voice_profile_menu(settings))
         else:
-            profile_id = text.split(" ", 1)[1].strip()
+            character_name = text.split(" ", 1)[1].strip()
             profiles = voice_profiles(settings)
-            if profile_id not in profiles:
+            profile_id = resolve_character_profile(settings, character_name)
+            if profile_id is None:
                 await send_group_message(
                     group_id,
-                    f"没有找到音色“{profile_id}”。\n\n{voice_profile_menu(settings)}",
+                    f"没有找到角色“{character_name}”。\n\n{voice_profile_menu(settings)}",
                 )
             else:
                 await request.app.state.db.set_voice_profile(group_id, user_id, profile_id)
                 label = profiles[profile_id].get("label") or profile_id
-                await send_group_message(group_id, f"已切换到音色：{label}（{profile_id}）。")
-    elif text in VOICE_MURASAME_COMMANDS:
-        try:
-            profile = await request.app.state.db.voice_profile(
-                group_id, user_id, settings.voice_profile_default
-            )
-            await send_group_record(group_id, await random_local_voice(settings, profile))
-        except (FileNotFoundError, RuntimeError, OSError) as exc:
-            await send_group_message(group_id, str(exc) or voice_setup_help(settings))
+                await send_group_message(group_id, f"已选择角色：{label}。")
     elif text in MURASAME_IMAGE_COMMANDS or mentioned_image_command(
         event, MURASAME_IMAGE_COMMANDS
     ):

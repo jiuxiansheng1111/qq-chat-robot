@@ -100,33 +100,33 @@ class Settings(BaseSettings):
     murasame_asset_dir: str = "./data/murasame_assets"
     murasame_image_subdir: str = "images"
     murasame_emoji_subdir: str = "emotes"
-    # Voice is deliberately opt-in. The bot supports local clips and an
-    # OpenAI-compatible /v1/audio/speech endpoint; supplied audio is not used
-    # to train a voice model implicitly.
+    # Voice is deliberately opt-in and character-based. Each character can
+    # serve multiple languages through one unified profile.
     voice_enabled: bool = False
     voice_provider: str = "openai_compatible"
     voice_api_url: str = ""
     voice_api_key: str = Field(default="", repr=False)
     voice_model: str = ""
     voice_name: str = "alloy"
-    voice_profile_default: str = "default"
+    voice_profile_default: str = "murasame"
     voice_supports_language_fields: bool = False
-    # JSON object keyed by a safe profile id. Each value may contain label,
-    # voice, model, language and provider-specific instructions.
+    # JSON object keyed by a safe internal id. User-facing menus only show
+    # the character label and supported languages.
     voice_profiles_json: str = (
-        '{"default":{"label":"默认音色","voice":"alloy","language":"zh"},'
-        '"murasame":{"label":"小丛雨（中文/English 同一音色）",'
-        '"voice":"murasame","language":"auto","target_language":"auto",'
+        '{"murasame":{"label":"小丛雨","voice":"murasame",'
+        '"language":"auto","languages":"中 / 日 / 英","target_language":"auto",'
         '"prompt_lang":"zh","prompt_text":"不要把我当小孩子",'
-        '"ref_audio_path":"data/murasame_voice_dataset/audio/murasame_0001.mp3"},'
-        '"murasame_ja":{"label":"小丛雨（日语）","voice":"murasame_ja",'
-        '"language":"ja","target_language":"ja","prompt_lang":"ja",'
-        '"prompt_text":"","ref_audio_path":"data/murasame_assets/voices/murasame/MUR_SYS_01.wav"}}'
+        '"ref_audio_path":"data/murasame_voice_dataset/audio/murasame_0001.mp3"}}'
     )
     voice_timeout_seconds: float = 45
     voice_max_chars: int = 360
-    voice_local_dir: str = "./data/murasame_assets/voices"
     voice_send_cooldown_seconds: int = 20
+    # Stable GPT-SoVITS sampling; unconstrained CPU sampling occasionally
+    # returns a short near-silent sample even with a valid HTTP 200 response.
+    voice_seed: int = 17
+    voice_top_k: int = 15
+    voice_temperature: float = 0.8
+    voice_repetition_penalty: float = 1.35
     daily_news_enabled: bool = True
     daily_news_hour: int = 12
     daily_news_minute: int = 0

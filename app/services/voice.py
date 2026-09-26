@@ -1,58 +1,25 @@
-"""Opt-in voice output and local Murasame clip support."""
+"""Opt-in multilingual character voice output."""
 
-import asyncio
 import base64
+import io
 import json
-import random
+import math
 import re
-import time
+import struct
+import wave
 from pathlib import Path
 
 import httpx
 
 from app.config import Settings
 
-VOICE_SUFFIXES = frozenset({".mp3", ".wav", ".ogg", ".amr", ".silk", ".m4a"})
-_VOICE_PATH_CACHE: dict[str, tuple[float, tuple[Path, ...]]] = {}
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
 _KANA_RE = re.compile(r"[\u3040-\u30ff]")
 _LATIN_RE = re.compile(r"[A-Za-z]")
 
 
-def local_voice_paths(settings: Settings, profile_name: str | None = None) -> list[Path]:
-    root = Path(settings.voice_local_dir).expanduser()
-    if profile_name:
-        profile_root = root / profile_name
-        if profile_root.exists():
-            root = profile_root
-    cache_key = str(root.resolve())
-    now = time.monotonic()
-    cached = _VOICE_PATH_CACHE.get(cache_key)
-    if cached and now - cached[0] < 15:
-        return list(cached[1])
-    if not root.exists():
-        paths: list[Path] = []
-    else:
-        paths = [
-            path
-            for path in root.rglob("*")
-            if path.is_file() and path.suffix.lower() in VOICE_SUFFIXES
-        ]
-    _VOICE_PATH_CACHE[cache_key] = (now, tuple(paths))
-    return paths
-
-
-def voice_setup_help(settings: Settings) -> str:
-    return (
-        "语音功能目前没有可用音频。可以把已获授权的丛雨音频放到：\n"
-        f"{Path(settings.voice_local_dir).expanduser()}\n"
-        "或配置 VOICE_API_URL/VOICE_API_KEY 后使用兼容 /v1/audio/speech 的 TTS；"
-        "GPT-SoVITS 使用 VOICE_PROVIDER=gpt_sovits 和 /tts。"
-    )
-
-
 def voice_profiles(settings: Settings) -> dict[str, dict[str, str]]:
-    """Return configured voice profiles without allowing malformed config to crash chat."""
+    """Return character voice profiles without exposing internal IDs to users."""
     try:
         payload = json.loads(settings.voice_profiles_json or "{}")
     except (TypeError, ValueError, json.JSONDecodeError):
@@ -77,19 +44,21 @@ def voice_profiles(settings: Settings) -> dict[str, dict[str, str]]:
                     "prompt_text",
                     "ref_audio_path",
                     "instructions",
+                    "languages",
                 )
             }
     if not profiles:
         profiles["default"] = {
-            "label": "默认音色",
+            "label": "默认角色",
             "voice": settings.voice_name,
             "model": settings.voice_model,
             "language": "zh",
-            "target_language": "auto",
+            "target_language": "zh",
             "prompt_lang": "zh",
             "prompt_text": "",
             "ref_audio_path": "",
             "instructions": "",
+            "languages": "中文",
         }
     return profiles
 
@@ -98,17 +67,48 @@ def re_safe_profile_id(value: str) -> bool:
     return all(char.isalnum() or char in {"_", "-"} for char in value) and len(value) <= 48
 
 
+def character_languages(profile: dict[str, str]) -> str:
+    """Return a compact display label for the character's supported languages."""
+    configured = profile.get("languages", "").strip()
+    if configured:
+        return configured
+    language = profile.get("target_language") or profile.get("language") or "auto"
+    return {
+        "auto": "中 / 日 / 英",
+        "zh": "中文",
+        "ja": "日语",
+        "en": "英语",
+        "ko": "韩语",
+        "yue": "粤语",
+    }.get(language, language)
+
+
+def character_label(profile_id: str, profile: dict[str, str]) -> str:
+    return profile.get("label") or profile_id
+
+
 def voice_profile_menu(settings: Settings) -> str:
-    lines = ["✦ 可用音色 ✦"]
+    lines = ["可用角色"]
     for profile_id, profile in voice_profiles(settings).items():
-        language = profile.get("language") or "未指定"
-        label = profile.get("label") or profile_id
-        lines.append(f"- {profile_id}：{label}（{language}）")
-    lines.append(
-        "选择：发送“选择音色 音色ID”（或“切换音色 音色ID”）；"
-        "语言/音色由管理员在 VOICE_PROFILES_JSON 配置。"
-    )
+        lines.append(f"- {character_label(profile_id, profile)}（{character_languages(profile)}）")
+    lines.append("发送“选择角色 角色名”切换")
     return "\n".join(lines)
+
+
+def resolve_character_profile(settings: Settings, selection: str) -> str | None:
+    """Resolve a user-facing character name, preserving old internal IDs as aliases."""
+    requested = re.sub(r"\s+", "", str(selection or "")).casefold()
+    if not requested:
+        return None
+    profiles = voice_profiles(settings)
+    if selection in profiles:
+        return selection
+    matches = [
+        profile_id
+        for profile_id, profile in profiles.items()
+        if re.sub(r"\s+", "", character_label(profile_id, profile)).casefold() == requested
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def detect_speech_language(text: str, preferred: str = "auto") -> str:
@@ -131,15 +131,36 @@ def _project_relative_path(value: str) -> str:
     return str(path.resolve())
 
 
-async def random_local_voice(settings: Settings, profile_name: str | None = None) -> str:
-    paths = local_voice_paths(settings, profile_name)
-    if not paths:
-        raise FileNotFoundError(voice_setup_help(settings))
-    path = random.SystemRandom().choice(paths)
-    raw = await asyncio.to_thread(path.read_bytes)
-    if len(raw) > settings.media_max_bytes:
-        raise RuntimeError(f"语音素材超过 MEDIA_MAX_BYTES：{path.name}")
-    return "base64://" + base64.b64encode(raw).decode("ascii")
+def _reject_near_silent_wav(raw: bytes) -> None:
+    """Reject a broken TTS result before it becomes a group voice message.
+
+    A failed/under-trained SoVITS checkpoint can still return HTTP 200 and a
+    valid WAV container while containing little more than a short breath.  We
+    only inspect PCM WAV responses (other providers may return MP3/OGG), and
+    keep the threshold deliberately conservative so quiet speech is retained.
+    """
+    if len(raw) < 44 or raw[:4] != b"RIFF" or raw[8:12] != b"WAVE":
+        return
+    try:
+        with wave.open(io.BytesIO(raw), "rb") as audio:
+            frame_count = audio.getnframes()
+            sample_rate = audio.getframerate()
+            sample_width = audio.getsampwidth()
+            channels = audio.getnchannels()
+            pcm = audio.readframes(frame_count)
+    except (EOFError, ValueError, wave.Error):
+        return
+    if not sample_rate or not frame_count or sample_width != 2 or channels < 1:
+        return
+    sample_count = len(pcm) // 2
+    if sample_count == 0:
+        raise RuntimeError("TTS 返回为空音频，已拒绝发送")
+    samples = struct.unpack("<" + "h" * sample_count, pcm[: sample_count * 2])
+    rms = math.sqrt(sum(sample * sample for sample in samples) / sample_count)
+    peak = max(abs(sample) for sample in samples)
+    duration = frame_count / sample_rate
+    if duration >= 0.35 and rms < 300 and peak < 3000:
+        raise RuntimeError("TTS 返回接近静音，已拒绝发送并回退文字回复")
 
 
 async def synthesize_voice(
@@ -148,7 +169,7 @@ async def synthesize_voice(
     profile_name: str | None = None,
 ) -> str:
     if not settings.voice_enabled:
-        raise RuntimeError("语音功能未开启，请设置 VOICE_ENABLED=true")
+        raise RuntimeError("语音服务暂不可用，请稍后再试。")
     provider = str(settings.voice_provider or "openai_compatible").strip().casefold()
     if provider not in {
         "openai_compatible",
@@ -159,7 +180,7 @@ async def synthesize_voice(
         raise RuntimeError(f"未实现的语音 provider：{settings.voice_provider}")
     endpoint = str(settings.voice_api_url or "").strip().rstrip("/")
     if not endpoint:
-        raise RuntimeError("VOICE_API_URL 未配置")
+        raise RuntimeError("语音服务暂不可用，请稍后再试。")
     clean = " ".join(str(text or "").split())[: max(20, int(settings.voice_max_chars))]
     if not clean:
         raise ValueError("没有可转换成语音的文字")
@@ -175,7 +196,7 @@ async def synthesize_voice(
             endpoint += "/tts"
         reference = _project_relative_path(profile.get("ref_audio_path", ""))
         if not Path(reference).is_file():
-            raise RuntimeError(f"GPT-SoVITS 参考音频不存在：{reference}")
+            raise RuntimeError("所选角色的语音暂不可用，请稍后再试。")
         prompt_text = profile.get("prompt_text", "")
         prompt_lang = detect_speech_language(
             prompt_text,
@@ -191,6 +212,10 @@ async def synthesize_voice(
             "ref_audio_path": reference,
             "prompt_lang": prompt_lang,
             "prompt_text": prompt_text,
+            "seed": int(settings.voice_seed),
+            "top_k": max(1, int(settings.voice_top_k)),
+            "temperature": max(0.1, float(settings.voice_temperature)),
+            "repetition_penalty": max(1.0, float(settings.voice_repetition_penalty)),
             "media_type": "wav",
             "streaming_mode": False,
         }
@@ -222,4 +247,5 @@ async def synthesize_voice(
         raw = response.content
     if not raw or len(raw) > settings.media_max_bytes:
         raise RuntimeError("TTS 返回为空或超过 MEDIA_MAX_BYTES")
+    _reject_near_silent_wav(raw)
     return "base64://" + base64.b64encode(raw).decode("ascii")

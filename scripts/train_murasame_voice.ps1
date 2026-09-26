@@ -1,10 +1,13 @@
 [CmdletBinding()]
 param(
-    [int]$Epochs = 2,
+    # Two epochs was only a smoke test and produced a near-silent checkpoint.
+    # Ten epochs is the minimum useful CPU fine-tune for this six-minute set.
+    [int]$Epochs = 10,
     [int]$BatchSize = 1
 )
 
 $ErrorActionPreference = "Stop"
+$qualityRunName = "quality"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $voiceRootActual = [System.IO.Path]::GetFullPath((Join-Path $projectRoot "..\qq-chatrobot-voice\GPT-SoVITS"))
 
@@ -104,8 +107,8 @@ $base.train.save_every_epoch = 1
 $base.train.grad_ckpt = $true
 $base.model.version = "v2"
 $base.data.exp_dir = $dataset
-$base.s2_ckpt_dir = Join-Path $dataset "logs_s2_v2"
-$base.save_weight_dir = Join-Path $dataset "SoVITS_weights"
+$base.s2_ckpt_dir = Join-Path $dataset "logs_s2_v2_$qualityRunName"
+$base.save_weight_dir = Join-Path $dataset "SoVITS_weights_$qualityRunName"
 $base.name = "murasame_voice"
 $base.version = "v2"
 $null = New-Item -ItemType Directory -Force -Path $base.save_weight_dir
@@ -114,6 +117,9 @@ $configJson = $base | ConvertTo-Json -Depth 20
 [System.IO.File]::WriteAllText($configPath, $configJson, [System.Text.UTF8Encoding]::new($false))
 
 Write-Host "[TRAIN] Starting SoVITS CPU fine-tune ($Epochs epoch(s), batch $BatchSize)."
+if ($Epochs -lt 10) {
+    Write-Warning "Epochs below 10 is a smoke test and is not expected to produce usable speech."
+}
 Push-Location $voiceRoot
 try {
     & $python "-s" "GPT_SoVITS\s2_train.py" "--config" $configPath *>&1 |
