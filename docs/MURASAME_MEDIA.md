@@ -41,7 +41,7 @@ GPT_SOVITS_ROOT=../qq-chatrobot-voice/GPT-SoVITS
 GPT_SOVITS_PYTHON=../qq-chatrobot-voice/GPT-SoVITS/.venv/Scripts/python.exe
 GPT_SOVITS_TTS_CONFIG=GPT_SoVITS/configs/tts_infer.yaml
 # 训练完成后可填写；start_all.ps1 会在 9880 就绪后自动加载它。
-GPT_SOVITS_SOVITS_WEIGHTS=./data/murasame_voice_dataset/SoVITS_weights/murasame_voice_e1_s166.pth
+GPT_SOVITS_SOVITS_WEIGHTS=./data/murasame_voice_dataset/SoVITS_weights/murasame_voice_e2_s332.pth
 ```
 
 执行 `scripts\\start_all.ps1` 时，如果本地目录、独立 Python 环境和模型配置都存在，
