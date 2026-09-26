@@ -21,8 +21,10 @@
 群里发送“音色列表”查看菜单，发送“选择音色 murasame_ja”（或“切换音色 murasame_ja”）切换。这里的
 `voice`、`model` 和语言字段由已部署的 TTS 服务解释；只有确认服务支持额外
 语言字段时才设置 `VOICE_SUPPORTS_LANGUAGE_FIELDS=true`。项目不会自动把录音
-训练成音色，也不会声称已经完成训练。若要训练，请先确认录音授权，并在
-外部服务完成训练后把服务提供的 voice/model ID 写入配置。
+训练成音色，也不会在后台隐式训练。若要在本机显式训练，请先确认录音授权，
+再运行 `powershell -ExecutionPolicy Bypass -File .\scripts\train_murasame_voice.ps1`；
+该脚本会复用已完成的预处理并在 CPU 上生成本地 SoVITS 权重。训练模型和录音都在
+`.gitignore` 覆盖的 `data/` 下，不会提交到 GitHub。
 
 ## GPT-SoVITS 本地后端
 
@@ -38,6 +40,8 @@ GPT_SOVITS_AUTO_START=auto
 GPT_SOVITS_ROOT=../qq-chatrobot-voice/GPT-SoVITS
 GPT_SOVITS_PYTHON=../qq-chatrobot-voice/GPT-SoVITS/.venv/Scripts/python.exe
 GPT_SOVITS_TTS_CONFIG=GPT_SoVITS/configs/tts_infer.yaml
+# 训练完成后可填写；start_all.ps1 会在 9880 就绪后自动加载它。
+GPT_SOVITS_SOVITS_WEIGHTS=./data/murasame_voice_dataset/SoVITS_weights/murasame_voice_e1_s166.pth
 ```
 
 执行 `scripts\\start_all.ps1` 时，如果本地目录、独立 Python 环境和模型配置都存在，

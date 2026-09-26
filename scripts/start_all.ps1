@@ -78,6 +78,38 @@ function Get-DotEnvValues {
     return $values
 }
 
+function Apply-GptSovitsWeights {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Settings,
+        [Parameter(Mandatory = $true)][string]$VoiceHost,
+        [Parameter(Mandatory = $true)][int]$Port
+    )
+
+    $configured = ([string]$Settings["GPT_SOVITS_SOVITS_WEIGHTS"]).Trim()
+    if (-not $configured) {
+        return
+    }
+    $weightsPath = if ([System.IO.Path]::IsPathRooted($configured)) {
+        [System.IO.Path]::GetFullPath($configured)
+    }
+    else {
+        [System.IO.Path]::GetFullPath((Join-Path $projectRoot $configured))
+    }
+    if (-not (Test-Path -LiteralPath $weightsPath -PathType Leaf)) {
+        Write-Host "[VOICE] Configured SoVITS weights not found: $weightsPath" -ForegroundColor Yellow
+        return
+    }
+    $encodedPath = [Uri]::EscapeDataString($weightsPath)
+    $endpoint = "http://$VoiceHost`:$Port/set_sovits_weights?weights_path=$encodedPath"
+    try {
+        $response = Invoke-RestMethod -Uri $endpoint -Method Get -TimeoutSec 180
+        Write-Host "[VOICE] Loaded SoVITS weights: $weightsPath" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "[VOICE] Failed to load SoVITS weights: $weightsPath ($($_.Exception.Message))" -ForegroundColor Yellow
+    }
+}
+
 function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
@@ -148,6 +180,7 @@ function Start-GptSovitsSidecar {
 
     if (Test-LocalPort -Port $voicePort) {
         Write-Host "[VOICE] GPT-SoVITS already listening on $voicePort." -ForegroundColor Green
+        Apply-GptSovitsWeights -Settings $Settings -VoiceHost $voiceHost -Port $voicePort
         return $true
     }
 
@@ -232,6 +265,7 @@ function Start-GptSovitsSidecar {
 
     if (Wait-LocalPort -Port $voicePort -TimeoutSeconds 90) {
         Write-Host "[VOICE] GPT-SoVITS ready: http://$voiceHost`:$voicePort/tts" -ForegroundColor Green
+        Apply-GptSovitsWeights -Settings $Settings -VoiceHost $voiceHost -Port $voicePort
         return $true
     }
     Write-Host "[VOICE] GPT-SoVITS did not become ready. Check logs\gpt_sovits.error.log; bot will still start." -ForegroundColor Yellow
