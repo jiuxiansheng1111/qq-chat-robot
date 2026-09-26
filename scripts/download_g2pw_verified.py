@@ -9,7 +9,6 @@ from pathlib import Path
 
 import requests
 
-
 URL = "https://www.modelscope.cn/models/kamiorinn/g2pw/resolve/master/G2PWModel_1.1.zip"
 SIZE = 588_857_174
 SHA256 = "b116f6930a7ee55eef6576a8d8e14bf40c1106583439e8ae924b901512379c64"

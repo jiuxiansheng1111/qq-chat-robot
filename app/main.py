@@ -147,6 +147,7 @@ from app.services.ultraman_encyclopedia import (
     wikipedia_ultraman_image,
 )
 from app.services.voice import (
+    requested_speech_language,
     resolve_character_profile,
     synthesize_voice,
     voice_profile_menu,
@@ -1304,11 +1305,17 @@ def ensure_default_murasame_voice(
     prompt: str = "",
     affection_score: int | None = None,
     romance_mode: bool = False,
+    response_language: str = "zh",
 ) -> str:
     if not answer:
         return answer
     if answer.startswith(("```", "<WEB_SEARCH>")):
         return answer
+    if response_language in {"en", "ja"}:
+        # Persona markers and the comfort-length suffix are Chinese.  Keep
+        # foreign-language replies in the language the user requested so the
+        # TTS frontend receives a coherent single-language sentence.
+        return answer.strip()
     if romance_mode:
         # The base persona still contains legacy markers for compatibility
         # with normal mode.  Romance mode has its own softer voice and must
@@ -2367,12 +2374,12 @@ async def send_group_image(group_id: str, image_file: str, caption: str = "") ->
     raise RuntimeError(str(last_error or "OneBot image send failed after all fallbacks"))
 
 
-async def send_group_record(group_id: str, record_file: str) -> None:
-    """Send a OneBot 11 record segment, preserving the same dry-run behavior."""
+async def send_group_record(group_id: str, record_file: str) -> bool:
+    """Send a OneBot 11 record segment; return whether OneBot accepted it."""
     route = onebot_route(settings)
     if not route.api_base:
         logger.info("[dry-run] bot=%s group=%s record=%s", route.self_id, group_id, record_file[:80])
-        return
+        return False
     headers = (
         {"Authorization": f"Bearer {route.access_token}"}
         if route.access_token
@@ -2391,6 +2398,7 @@ async def send_group_record(group_id: str, record_file: str) -> None:
         payload = response.json()
     if payload.get("status") != "ok":
         raise RuntimeError(payload.get("wording") or "OneBot record send failed")
+    return True
 
 
 async def maybe_send_voice_reply(
@@ -2398,6 +2406,7 @@ async def maybe_send_voice_reply(
     group_id: str,
     user_id: str,
     text: str,
+    target_language: str = "zh",
 ) -> bool:
     """Send TTS only for users who explicitly enabled voice mode."""
     if not settings.voice_enabled or not await request.app.state.db.voice_mode(group_id, user_id):
@@ -2409,12 +2418,35 @@ async def maybe_send_voice_reply(
         profile = await request.app.state.db.voice_profile(
             group_id, user_id, settings.voice_profile_default
         )
-        record = await synthesize_voice(text, settings, profile)
-        await send_group_record(group_id, record)
-        return True
-    except (RuntimeError, ValueError, httpx.HTTPError) as exc:
+        record = await synthesize_voice(
+            text,
+            settings,
+            profile,
+            target_language=target_language,
+        )
+        return await send_group_record(group_id, record)
+    except Exception as exc:  # noqa: BLE001 - voice failure must fall back to text
         logger.warning("voice reply failed: %s", exc)
         return False
+
+
+async def send_conversational_reply(
+    request: Request,
+    group_id: str,
+    user_id: str,
+    text: str,
+    *,
+    target_language: str = "zh",
+) -> None:
+    """Use the opted-in voice channel once, with the full text as fallback."""
+    if not await maybe_send_voice_reply(
+        request,
+        group_id,
+        user_id,
+        text,
+        target_language=target_language,
+    ):
+        await send_group_long_message(group_id, text)
 
 
 CHARACTER_CONFIRMATION_TTL_SECONDS = 90
@@ -4098,10 +4130,11 @@ async def onebot_webhook(
                 await send_group_message(group_id, "联网搜索暂时不可用，稍后再试一下吧。")
     elif text.startswith(("/ai ", "/AI ")) or (addressed_to_murasame and text):
         prompt = text.split(" ", 1)[1].strip() if text.startswith(("/ai ", "/AI ")) else text
+        response_language = requested_speech_language(prompt)
         group_memories = await request.app.state.db.group_memories(group_id)
         active_possession = await request.app.state.db.daily_possession(group_id, today)
         member_identity_target = extract_member_identity_lookup(prompt)
-        if member_identity_target is not None and not active_possession:
+        if member_identity_target is not None and not active_possession and response_language == "zh":
             member_matches = await request.app.state.db.find_group_member_identity(
                 group_id, member_identity_target
             )
@@ -4130,7 +4163,7 @@ async def onebot_webhook(
                         + "、".join(f"“{item}”" for item in aliases[:5])
                         + "。QQ号就不拿出来念了。"
                     )
-                await send_group_message(group_id, reply)
+                await send_conversational_reply(request, group_id, user_id, reply)
                 return {"ok": True, "source": "group_member_identity"}
         speaker_display = sender_display_name(event)
         memory_lookup_prompt = rewrite_first_person_identity_question(
@@ -4145,14 +4178,14 @@ async def onebot_webhook(
             memory_lookup_prompt,
             group_memories,
         )
-        if memory_answer is not None and not active_possession:
+        if memory_answer is not None and not active_possession and response_language == "zh":
             memory_reply = ensure_default_murasame_voice(
                 format_group_memory_answer(memory_answer, prompt),
                 seed=f"group-memory:{group_id}:{user_id}:{prompt}",
                 prompt=prompt,
                 romance_mode=romance_mode,
             )
-            await send_group_message(group_id, memory_reply)
+            await send_conversational_reply(request, group_id, user_id, memory_reply)
             return {"ok": True, "source": "group_memory_relation"}
         if not await request.app.state.llm_limiter.allow(f"llm-user:{user_id}"):
             await notify_rate_limited(
@@ -4328,6 +4361,12 @@ async def onebot_webhook(
         messages = request.app.state.memory.messages(
             group_id, user_id, persona, prompt, memory_enabled
         )
+        language_instruction = {
+            "zh": "本轮请用自然中文回答。英文名称可以保留原文。",
+            "ja": "本轮用户明确要求日语，请用自然日语回答，不要夹入中文称呼或中文口头禅。",
+            "en": "The user explicitly requested English. Reply in natural English without Chinese catchphrases.",
+        }[response_language]
+        messages[0]["content"] += "\n\n【本轮回答语言】" + language_instruction
         group_cache = request.app.state.recent_group_messages.setdefault(
             group_id,
             deque(maxlen=max(50, settings.group_context_history_count)),
@@ -4436,12 +4475,22 @@ async def onebot_webhook(
                     prompt=prompt,
                     affection_score=current_affection,
                     romance_mode=romance_mode,
+                    response_language=response_language,
                 )
             request.app.state.memory.append(group_id, user_id, prompt, answer, memory_enabled)
             if not possession_name:
                 request.app.state.last_murasame_replies[(group_id, user_id)] = answer[-1800:]
-            await send_group_long_message(group_id, answer)
-            await maybe_send_voice_reply(request, group_id, user_id, answer)
+            # Voice mode is an alternate reply channel.  Once the record has
+            # been generated and accepted by OneBot, do not echo the same
+            # answer as text.  Text remains the reliable fallback for disabled,
+            # rate-limited, or failed TTS delivery.
+            await send_conversational_reply(
+                request,
+                group_id,
+                user_id,
+                answer,
+                target_language=response_language,
+            )
             if romance_mode and not possession_name:
                 await request.app.state.db.record_romance_turn(group_id, user_id)
             if imitate_current_possession and possession:

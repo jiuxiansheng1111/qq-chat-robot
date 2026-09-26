@@ -114,9 +114,9 @@ class Settings(BaseSettings):
     # the character label and supported languages.
     voice_profiles_json: str = (
         '{"murasame":{"label":"小丛雨","voice":"murasame",'
-        '"language":"auto","languages":"中 / 日 / 英","target_language":"auto",'
-        '"prompt_lang":"zh","prompt_text":"不要把我当小孩子",'
-        '"ref_audio_path":"data/murasame_voice_dataset/audio/murasame_0001.mp3"}}'
+        '"language":"zh","languages":"中 / 日 / 英","target_language":"zh",'
+        '"prompt_lang":"ja","prompt_text":"",'
+        '"ref_audio_path":"data/murasame_voice_dataset_ja/audio/murasame_0001.mp3"}}'
     )
     voice_timeout_seconds: float = 45
     voice_max_chars: int = 360

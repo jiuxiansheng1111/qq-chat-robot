@@ -15,7 +15,32 @@ from app.config import Settings
 
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
 _KANA_RE = re.compile(r"[\u3040-\u30ff]")
-_LATIN_RE = re.compile(r"[A-Za-z]")
+
+_LANGUAGE_DIRECTIVE_RE = re.compile(
+    r"(?:^|[，,。.!！?？；;：:\s])(?:小?丛雨[,，]?)?"
+    r"(?P<early_negation>不要|别|不需要|无需|禁止)?"
+    r"(?:你)?(?:请你帮我|请你|麻烦你|帮我|替我|我想让你|我希望你|希望你|让你|我想|想要)?"
+    r"(?:可不可以|能不能|能否|可以|能)?(?:请|麻烦)?"
+    r"(?:"
+    r"(?P<negation>不要|别|不需要|无需|禁止)?(?:再)?"
+    r"(?:改用|换成|用|说|讲|读)(?:标准)?"
+    r"(?P<language>中文|汉语|普通话|日语|日文|英语|英文)"
+    r"(?:回答|回复|朗读|说|讲)?|"
+    r"(?P<language_first>中文|汉语|普通话|日语|日文|英语|英文)"
+    r"(?:回答|回复|朗读|说|讲)"
+    r")",
+)
+_LANGUAGE_CODES = {
+    "中文": "zh",
+    "汉语": "zh",
+    "普通话": "zh",
+    "日语": "ja",
+    "日文": "ja",
+    "英语": "en",
+    "英文": "en",
+}
+_ENGLISH_DIRECTIVE_RE = re.compile(r"\bin\s+english\b", re.IGNORECASE)
+_JAPANESE_DIRECTIVE_RE = re.compile(r"日本語で")
 
 
 def voice_profiles(settings: Settings) -> dict[str, dict[str, str]]:
@@ -112,16 +137,94 @@ def resolve_character_profile(settings: Settings, selection: str) -> str | None:
 
 
 def detect_speech_language(text: str, preferred: str = "auto") -> str:
-    """Return the target language code used by multilingual TTS backends."""
+    """Return the target language code used by multilingual TTS backends.
+
+    Automatic detection intentionally defaults to Chinese.  Character replies
+    often contain an English product name, acronym, or short quote; treating
+    any Latin character as English makes GPT-SoVITS use the wrong frontend.
+    A configured non-``auto`` preference is the explicit language override.
+    """
     requested = str(preferred or "auto").strip().casefold()
     if requested in {"zh", "en", "ja", "ko", "yue"}:
         return requested
-    if _KANA_RE.search(text or ""):
+    candidate = str(text or "")
+    kana_count = len(_KANA_RE.findall(candidate))
+    cjk_count = len(_CJK_RE.findall(candidate))
+    # Japanese ordinarily includes several kana; a lone kana in an otherwise
+    # Chinese sentence is not enough to override the safe Chinese default.
+    if kana_count >= 2 and kana_count >= cjk_count * 0.15:
         return "ja"
-    cjk_count = len(_CJK_RE.findall(text or ""))
     if cjk_count:
         return "zh"
-    return "en" if _LATIN_RE.search(text or "") else "zh"
+    # Ignore URLs before inspecting Latin words: their host/path components do
+    # not indicate the language that should be spoken.
+    prose_candidate = re.sub(r"(?:https?://|www\.)\S+", "", candidate, flags=re.IGNORECASE)
+    latin_words = re.findall(r"[A-Za-z]+(?:'[A-Za-z]+)?", prose_candidate)
+    latin_letters = sum(len(word.replace("'", "")) for word in latin_words)
+    # Require an actual English-looking utterance.  This keeps "AI", "v2",
+    # URLs and identifiers from flipping a Chinese reply to English.
+    if latin_letters >= 4 and len(latin_words) >= 2:
+        return "en"
+    return "zh"
+
+
+def requested_speech_language(prompt: str) -> str:
+    """Resolve an explicit per-message voice language; otherwise use Chinese.
+
+    The generated answer itself is deliberately not used as the language
+    switch.  Product names, quotations, or an LLM unexpectedly replying in a
+    foreign language must not silently change the user's voice preference.
+    """
+    candidate = " ".join(str(prompt or "").split())
+    if not candidate:
+        return "zh"
+    directives: list[tuple[int, str]] = []
+    for match in _LANGUAGE_DIRECTIVE_RE.finditer(candidate):
+        # A negative preference (for example, “不要用英语”) is not a request
+        # to synthesize another foreign language.  With no later positive
+        # directive, the product rule is to fall back to Chinese.
+        if match.group("early_negation") or match.group("negation"):
+            continue
+        language = match.group("language") or match.group("language_first")
+        directives.append((match.start(), _LANGUAGE_CODES[language]))
+    directives.extend(
+        (match.start(), "en") for match in _ENGLISH_DIRECTIVE_RE.finditer(candidate)
+    )
+    directives.extend(
+        (match.start(), "ja") for match in _JAPANESE_DIRECTIVE_RE.finditer(candidate)
+    )
+    # If a user corrects themselves in one message, the last positive request
+    # wins: “不要用英语，改用日语回答” must resolve to Japanese.
+    return max(directives, default=(-1, "zh"), key=lambda item: item[0])[1]
+
+
+def validate_voice_text_language(text: str, target_language: str) -> None:
+    """Reject clear text/frontend mismatches before producing garbled speech.
+
+    This intentionally does not try to classify mixed language or short
+    fragments. It only guards the obvious case where the LLM answered in a
+    different script from the explicitly selected GPT-SoVITS frontend.
+    """
+    candidate = re.sub(
+        r"(?:https?://|www\.)\S+", "", str(text or ""), flags=re.IGNORECASE
+    )
+    cjk_count = len(_CJK_RE.findall(candidate))
+    kana_count = len(_KANA_RE.findall(candidate))
+    latin_count = len(re.findall(r"[A-Za-z]", candidate))
+    latin_words = re.findall(r"[A-Za-z]+(?:'[A-Za-z]+)?", candidate)
+    if target_language == "zh" and kana_count >= 6 and kana_count > cjk_count:
+        raise RuntimeError("回复主要为日语，已避免按中文发音并回退文字")
+    if (
+        target_language == "zh"
+        and len(latin_words) >= 2
+        and latin_count >= 10
+        and latin_count > cjk_count * 2
+    ):
+        raise RuntimeError("回复主要为英语，已避免按中文发音并回退文字")
+    if target_language == "ja" and cjk_count >= 12 and kana_count == 0:
+        raise RuntimeError("回复不像日语，已避免错误语音并回退文字")
+    if target_language == "en" and cjk_count >= 12 and latin_count < 5:
+        raise RuntimeError("回复不像英语，已避免错误语音并回退文字")
 
 
 def _project_relative_path(value: str) -> str:
@@ -167,6 +270,7 @@ async def synthesize_voice(
     text: str,
     settings: Settings,
     profile_name: str | None = None,
+    target_language: str | None = None,
 ) -> str:
     if not settings.voice_enabled:
         raise RuntimeError("语音服务暂不可用，请稍后再试。")
@@ -181,9 +285,14 @@ async def synthesize_voice(
     endpoint = str(settings.voice_api_url or "").strip().rstrip("/")
     if not endpoint:
         raise RuntimeError("语音服务暂不可用，请稍后再试。")
-    clean = " ".join(str(text or "").split())[: max(20, int(settings.voice_max_chars))]
+    clean = " ".join(str(text or "").split())
     if not clean:
         raise ValueError("没有可转换成语音的文字")
+    # Sending the first N characters as the entire voice reply silently drops
+    # the rest of the answer once text is suppressed.  Preserve the complete
+    # answer through the caller's text fallback until chunked TTS is supported.
+    if len(clean) > max(20, int(settings.voice_max_chars)):
+        raise RuntimeError("回复超过语音长度上限，已回退完整文字")
     headers = {"Content-Type": "application/json"}
     if settings.voice_api_key:
         headers["Authorization"] = f"Bearer {settings.voice_api_key}"
@@ -204,8 +313,12 @@ async def synthesize_voice(
         )
         target_language = detect_speech_language(
             clean,
-            profile.get("target_language") or profile.get("language") or "auto",
+            target_language
+            or profile.get("target_language")
+            or profile.get("language")
+            or "zh",
         )
+        validate_voice_text_language(clean, target_language)
         payload = {
             "text": clean,
             "text_lang": target_language,

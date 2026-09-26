@@ -635,6 +635,160 @@ def test_generic_ai_chat_rate_limit_is_explicit_not_silent(tmp_path):
         settings.ingress_group_rate_limit_per_minute = previous_ingress_group
 
 
+def test_voice_reply_suppresses_duplicate_text_and_falls_back_on_failure(monkeypatch, tmp_path):
+    previous_database_path = settings.database_path
+    previous_onebot_api_base = settings.onebot_api_base
+    previous_self_id = settings.onebot_self_id
+    previous_voice_enabled = settings.voice_enabled
+    settings.database_path = str(tmp_path / "voice-reply.db")
+    settings.onebot_api_base = ""
+    settings.onebot_self_id = "bot-1"
+    settings.voice_enabled = True
+    sent_text: list[tuple[str, str]] = []
+    sent_records: list[tuple[str, str]] = []
+    synthesized: list[tuple[str, str | None]] = []
+
+    async def fake_send_text(group_id: str, message: str) -> None:
+        sent_text.append((group_id, message))
+
+    async def fake_send_record(group_id: str, record: str) -> bool:
+        sent_records.append((group_id, record))
+        return True
+
+    async def fake_synthesize(*args, **kwargs) -> str:
+        synthesized.append((args[0], kwargs.get("target_language")))
+        return "base64://voice"
+
+    monkeypatch.setattr("app.main.send_group_long_message", fake_send_text)
+    monkeypatch.setattr("app.main.send_group_record", fake_send_record)
+    monkeypatch.setattr("app.main.synthesize_voice", fake_synthesize)
+
+    def voice_event(
+        message_id: str,
+        prompt: str = "你好",
+        group_id: str = "voice-group",
+        user_id: str = "voice-user",
+    ):
+        payload = event(prompt, group_id, user_id)
+        payload["self_id"] = "bot-1"
+        payload["message_id"] = message_id
+        payload["message"] = [
+            {"type": "at", "data": {"qq": "bot-1"}},
+            {"type": "text", "data": {"text": prompt}},
+        ]
+        return payload
+
+    try:
+        with TestClient(app) as client:
+            client.portal.call(
+                client.app.state.db.set_voice_mode, "voice-group", "voice-user", True
+            )
+            client.app.state.llm.ask = AsyncMock(return_value="这是语音回复。")
+            assert post_event(client, voice_event("voice-success")).json()["ok"] is True
+            assert sent_records == [("voice-group", "base64://voice")]
+            assert sent_text == []
+            assert synthesized[-1][1] == "zh"
+
+            client.portal.call(
+                client.app.state.db.set_voice_mode, "voice-group-en", "voice-user-en", True
+            )
+            client.app.state.llm.ask = AsyncMock(return_value="Hello, I am here to help.")
+            assert post_event(
+                client,
+                voice_event(
+                    "voice-english",
+                    "请用英语回答：你好",
+                    "voice-group-en",
+                    "voice-user-en",
+                ),
+            ).json()["ok"] is True
+            assert synthesized[-1] == ("Hello, I am here to help.", "en")
+            assert len(sent_records) == 2
+            assert sent_text == []
+            english_messages = client.app.state.llm.ask.await_args.args[0]
+            assert "explicitly requested English" in english_messages[0]["content"]
+
+            async def rejected_record(group_id: str, record: str) -> bool:
+                return False
+
+            monkeypatch.setattr("app.main.send_group_record", rejected_record)
+            client.app.state.llm.ask = AsyncMock(return_value="这次语音未被发送。")
+            assert post_event(client, voice_event("voice-record-rejected")).json()["ok"] is True
+            assert len(sent_text) == 1
+            assert "这次语音未被发送" in sent_text[0][1]
+
+            async def failed_synthesize(*args, **kwargs) -> str:
+                raise RuntimeError("TTS unavailable")
+
+            monkeypatch.setattr("app.main.synthesize_voice", failed_synthesize)
+            client.app.state.llm.ask = AsyncMock(return_value="这是语音回复。")
+            assert post_event(client, voice_event("voice-fallback")).json()["ok"] is True
+            assert len(sent_text) == 2
+            assert "这是语音回复" in sent_text[1][1]
+    finally:
+        settings.database_path = previous_database_path
+        settings.onebot_api_base = previous_onebot_api_base
+        settings.onebot_self_id = previous_self_id
+        settings.voice_enabled = previous_voice_enabled
+
+
+def test_identity_lookup_uses_opted_in_voice_instead_of_text(monkeypatch, tmp_path):
+    previous_database_path = settings.database_path
+    previous_onebot_api_base = settings.onebot_api_base
+    previous_self_id = settings.onebot_self_id
+    previous_voice_enabled = settings.voice_enabled
+    settings.database_path = str(tmp_path / "voice-identity.db")
+    settings.onebot_api_base = ""
+    settings.onebot_self_id = "bot-1"
+    settings.voice_enabled = True
+    sent_text: list[str] = []
+    sent_records: list[str] = []
+
+    async def fake_send_text(group_id: str, message: str) -> None:
+        sent_text.append(message)
+
+    async def fake_send_record(group_id: str, record: str) -> bool:
+        sent_records.append(record)
+        return True
+
+    async def fake_synthesize(*args, **kwargs) -> str:
+        assert kwargs["target_language"] == "zh"
+        return "base64://voice"
+
+    monkeypatch.setattr("app.main.send_group_long_message", fake_send_text)
+    monkeypatch.setattr("app.main.send_group_record", fake_send_record)
+    monkeypatch.setattr("app.main.synthesize_voice", fake_synthesize)
+
+    try:
+        with TestClient(app) as client:
+            client.portal.call(
+                client.app.state.db.set_voice_mode, "voice-identity-group", "voice-user", True
+            )
+            client.portal.call(
+                client.app.state.db.add_group_member_identity,
+                "voice-identity-group",
+                "other-user",
+                "阿青",
+                "小青",
+            )
+            payload = event("小青是谁", "voice-identity-group", "voice-user")
+            payload["self_id"] = "bot-1"
+            payload["message_id"] = "voice-identity-lookup"
+            payload["message"] = [
+                {"type": "at", "data": {"qq": "bot-1"}},
+                {"type": "text", "data": {"text": "小青是谁"}},
+            ]
+            result = post_event(client, payload).json()
+            assert result["source"] == "group_member_identity"
+            assert sent_records == ["base64://voice"]
+            assert sent_text == []
+    finally:
+        settings.database_path = previous_database_path
+        settings.onebot_api_base = previous_onebot_api_base
+        settings.onebot_self_id = previous_self_id
+        settings.voice_enabled = previous_voice_enabled
+
+
 def test_local_plugin_commands_do_not_consume_llm_chat_quota(tmp_path):
     previous_database_path = settings.database_path
     previous_onebot_api_base = settings.onebot_api_base
