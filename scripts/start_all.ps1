@@ -96,17 +96,16 @@ function Apply-GptSovitsWeights {
         [System.IO.Path]::GetFullPath((Join-Path $projectRoot $configured))
     }
     if (-not (Test-Path -LiteralPath $weightsPath -PathType Leaf)) {
-        Write-Host "[VOICE] Configured SoVITS weights not found: $weightsPath" -ForegroundColor Yellow
-        return
+        throw "Configured SoVITS weights not found: $weightsPath"
     }
     $encodedPath = [Uri]::EscapeDataString($weightsPath)
     $endpoint = "http://$VoiceHost`:$Port/set_sovits_weights?weights_path=$encodedPath"
     try {
-        $response = Invoke-RestMethod -Uri $endpoint -Method Get -TimeoutSec 180
+        $response = Invoke-RestMethod -Uri $endpoint -Method Get -TimeoutSec 180 -ErrorAction Stop
         Write-Host "[VOICE] Loaded SoVITS weights: $weightsPath" -ForegroundColor Green
     }
     catch {
-        Write-Host "[VOICE] Failed to load SoVITS weights: $weightsPath ($($_.Exception.Message))" -ForegroundColor Yellow
+        throw "Failed to synchronize configured SoVITS weights: $weightsPath ($($_.Exception.Message))"
     }
 }
 
@@ -177,10 +176,21 @@ function Start-GptSovitsSidecar {
         # The Python app inherits this value when start_all launches its lifecycle supervisor.
         $env:VOICE_API_URL = "http://127.0.0.1:$voicePort"
     }
+    # Routed mode owns the selected model inside the bot's per-request lock.
+    # Never overwrite it with the legacy single startup weight, regardless of
+    # whether this sidecar is already listening or is started below.
+    $routedWeightsConfigured =
+        ([string]$Settings["VOICE_SOVITS_WEIGHTS_BY_LANGUAGE_JSON"]).Trim() -or
+        ([string]$Settings["VOICE_SOVITS_WEIGHTS_BY_PROFILE_JSON"]).Trim()
 
     if (Test-LocalPort -Port $voicePort) {
         Write-Host "[VOICE] GPT-SoVITS already listening on $voicePort." -ForegroundColor Green
-        Apply-GptSovitsWeights -Settings $Settings -VoiceHost $voiceHost -Port $voicePort
+        # In routed mode the bot owns model changes and serializes them with
+        # synthesis. A profile map is routed too; applying the legacy startup
+        # weight here could overwrite a Yoshino/Mako request in flight.
+        if (-not $routedWeightsConfigured) {
+            Apply-GptSovitsWeights -Settings $Settings -VoiceHost $voiceHost -Port $voicePort
+        }
         return $true
     }
 
@@ -265,7 +275,12 @@ function Start-GptSovitsSidecar {
 
     if (Wait-LocalPort -Port $voicePort -TimeoutSeconds 90) {
         Write-Host "[VOICE] GPT-SoVITS ready: http://$voiceHost`:$voicePort/tts" -ForegroundColor Green
-        Apply-GptSovitsWeights -Settings $Settings -VoiceHost $voiceHost -Port $voicePort
+        if (-not $routedWeightsConfigured) {
+            Apply-GptSovitsWeights -Settings $Settings -VoiceHost $voiceHost -Port $voicePort
+        }
+        else {
+            Write-Host "[VOICE] Routed weights configured; initial model will be selected by the bot." -ForegroundColor Cyan
+        }
         return $true
     }
     Write-Host "[VOICE] GPT-SoVITS did not become ready. Check logs\gpt_sovits.error.log; bot will still start." -ForegroundColor Yellow

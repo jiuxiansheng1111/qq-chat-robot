@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import secrets
-from collections import deque
+from collections import OrderedDict, deque
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone, tzinfo
@@ -477,6 +477,10 @@ async def lifespan(app: FastAPI):
     app.state.auth = auth
     app.state.llm = LLMManager(settings)
     app.state.memory = ConversationMemory(settings.max_context_messages)
+    # Voice mode is a conversational channel.  Keep a small, per-member
+    # session transcript so follow-ups remain coherent even when optional
+    # general memory is off.  It is never persisted or shared with the group.
+    app.state.voice_conversation_history = OrderedDict()
     app.state.style_learning_tasks = {}
     app.state.possession_style_examples = {}
     app.state.possession_style_catchphrases = {}
@@ -3447,6 +3451,7 @@ async def onebot_webhook(
             )
     elif text in VOICE_OFF_COMMANDS:
         await request.app.state.db.set_voice_mode(group_id, user_id, False)
+        request.app.state.voice_conversation_history.pop((group_id, user_id), None)
         await send_group_message(group_id, "已关闭你的语音回复，之后只发送文字。")
     elif text in VOICE_STATUS_COMMANDS:
         enabled = await request.app.state.db.voice_mode(group_id, user_id)
@@ -4131,6 +4136,10 @@ async def onebot_webhook(
     elif text.startswith(("/ai ", "/AI ")) or (addressed_to_murasame and text):
         prompt = text.split(" ", 1)[1].strip() if text.startswith(("/ai ", "/AI ")) else text
         response_language = requested_speech_language(prompt)
+        voice_conversation_enabled = (
+            settings.voice_enabled
+            and await request.app.state.db.voice_mode(group_id, user_id)
+        )
         group_memories = await request.app.state.db.group_memories(group_id)
         active_possession = await request.app.state.db.daily_possession(group_id, today)
         member_identity_target = extract_member_identity_lookup(prompt)
@@ -4361,6 +4370,25 @@ async def onebot_webhook(
         messages = request.app.state.memory.messages(
             group_id, user_id, persona, prompt, memory_enabled
         )
+        voice_history: deque[dict[str, str]] | None = None
+        if voice_conversation_enabled and not memory_enabled:
+            history_store = request.app.state.voice_conversation_history
+            history_key = (group_id, user_id)
+            voice_history = history_store.get(history_key)
+            if voice_history is None:
+                if len(history_store) >= 512:
+                    history_store.popitem(last=False)
+                voice_history = deque(maxlen=max(4, min(settings.max_context_messages, 16)))
+                history_store[history_key] = voice_history
+            else:
+                history_store.move_to_end(history_key)
+            # This transcript only contains this member and the bot.  It gives
+            # voice follow-ups continuity without exposing other group chatter.
+            messages[1:1] = list(voice_history)
+            messages[0]["content"] += (
+                "\n\n【语音会话上下文】以下仅是当前用户与机器人的近期对话。"
+                "只在它能帮助回答本轮时引用；以当前问题为准，不要杜撰、重复或带入无关旧话题。"
+            )
         language_instruction = {
             "zh": "本轮请用自然中文回答。英文名称可以保留原文。",
             "ja": "本轮用户明确要求日语，请用自然日语回答，不要夹入中文称呼或中文口头禅。",
@@ -4371,7 +4399,10 @@ async def onebot_webhook(
             group_id,
             deque(maxlen=max(50, settings.group_context_history_count)),
         )
-        if group_id not in request.app.state.group_history_bootstrapped:
+        if (
+            not voice_conversation_enabled
+            and group_id not in request.app.state.group_history_bootstrapped
+        ):
             try:
                 bootstrapped_context = await fetch_group_context(settings, group_id)
             except (RuntimeError, ValueError, httpx.HTTPError) as exc:
@@ -4395,11 +4426,13 @@ async def onebot_webhook(
         # Keep the large history cache for continuity, but do not dump thousands
         # of raw chat lines into every model call. A bounded recent window avoids
         # stale bot replies and unrelated catchphrases overpowering the persona.
-        recent_group_context = group_context_from_lines(
-            list(group_cache),
-            message_limit=min(settings.group_context_message_limit, 120),
-            char_limit=min(settings.group_context_char_limit, 18_000),
-        )
+        recent_group_context = ""
+        if not voice_conversation_enabled:
+            recent_group_context = group_context_from_lines(
+                list(group_cache),
+                message_limit=min(settings.group_context_message_limit, 120),
+                char_limit=min(settings.group_context_char_limit, 18_000),
+            )
         if recent_group_context:
             messages[1:1] = [{"role": "system", "content": recent_group_context}]
         if possession:
@@ -4478,6 +4511,9 @@ async def onebot_webhook(
                     response_language=response_language,
                 )
             request.app.state.memory.append(group_id, user_id, prompt, answer, memory_enabled)
+            if voice_history is not None:
+                voice_history.append({"role": "user", "content": prompt})
+                voice_history.append({"role": "assistant", "content": answer})
             if not possession_name:
                 request.app.state.last_murasame_replies[(group_id, user_id)] = answer[-1800:]
             # Voice mode is an alternate reply channel.  Once the record has

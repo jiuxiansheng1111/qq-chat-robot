@@ -127,6 +127,12 @@ class Settings(BaseSettings):
     voice_top_k: int = 15
     voice_temperature: float = 0.8
     voice_repetition_penalty: float = 1.35
+    # Optional JSON map from GPT-SoVITS frontend language to a local SoVITS
+    # weight. Keeping this empty preserves the single configured/default model.
+    voice_sovits_weights_by_language_json: str = ""
+    # Optional nested profile -> language -> SoVITS weight map. This keeps
+    # distinct character checkpoints from being used across profiles.
+    voice_sovits_weights_by_profile_json: str = ""
     daily_news_enabled: bool = True
     daily_news_hour: int = 12
     daily_news_minute: int = 0

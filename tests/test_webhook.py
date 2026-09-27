@@ -708,6 +708,28 @@ def test_voice_reply_suppresses_duplicate_text_and_falls_back_on_failure(monkeyp
             english_messages = client.app.state.llm.ask.await_args.args[0]
             assert "explicitly requested English" in english_messages[0]["content"]
 
+            # Another member can chat in the same group, but a voice follow-up
+            # must receive only this user's prior turn and the bot's answer.
+            unrelated = event("这是一条和当前对话无关的群聊", "voice-group", "other-member")
+            unrelated["self_id"] = "bot-1"
+            unrelated["message_id"] = "voice-unrelated-group-chat"
+            assert post_event(client, unrelated).json()["ok"] is True
+            # This test focuses on context rather than the separate cooldown.
+            client.app.state.voice_send_limiter = None
+            client.app.state.llm.ask = AsyncMock(return_value="我接着解释。")
+            assert post_event(
+                client,
+                voice_event("voice-follow-up", "那刚才的回答再展开一点"),
+            ).json()["ok"] is True
+            follow_up_messages = client.app.state.llm.ask.await_args.args[0]
+            follow_up_context = "\n".join(
+                str(message["content"]) for message in follow_up_messages
+            )
+            assert "你好" in follow_up_context
+            assert "这是语音回复" in follow_up_context
+            assert "这是一条和当前对话无关的群聊" not in follow_up_context
+            assert len(sent_records) == 3
+
             async def rejected_record(group_id: str, record: str) -> bool:
                 return False
 

@@ -174,40 +174,14 @@ function Assert-MixedResumeCheckpoint {
     # base pretrained weights at epoch 1.  Mixed runs are explicitly a
     # continuation of the e10 Japanese run, so fail before any expensive
     # preprocessing or an accidental from-scratch train.
-    $resumeCheck = @'
-import pathlib
-import sys
-import torch
-
-root = pathlib.Path(sys.argv[1])
-
-def latest(pattern: str) -> pathlib.Path:
-    paths = list(root.glob(pattern))
-    if not paths:
-        raise RuntimeError(f"missing {pattern} checkpoint in {root}")
-    # Match GPT-SoVITS utils.latest_checkpoint_path(), which sorts all digits
-    # in the complete path rather than trusting file modification times.
-    return max(paths, key=lambda path: int("".join(filter(str.isdigit, str(path)))))
-
-def load(label: str) -> tuple[pathlib.Path, dict, int]:
-    path = latest(f"{label}_*.pth")
-    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
-    iteration = checkpoint.get("iteration")
-    if not isinstance(iteration, int) or iteration < 1:
-        raise RuntimeError(f"{path} has no valid saved epoch")
-    if checkpoint.get("optimizer") is None:
-        raise RuntimeError(f"{path} lacks optimizer state and is not a resumable training checkpoint")
-    if "model" not in checkpoint:
-        raise RuntimeError(f"{path} lacks model state")
-    return path, checkpoint, iteration
-
-g_path, _g_checkpoint, g_epoch = load("G")
-d_path, _d_checkpoint, d_epoch = load("D")
-if g_epoch != d_epoch:
-    raise RuntimeError(f"G/D checkpoint epochs differ: {g_path}={g_epoch}, {d_path}={d_epoch}")
-print(f"RESUME_EPOCH={g_epoch}")
-'@
-    $resumeCheckOutput = @(& $python -c $resumeCheck $CheckpointDirectory)
+    # Keep the validator in an ASCII source file. PowerShell 5.1 can split
+    # quote-heavy Python passed through `-c` (including f-strings), changing a
+    # fail-closed validation error into a misleading Python syntax error.
+    $validatorPath = Join-Path $projectRoot "scripts\validate_mixed_resume_checkpoint.py"
+    if (-not (Test-Path -LiteralPath $validatorPath -PathType Leaf)) {
+        throw "Mixed resume checkpoint validator is missing: $validatorPath"
+    }
+    $resumeCheckOutput = @(& $python $validatorPath $CheckpointDirectory 2>&1)
     if ($LASTEXITCODE -ne 0) {
         throw "Mixed training requires valid paired G/D e10 resume checkpoints in $CheckpointDirectory; refusing upstream pretrained fallback."
     }
@@ -453,10 +427,22 @@ if ($ExpectedLanguage -eq "mixed") {
 }
 Push-Location $voiceRoot
 try {
-    & $python "-s" "GPT_SoVITS\s2_train.py" "--config" $configPath *>&1 |
-        Tee-Object -FilePath (Join-Path $logDir "04-sovits.log")
+    # Windows PowerShell 5.1 turns native stderr into error records. PyTorch
+    # can write harmless c10d warnings even after a successful checkpoint,
+    # so keep the warnings in the log and trust the native Python exit code.
+    # Direct invocation also preserves quoted paths without cmd.exe /s /c's
+    # command-string quote stripping.
+    $originalErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $python -s "GPT_SoVITS\s2_train.py" --config $configPath 2>&1 |
+            Tee-Object -FilePath (Join-Path $logDir "04-sovits.log")
+        $trainerExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $originalErrorActionPreference
+    }
 } finally {
     Pop-Location
 }
-if ($LASTEXITCODE -ne 0) { throw "SoVITS training failed; see $logDir\04-sovits.log" }
+if ($trainerExitCode -ne 0) { throw "SoVITS training failed; see $logDir\04-sovits.log" }
 Write-Host "[TRAIN] SoVITS fine-tune finished."

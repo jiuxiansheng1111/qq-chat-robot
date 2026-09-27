@@ -2,7 +2,10 @@
 
 This is an opt-in acceptance helper. It reads WAV files and a small manifest,
 loads an already-downloaded ASR model, and writes its report to stdout. It does
-not contact a service, generate audio, or modify the project data.
+not contact a service, generate audio, or modify the project data. Generate
+the WAVs with an isolated config prepared by
+``scripts/prepare_voice_acceptance_config.py``; this scorer cannot make an
+already-running sidecar safe after the fact.
 
 Manifest format (UTF-8 JSON):
 

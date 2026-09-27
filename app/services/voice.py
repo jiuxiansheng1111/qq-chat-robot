@@ -1,5 +1,6 @@
 """Opt-in multilingual character voice output."""
 
+import asyncio
 import base64
 import io
 import json
@@ -15,6 +16,16 @@ from app.config import Settings
 
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
 _KANA_RE = re.compile(r"[\u3040-\u30ff]")
+
+# A GPT-SoVITS sidecar has exactly one active SoVITS model. The lock covers
+# the mutable /set_sovits_weights call and the following /tts request.
+_GPT_SOVITS_LOCKS: dict[tuple[int, str], asyncio.Lock] = {}
+_SUPPORTED_GPT_SOVITS_WEIGHT_LANGUAGES = frozenset({"zh", "ja", "en", "ko", "yue"})
+_SUPPORTED_PROFILE_LANGUAGES = frozenset({"zh", "ja", "en"})
+_PROFILE_LANGUAGE_LABELS = {"zh": "中文", "ja": "日语", "en": "英语"}
+_SUPPORTED_GPT_SOVITS_TEXT_SPLIT_METHODS = frozenset(
+    {f"cut{index}" for index in range(6)}
+)
 
 _LANGUAGE_DIRECTIVE_RE = re.compile(
     r"(?:^|[，,。.!！?？；;：:\s])(?:小?丛雨[,，]?)?"
@@ -43,13 +54,13 @@ _ENGLISH_DIRECTIVE_RE = re.compile(r"\bin\s+english\b", re.IGNORECASE)
 _JAPANESE_DIRECTIVE_RE = re.compile(r"日本語で")
 
 
-def voice_profiles(settings: Settings) -> dict[str, dict[str, str]]:
+def voice_profiles(settings: Settings) -> dict[str, dict[str, object]]:
     """Return character voice profiles without exposing internal IDs to users."""
     try:
         payload = json.loads(settings.voice_profiles_json or "{}")
     except (TypeError, ValueError, json.JSONDecodeError):
         payload = {}
-    profiles: dict[str, dict[str, str]] = {}
+    profiles: dict[str, dict[str, object]] = {}
     if isinstance(payload, dict):
         for key, value in payload.items():
             if not isinstance(value, dict):
@@ -57,7 +68,7 @@ def voice_profiles(settings: Settings) -> dict[str, dict[str, str]]:
             profile_id = str(key).strip()
             if not profile_id or not re_safe_profile_id(profile_id):
                 continue
-            profiles[profile_id] = {
+            profile: dict[str, object] = {
                 field: str(value.get(field) or "").strip()
                 for field in (
                     "label",
@@ -72,6 +83,19 @@ def voice_profiles(settings: Settings) -> dict[str, dict[str, str]]:
                     "languages",
                 )
             }
+            # Keep language-specific values raw until synthesis. This lets the
+            # menu remain usable while a malformed voice-only setting fails
+            # closed at the point it could otherwise produce a wrong voice.
+            for field in (
+                "ref_audio_path_by_language",
+                "prompt_text_by_language",
+                "prompt_lang_by_language",
+                "supported_languages",
+                "text_split_method",
+            ):
+                if field in value:
+                    profile[field] = value[field]
+            profiles[profile_id] = profile
     if not profiles:
         profiles["default"] = {
             "label": "默认角色",
@@ -92,12 +116,60 @@ def re_safe_profile_id(value: str) -> bool:
     return all(char.isalnum() or char in {"_", "-"} for char in value) and len(value) <= 48
 
 
-def character_languages(profile: dict[str, str]) -> str:
+def profile_supported_languages(profile: dict[str, object]) -> tuple[str, ...] | None:
+    """Return an explicit accepted-language allowlist, or preserve legacy behavior.
+
+    A missing field intentionally means the profile predates per-language
+    acceptance and retains its existing routing behavior. A present field is
+    strict: malformed or unsupported values must not allow an unaccepted TTS
+    request through to the sidecar.
+    """
+    if "supported_languages" not in profile:
+        return None
+    raw_languages = profile["supported_languages"]
+    if not isinstance(raw_languages, list) or not raw_languages:
+        raise RuntimeError("所选角色的 supported_languages 配置无效，已回退文字回复")
+    if (
+        any(not isinstance(language, str) or language not in _SUPPORTED_PROFILE_LANGUAGES for language in raw_languages)
+        or len(set(raw_languages)) != len(raw_languages)
+    ):
+        raise RuntimeError("所选角色的 supported_languages 仅可包含不重复的 zh、ja、en，已回退文字回复")
+    return tuple(raw_languages)
+
+
+def profile_text_split_method(profile: dict[str, object]) -> str | None:
+    """Return an optional sidecar-supported split method without changing legacy payloads."""
+    if "text_split_method" not in profile:
+        return None
+    raw_method = profile["text_split_method"]
+    if not isinstance(raw_method, str):
+        raise RuntimeError(  # noqa: TRY004 - this is a user-safe synthesis failure
+            "所选角色的 text_split_method 配置无效，已回退文字回复"
+        )
+    method = raw_method.strip()
+    if not method:
+        return None
+    if method not in _SUPPORTED_GPT_SOVITS_TEXT_SPLIT_METHODS:
+        raise RuntimeError(
+            "所选角色的 text_split_method 仅可为 cut0 至 cut5，已回退文字回复"
+        )
+    return method
+
+
+def character_languages(profile: dict[str, object]) -> str:
     """Return a compact display label for the character's supported languages."""
-    configured = profile.get("languages", "").strip()
+    try:
+        supported_languages = profile_supported_languages(profile)
+    except RuntimeError:
+        # Keep a role visible in the selector without claiming malformed
+        # configuration can synthesize a language.
+        return "语音暂不可用"
+    if supported_languages is not None:
+        return " / ".join(_PROFILE_LANGUAGE_LABELS[language] for language in supported_languages)
+    configured = str(profile.get("languages") or "").strip()
     if configured:
         return configured
-    language = profile.get("target_language") or profile.get("language") or "auto"
+    language = str(profile.get("target_language") or profile.get("language") or "auto")
     return {
         "auto": "中 / 日 / 英",
         "zh": "中文",
@@ -108,8 +180,8 @@ def character_languages(profile: dict[str, str]) -> str:
     }.get(language, language)
 
 
-def character_label(profile_id: str, profile: dict[str, str]) -> str:
-    return profile.get("label") or profile_id
+def character_label(profile_id: str, profile: dict[str, object]) -> str:
+    return str(profile.get("label") or profile_id)
 
 
 def voice_profile_menu(settings: Settings) -> str:
@@ -234,6 +306,147 @@ def _project_relative_path(value: str) -> str:
     return str(path.resolve())
 
 
+def _profile_value_for_language(
+    profile: dict[str, object],
+    field: str,
+    target_language: str,
+    *,
+    allow_empty: bool = False,
+) -> str:
+    """Choose an optional language-specific profile value with legacy fallback."""
+    mapping_field = f"{field}_by_language"
+    legacy = str(profile.get(field) or "").strip()
+    if mapping_field not in profile:
+        return legacy
+    raw_mapping = profile[mapping_field]
+    if not isinstance(raw_mapping, dict) or not raw_mapping:
+        raise RuntimeError(f"所选角色的 {mapping_field} 配置无效，已回退文字回复")
+    values: dict[str, str] = {}
+    for language, value in raw_mapping.items():
+        code = str(language or "").strip().casefold()
+        if code not in _SUPPORTED_GPT_SOVITS_WEIGHT_LANGUAGES or not isinstance(value, str):
+            raise RuntimeError(f"所选角色的 {mapping_field} 配置无效，已回退文字回复")
+        candidate = value.strip()
+        if not candidate and not allow_empty:
+            raise RuntimeError(f"所选角色的 {mapping_field} 包含空值，已回退文字回复")
+        values[code] = candidate
+    return values.get(target_language, legacy)
+
+
+def gpt_sovits_language_weights(settings: Settings) -> dict[str, str]:
+    """Read the optional per-language SoVITS weight map from settings."""
+    raw = str(settings.voice_sovits_weights_by_language_json or "").strip()
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("GPT-SoVITS 语言权重 JSON 配置无效，已回退文字回复") from exc
+    if not isinstance(payload, dict):
+        raise TypeError("GPT-SoVITS 语言权重必须是 JSON 对象，已回退文字回复")
+    weights: dict[str, str] = {}
+    for language, configured_path in payload.items():
+        code = str(language or "").strip().casefold()
+        path = str(configured_path or "").strip()
+        if code not in _SUPPORTED_GPT_SOVITS_WEIGHT_LANGUAGES or not path:
+            raise RuntimeError("GPT-SoVITS 语言权重配置包含无效语言或路径，已回退文字回复")
+        resolved_path = _project_relative_path(path)
+        if not Path(resolved_path).is_file():
+            raise RuntimeError(
+                f"{code} 语言配置的 SoVITS 权重不可用，已回退文字回复"
+            )
+        weights[code] = resolved_path
+    return weights
+
+
+def gpt_sovits_profile_language_weights(settings: Settings) -> dict[str, dict[str, str]]:
+    """Read optional profile-specific GPT-SoVITS weights from settings."""
+    raw = str(settings.voice_sovits_weights_by_profile_json or "").strip()
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("GPT-SoVITS 角色权重 JSON 配置无效，已回退文字回复") from exc
+    if not isinstance(payload, dict):
+        raise TypeError("GPT-SoVITS 角色权重必须是 JSON 对象，已回退文字回复")
+    profiles: dict[str, dict[str, str]] = {}
+    for profile_id, language_map in payload.items():
+        profile_key = str(profile_id or "").strip()
+        if not re_safe_profile_id(profile_key) or not isinstance(language_map, dict):
+            raise RuntimeError("GPT-SoVITS 角色权重配置包含无效角色或语言映射，已回退文字回复")
+        weights: dict[str, str] = {}
+        for language, configured_path in language_map.items():
+            code = str(language or "").strip().casefold()
+            path = str(configured_path or "").strip()
+            if code not in _SUPPORTED_GPT_SOVITS_WEIGHT_LANGUAGES or not path:
+                raise RuntimeError("GPT-SoVITS 角色权重配置包含无效语言或路径，已回退文字回复")
+            resolved_path = _project_relative_path(path)
+            if not Path(resolved_path).is_file():
+                raise RuntimeError(
+                    f"{profile_key}/{code} 配置的 SoVITS 权重不可用，已回退文字回复"
+                )
+            weights[code] = resolved_path
+        if not weights:
+            raise RuntimeError("GPT-SoVITS 角色权重配置不能为空，已回退文字回复")
+        profiles[profile_key] = weights
+    return profiles
+
+
+def selected_gpt_sovits_weight(
+    settings: Settings, profile_id: str, target_language: str
+) -> str | None:
+    """Choose a weight without allowing a default profile model to leak.
+
+    The older language map remains an explicit default-profile route. Any
+    non-default profile needs its own entry in the nested profile map.
+    """
+    profile_weights = gpt_sovits_profile_language_weights(settings)
+    default_profile = settings.voice_profile_default
+    if profile_id != default_profile:
+        if profile_weights:
+            selected_weight = profile_weights.get(profile_id, {}).get(target_language)
+            if selected_weight:
+                return selected_weight
+        if gpt_sovits_language_weights(settings) or profile_weights:
+            raise RuntimeError(
+                f"{profile_id}/{target_language} 未配置专属 SoVITS 权重，已回退文字回复"
+            )
+        return None
+
+    # A profile-specific default entry may override the legacy default map.
+    selected_weight = profile_weights.get(profile_id, {}).get(target_language)
+    if selected_weight:
+        return selected_weight
+    language_weights = gpt_sovits_language_weights(settings)
+    selected_weight = language_weights.get(target_language)
+    if language_weights and not selected_weight:
+        raise RuntimeError(
+            f"{target_language} 语言未配置 SoVITS 权重，已回退文字回复"
+        )
+    if profile_weights and not language_weights:
+        raise RuntimeError(
+            f"{profile_id}/{target_language} 未配置专属 SoVITS 权重，已回退文字回复"
+        )
+    return selected_weight
+
+
+def _gpt_sovits_control_endpoint(tts_endpoint: str) -> str:
+    """Return api_v2's weight-switch endpoint for a normalized /tts URL."""
+    return tts_endpoint.rsplit("/tts", 1)[0] + "/set_sovits_weights"
+
+
+def _gpt_sovits_lock(endpoint: str) -> asyncio.Lock:
+    # pytest creates a fresh event loop per test. Locks are loop-local while
+    # the active-weight cache deliberately belongs to the process/sidecar.
+    key = (id(asyncio.get_running_loop()), endpoint)
+    lock = _GPT_SOVITS_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _GPT_SOVITS_LOCKS[key] = lock
+    return lock
+
+
 def _reject_near_silent_wav(raw: bytes) -> None:
     """Reject a broken TTS result before it becomes a group voice message.
 
@@ -264,6 +477,34 @@ def _reject_near_silent_wav(raw: bytes) -> None:
     duration = frame_count / sample_rate
     if duration >= 0.35 and rms < 300 and peak < 3000:
         raise RuntimeError("TTS 返回接近静音，已拒绝发送并回退文字回复")
+
+
+def _gpt_sovits_tts_failure_message(response: httpx.Response) -> str:
+    """Make a sidecar 4xx actionable without exposing a raw traceback to chat."""
+    try:
+        payload = response.json()
+    except (json.JSONDecodeError, ValueError):
+        payload = response.text
+    if isinstance(payload, dict):
+        detail = str(payload.get("Exception") or payload.get("message") or "")
+    else:
+        detail = str(payload or "")
+    if "averaged_perceptron_tagger_eng" in detail:
+        return (
+            "GPT-SoVITS 英语前端缺少 NLTK 资源 averaged_perceptron_tagger_eng；"
+            "请使用 GPT-SoVITS 的 Python 执行："
+            "python -m nltk.downloader averaged_perceptron_tagger_eng"
+        )
+    compact_detail = " ".join(detail.split())[:500]
+    suffix = f"：{compact_detail}" if compact_detail else ""
+    return f"GPT-SoVITS /tts 返回 HTTP {response.status_code}{suffix}"
+
+
+def _raise_for_gpt_sovits_tts_response(response: httpx.Response) -> None:
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise RuntimeError(_gpt_sovits_tts_failure_message(response)) from exc
 
 
 async def synthesize_voice(
@@ -297,28 +538,49 @@ async def synthesize_voice(
     if settings.voice_api_key:
         headers["Authorization"] = f"Bearer {settings.voice_api_key}"
     profiles = voice_profiles(settings)
-    profile = profiles.get(profile_name or settings.voice_profile_default) or profiles.get(
-        settings.voice_profile_default
-    ) or profiles["default"]
+    selected_profile_id = profile_name or settings.voice_profile_default
+    if selected_profile_id not in profiles:
+        selected_profile_id = (
+            settings.voice_profile_default
+            if settings.voice_profile_default in profiles
+            else next(iter(profiles))
+        )
+    profile = profiles[selected_profile_id]
     if provider in {"gpt_sovits", "gpt-sovits"}:
         if not endpoint.endswith("/tts"):
             endpoint += "/tts"
-        reference = _project_relative_path(profile.get("ref_audio_path", ""))
-        if not Path(reference).is_file():
-            raise RuntimeError("所选角色的语音暂不可用，请稍后再试。")
-        prompt_text = profile.get("prompt_text", "")
-        prompt_lang = detect_speech_language(
-            prompt_text,
-            profile.get("prompt_lang") or profile.get("language") or "zh",
-        )
         target_language = detect_speech_language(
             clean,
             target_language
-            or profile.get("target_language")
-            or profile.get("language")
+            or str(profile.get("target_language") or "")
+            or str(profile.get("language") or "")
+            or "zh",
+        )
+        supported_languages = profile_supported_languages(profile)
+        if supported_languages is not None and target_language not in supported_languages:
+            language_label = _PROFILE_LANGUAGE_LABELS.get(target_language, target_language)
+            raise RuntimeError(
+                f"所选角色尚未验收 {language_label} 语音，已回退文字回复"
+            )
+        reference = _project_relative_path(
+            _profile_value_for_language(profile, "ref_audio_path", target_language)
+        )
+        if not Path(reference).is_file():
+            raise RuntimeError("所选角色的语音暂不可用，请稍后再试。")
+        prompt_text = _profile_value_for_language(
+            profile, "prompt_text", target_language, allow_empty=True
+        )
+        prompt_lang = detect_speech_language(
+            prompt_text,
+            _profile_value_for_language(profile, "prompt_lang", target_language)
+            or str(profile.get("language") or "")
             or "zh",
         )
         validate_voice_text_language(clean, target_language)
+        selected_weight = selected_gpt_sovits_weight(
+            settings, selected_profile_id, target_language
+        )
+        text_split_method = profile_text_split_method(profile)
         payload = {
             "text": clean,
             "text_lang": target_language,
@@ -332,6 +594,8 @@ async def synthesize_voice(
             "media_type": "wav",
             "streaming_mode": False,
         }
+        if text_split_method is not None:
+            payload["text_split_method"] = text_split_method
     else:
         if not endpoint.endswith("/audio/speech"):
             endpoint += "/audio/speech"
@@ -352,8 +616,27 @@ async def synthesize_voice(
         follow_redirects=True,
         trust_env=False,
     ) as client:
-        response = await client.post(endpoint, headers=headers, json=payload)
-        response.raise_for_status()
+        if provider in {"gpt_sovits", "gpt-sovits"}:
+            # Keep model switching and its synthesis request indivisible.
+            async with _gpt_sovits_lock(endpoint):
+                # api_v2 exposes no stable process identity or active-weight
+                # read endpoint. Reassert a configured route for every
+                # synthesis: a restarted sidecar or external weight change
+                # otherwise makes an in-process cache unsafe.
+                if selected_weight:
+                    switch = await client.get(
+                        _gpt_sovits_control_endpoint(endpoint),
+                        headers=headers,
+                        params={"weights_path": selected_weight},
+                    )
+                    switch.raise_for_status()
+                response = await client.post(endpoint, headers=headers, json=payload)
+        else:
+            response = await client.post(endpoint, headers=headers, json=payload)
+        if provider in {"gpt_sovits", "gpt-sovits"}:
+            _raise_for_gpt_sovits_tts_response(response)
+        else:
+            response.raise_for_status()
         content_type = response.headers.get("content-type", "").lower()
         if content_type and not content_type.startswith(("audio/", "application/octet-stream")):
             raise RuntimeError("TTS 接口返回的内容不是音频")

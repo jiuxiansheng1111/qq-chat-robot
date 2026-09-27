@@ -1,15 +1,22 @@
+import asyncio
 import io
+import json
 import struct
 import wave
+from typing import ClassVar
 
+import httpx
 import pytest
 
 from app.config import Settings
 from app.services.voice import (
+    _raise_for_gpt_sovits_tts_response,
     _reject_near_silent_wav,
     detect_speech_language,
+    gpt_sovits_language_weights,
     requested_speech_language,
     resolve_character_profile,
+    selected_gpt_sovits_weight,
     synthesize_voice,
     validate_voice_text_language,
     voice_profile_menu,
@@ -28,6 +35,8 @@ def test_voice_profile_is_one_multilingual_murasame_character():
     assert profile["prompt_lang"] == "ja"
     assert profile["prompt_text"] == ""
     assert profile["ref_audio_path"].endswith("murasame_0001.mp3")
+    assert settings.voice_sovits_weights_by_language_json == ""
+    assert settings.voice_sovits_weights_by_profile_json == ""
 
 
 def test_character_menu_hides_internal_profile_ids_and_supports_character_name():
@@ -133,3 +142,386 @@ def test_near_silent_wav_is_rejected_before_sending():
     with pytest.raises(RuntimeError, match="接近静音"):
         _reject_near_silent_wav(_pcm_wav(80))
     _reject_near_silent_wav(_pcm_wav(1200))
+
+
+def test_gpt_sovits_english_nltk_failure_has_actionable_diagnostic():
+    response = httpx.Response(
+        400,
+        json={
+            "message": "tts failed",
+            "Exception": "Resource 'averaged_perceptron_tagger_eng' not found.",
+        },
+        request=httpx.Request("POST", "http://voice.test/tts"),
+    )
+
+    with pytest.raises(RuntimeError, match="averaged_perceptron_tagger_eng") as exc_info:
+        _raise_for_gpt_sovits_tts_response(response)
+
+    assert "nltk.downloader" in str(exc_info.value)
+
+
+class _FakeTtsResponse:
+    headers: ClassVar[dict[str, str]] = {"content-type": "audio/wav"}
+    content: ClassVar[bytes] = b"audio"
+
+    def raise_for_status(self):
+        return None
+
+
+class _RecordingGptSovitsClient:
+    events: ClassVar[list[tuple[str, str]]] = []
+    payloads: ClassVar[list[dict]] = []
+    active_weight: ClassVar[str] = ""
+
+    def __init__(self, **_kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+    async def get(self, _url, **kwargs):
+        self.__class__.active_weight = kwargs["params"]["weights_path"]
+        self.__class__.events.append(("switch", self.__class__.active_weight))
+        return _FakeTtsResponse()
+
+    async def post(self, _url, **_kwargs):
+        # Give a competing task a chance to run. Without the sidecar lock, a
+        # second switch can occur before this request records its active model.
+        await asyncio.sleep(0)
+        self.__class__.events.append(("tts", self.__class__.active_weight))
+        self.__class__.payloads.append(_kwargs["json"])
+        return _FakeTtsResponse()
+
+
+def _mapped_gpt_sovits_settings(tmp_path, endpoint="http://voice.test:19880"):
+    reference = tmp_path / "reference.wav"
+    e12 = tmp_path / "e12.pth"
+    e13 = tmp_path / "e13.pth"
+    for path in (reference, e12, e13):
+        path.write_bytes(b"test")
+    return Settings(
+        _env_file=None,
+        voice_enabled=True,
+        voice_provider="gpt_sovits",
+        voice_api_url=endpoint,
+        voice_profiles_json=json.dumps(
+            {
+                "murasame": {
+                    "label": "小丛雨",
+                    "ref_audio_path": str(reference),
+                    "language": "zh",
+                    "target_language": "zh",
+                    "prompt_lang": "ja",
+                    "languages": "中 / 日 / 英",
+                }
+            }
+        ),
+        voice_sovits_weights_by_language_json=json.dumps(
+            {"zh": str(e13), "ja": str(e12), "en": str(e12)}
+        ),
+    )
+
+
+def test_gpt_sovits_language_weight_map_uses_e13_for_chinese_and_e12_for_ja_en(tmp_path):
+    settings = _mapped_gpt_sovits_settings(tmp_path)
+    weights = gpt_sovits_language_weights(settings)
+    assert weights["zh"].endswith("e13.pth")
+    assert weights["ja"].endswith("e12.pth")
+    assert weights["en"] == weights["ja"]
+
+
+def test_profile_specific_weights_keep_default_and_other_roles_separate(tmp_path):
+    settings = _mapped_gpt_sovits_settings(tmp_path)
+    yoshino = tmp_path / "yoshino.pth"
+    yoshino.write_bytes(b"test")
+    settings.voice_sovits_weights_by_profile_json = json.dumps(
+        {"yoshino": {"zh": str(yoshino)}}
+    )
+
+    assert selected_gpt_sovits_weight(settings, "murasame", "zh").endswith("e13.pth")
+    assert selected_gpt_sovits_weight(settings, "yoshino", "zh") == str(yoshino.resolve())
+    with pytest.raises(RuntimeError, match="mako/zh"):
+        selected_gpt_sovits_weight(settings, "mako", "zh")
+    with pytest.raises(RuntimeError, match="yoshino/ja"):
+        selected_gpt_sovits_weight(settings, "yoshino", "ja")
+
+
+@pytest.mark.asyncio
+async def test_language_specific_reference_and_prompt_values_override_legacy_fields(monkeypatch, tmp_path):
+    from app.services import voice
+
+    voice._GPT_SOVITS_LOCKS.clear()
+    _RecordingGptSovitsClient.events = []
+    _RecordingGptSovitsClient.payloads = []
+    _RecordingGptSovitsClient.active_weight = ""
+    monkeypatch.setattr(voice.httpx, "AsyncClient", _RecordingGptSovitsClient)
+    settings = _mapped_gpt_sovits_settings(tmp_path, "http://voice.test:19883")
+    japanese_reference = tmp_path / "japanese-reference.wav"
+    japanese_reference.write_bytes(b"test")
+    legacy_reference = tmp_path / "reference.wav"
+    settings.voice_profiles_json = json.dumps(
+        {
+            "murasame": {
+                "label": "小丛雨",
+                "ref_audio_path": str(legacy_reference),
+                "ref_audio_path_by_language": {"ja": str(japanese_reference)},
+                "prompt_text": "legacy prompt",
+                "prompt_text_by_language": {"ja": "これは日本語の参照文です。"},
+                "prompt_lang": "zh",
+                "prompt_lang_by_language": {"ja": "ja"},
+            }
+        }
+    )
+
+    await synthesize_voice("こんにちは", settings, target_language="ja")
+    japanese_payload = _RecordingGptSovitsClient.payloads[-1]
+    assert japanese_payload["ref_audio_path"] == str(japanese_reference.resolve())
+    assert japanese_payload["prompt_text"] == "これは日本語の参照文です。"
+    assert japanese_payload["prompt_lang"] == "ja"
+
+    await synthesize_voice("Hello there", settings, target_language="en")
+    fallback_payload = _RecordingGptSovitsClient.payloads[-1]
+    assert fallback_payload["ref_audio_path"] == str(legacy_reference.resolve())
+    assert fallback_payload["prompt_text"] == "legacy prompt"
+    assert fallback_payload["prompt_lang"] == "zh"
+
+
+@pytest.mark.asyncio
+async def test_supported_languages_controls_menu_and_blocks_unaccepted_tts(monkeypatch, tmp_path):
+    from app.services import voice
+
+    voice._GPT_SOVITS_LOCKS.clear()
+    _RecordingGptSovitsClient.payloads = []
+    monkeypatch.setattr(voice.httpx, "AsyncClient", _RecordingGptSovitsClient)
+    settings = _mapped_gpt_sovits_settings(tmp_path, "http://voice.test:19887")
+    settings.voice_profile_default = "yoshino"
+    reference = tmp_path / "reference.wav"
+    settings.voice_profiles_json = json.dumps(
+        {
+            "yoshino": {
+                "label": "芳乃",
+                "ref_audio_path": str(reference),
+                "languages": "中 / 日 / 英",
+                "supported_languages": ["zh", "en"],
+            }
+        }
+    )
+
+    assert voice_profile_menu(settings) == "可用角色\n- 芳乃（中文 / 英语）\n发送“选择角色 角色名”切换"
+    await synthesize_voice("Hello there", settings, target_language="en")
+    request_count = len(_RecordingGptSovitsClient.payloads)
+
+    with pytest.raises(RuntimeError, match="尚未验收 日语"):
+        await synthesize_voice("こんにちは", settings, target_language="ja")
+
+    assert len(_RecordingGptSovitsClient.payloads) == request_count
+
+
+@pytest.mark.asyncio
+async def test_profile_text_split_method_overrides_only_the_configured_role(monkeypatch, tmp_path):
+    from app.services import voice
+
+    _RecordingGptSovitsClient.payloads = []
+    monkeypatch.setattr(voice.httpx, "AsyncClient", _RecordingGptSovitsClient)
+    murasame_reference = tmp_path / "murasame.wav"
+    mako_reference = tmp_path / "mako.wav"
+    murasame_reference.write_bytes(b"test")
+    mako_reference.write_bytes(b"test")
+    settings = Settings(
+        _env_file=None,
+        voice_enabled=True,
+        voice_provider="gpt_sovits",
+        voice_api_url="http://voice.test:19889",
+        voice_profiles_json=json.dumps(
+            {
+                "murasame": {
+                    "label": "小丛雨",
+                    "ref_audio_path": str(murasame_reference),
+                    "text_split_method": "cut3",
+                },
+                "mako": {"label": "茉子", "ref_audio_path": str(mako_reference)},
+            }
+        ),
+    )
+
+    await synthesize_voice("这是小丛雨的长句。", settings, profile_name="murasame")
+    assert _RecordingGptSovitsClient.payloads[-1]["text_split_method"] == "cut3"
+
+    await synthesize_voice("这是茉子的默认长句。", settings, profile_name="mako")
+    assert "text_split_method" not in _RecordingGptSovitsClient.payloads[-1]
+
+
+@pytest.mark.asyncio
+async def test_invalid_profile_text_split_method_fails_closed_before_tts(monkeypatch, tmp_path):
+    from app.services import voice
+
+    _RecordingGptSovitsClient.payloads = []
+    monkeypatch.setattr(voice.httpx, "AsyncClient", _RecordingGptSovitsClient)
+    reference = tmp_path / "reference.wav"
+    reference.write_bytes(b"test")
+    settings = Settings(
+        _env_file=None,
+        voice_enabled=True,
+        voice_provider="gpt_sovits",
+        voice_api_url="http://voice.test:19890",
+        voice_profiles_json=json.dumps(
+            {
+                "murasame": {
+                    "label": "小丛雨",
+                    "ref_audio_path": str(reference),
+                    "text_split_method": "cut9",
+                }
+            }
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="仅可为 cut0 至 cut5"):
+        await synthesize_voice("这条请求不能到达 TTS。", settings)
+
+    assert _RecordingGptSovitsClient.payloads == []
+
+
+@pytest.mark.asyncio
+async def test_invalid_supported_languages_remains_visible_but_fails_closed(monkeypatch, tmp_path):
+    from app.services import voice
+
+    monkeypatch.setattr(voice.httpx, "AsyncClient", _RecordingGptSovitsClient)
+    reference = tmp_path / "reference.wav"
+    reference.write_bytes(b"test")
+    settings = Settings(
+        _env_file=None,
+        voice_enabled=True,
+        voice_provider="gpt_sovits",
+        voice_api_url="http://voice.test:19888",
+        voice_profiles_json=json.dumps(
+            {
+                "yoshino": {
+                    "label": "芳乃",
+                    "ref_audio_path": str(reference),
+                    "supported_languages": ["zh", "ko"],
+                }
+            }
+        ),
+    )
+
+    assert voice_profile_menu(settings) == "可用角色\n- 芳乃（语音暂不可用）\n发送“选择角色 角色名”切换"
+    with pytest.raises(RuntimeError, match="仅可包含不重复的 zh、ja、en"):
+        await synthesize_voice("你好", settings, profile_name="yoshino", target_language="zh")
+
+
+@pytest.mark.asyncio
+async def test_invalid_language_specific_profile_value_falls_back_to_text(monkeypatch, tmp_path):
+    from app.services import voice
+
+    monkeypatch.setattr(voice.httpx, "AsyncClient", _RecordingGptSovitsClient)
+    settings = _mapped_gpt_sovits_settings(tmp_path, "http://voice.test:19884")
+    settings.voice_profiles_json = json.dumps(
+        {
+            "murasame": {
+                "label": "小丛雨",
+                "ref_audio_path": str(tmp_path / "reference.wav"),
+                "ref_audio_path_by_language": {"not-a-language": "bad.wav"},
+            }
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="ref_audio_path_by_language 配置无效"):
+        await synthesize_voice("你好", settings, target_language="zh")
+
+
+@pytest.mark.asyncio
+async def test_unknown_profile_uses_the_only_available_profile_without_key_error(monkeypatch, tmp_path):
+    from app.services import voice
+
+    _RecordingGptSovitsClient.payloads = []
+    monkeypatch.setattr(voice.httpx, "AsyncClient", _RecordingGptSovitsClient)
+    reference = tmp_path / "yoshino-reference.wav"
+    reference.write_bytes(b"test")
+    settings = Settings(
+        _env_file=None,
+        voice_enabled=True,
+        voice_provider="gpt_sovits",
+        voice_api_url="http://voice.test:19885",
+        voice_profile_default="murasame",
+        voice_profiles_json=json.dumps(
+            {"yoshino": {"label": "芳乃", "ref_audio_path": str(reference)}}
+        ),
+    )
+
+    await synthesize_voice("你好", settings, profile_name="removed-profile", target_language="zh")
+
+    assert _RecordingGptSovitsClient.payloads[-1]["ref_audio_path"] == str(reference.resolve())
+
+
+@pytest.mark.asyncio
+async def test_profile_specific_weight_switches_without_using_default_weight(monkeypatch, tmp_path):
+    from app.services import voice
+
+    voice._GPT_SOVITS_LOCKS.clear()
+    _RecordingGptSovitsClient.events = []
+    _RecordingGptSovitsClient.active_weight = ""
+    monkeypatch.setattr(voice.httpx, "AsyncClient", _RecordingGptSovitsClient)
+    settings = _mapped_gpt_sovits_settings(tmp_path, "http://voice.test:19882")
+    yoshino = tmp_path / "yoshino.pth"
+    yoshino.write_bytes(b"test")
+    reference = tmp_path / "reference.wav"
+    settings.voice_profiles_json = json.dumps(
+        {
+            "murasame": {"label": "小丛雨", "ref_audio_path": str(reference)},
+            "yoshino": {"label": "芳乃", "ref_audio_path": str(reference)},
+        }
+    )
+    settings.voice_sovits_weights_by_profile_json = json.dumps(
+        {"yoshino": {"zh": str(yoshino)}}
+    )
+
+    await synthesize_voice("你好", settings, profile_name="yoshino", target_language="zh")
+
+    assert _RecordingGptSovitsClient.events[0] == ("switch", str(yoshino.resolve()))
+    assert _RecordingGptSovitsClient.events[1] == ("tts", str(yoshino.resolve()))
+
+
+@pytest.mark.asyncio
+async def test_gpt_sovits_weight_is_reasserted_after_possible_sidecar_restart(monkeypatch, tmp_path):
+    from app.services import voice
+
+    voice._GPT_SOVITS_LOCKS.clear()
+    _RecordingGptSovitsClient.events = []
+    _RecordingGptSovitsClient.active_weight = ""
+    monkeypatch.setattr(voice.httpx, "AsyncClient", _RecordingGptSovitsClient)
+    settings = _mapped_gpt_sovits_settings(tmp_path)
+
+    await synthesize_voice("你好", settings, target_language="zh")
+    await synthesize_voice("再见", settings, target_language="zh")
+
+    assert [event[0] for event in _RecordingGptSovitsClient.events] == [
+        "switch",
+        "tts",
+        "switch",
+        "tts",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_gpt_sovits_switch_and_synthesis_are_serialized(monkeypatch, tmp_path):
+    from app.services import voice
+
+    voice._GPT_SOVITS_LOCKS.clear()
+    _RecordingGptSovitsClient.events = []
+    _RecordingGptSovitsClient.active_weight = ""
+    monkeypatch.setattr(voice.httpx, "AsyncClient", _RecordingGptSovitsClient)
+    settings = _mapped_gpt_sovits_settings(tmp_path, "http://voice.test:19881")
+
+    await asyncio.gather(
+        synthesize_voice("你好", settings, target_language="zh"),
+        synthesize_voice("こんにちは", settings, target_language="ja"),
+    )
+
+    events = _RecordingGptSovitsClient.events
+    assert [kind for kind, _weight in events] == ["switch", "tts", "switch", "tts"]
+    assert events[0][1] == events[1][1]
+    assert events[2][1] == events[3][1]
+    assert events[0][1] != events[2][1]

@@ -29,3 +29,13 @@ def test_each_training_run_gets_its_own_log_directory():
     assert '[guid]::NewGuid().ToString("N").Substring(0, 6)' in script
     assert '"logs\\murasame-training\\" + $DatasetName + "\\" + $runStamp' in script
     assert '[TRAIN] Per-run logs:' in script
+
+
+def test_sovits_wrapper_logs_native_stderr_without_treating_warnings_as_failure():
+    script = Path("scripts/train_murasame_voice.ps1").read_text(encoding="utf-8")
+
+    assert '$ErrorActionPreference = "Continue"' in script
+    assert '& $python -s "GPT_SoVITS\\s2_train.py" --config $configPath 2>&1' in script
+    assert "$ErrorActionPreference = $originalErrorActionPreference" in script
+    assert "$trainerExitCode = $LASTEXITCODE" in script
+    assert "if ($trainerExitCode -ne 0)" in script

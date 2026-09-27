@@ -21,11 +21,20 @@ gate 都已通过。更新后的验收清单可以仅为人工复核过的同一
 消除、推断或放宽其他发音差异。这只验收了基础配置和发送链路；`GPT_SOVITS_SOVITS_WEIGHTS` 仍须保持为空，新的微调权重仅可在
 下方完整验收通过后配置。
 
-后续新增角色时，每个角色都使用一个统一档案；中 / 日 / 英支持通过 `languages` 标注，例如：
+后续新增角色时，每个角色都使用一个统一档案；中 / 日 / 英支持可通过旧的展示字段 `languages` 标注，
+也可用机器可读的 `supported_languages` 限制为已验收语言。后者存在时菜单以它为准，且未列出的语言
+不会送往 TTS，而是回退文字；省略它则保持旧档案行为。例如芳乃日语未验收时：
 
 ```json
-{"murasame":{"label":"小丛雨","voice":"murasame","language":"zh","languages":"中 / 日 / 英","target_language":"zh","prompt_lang":"ja","prompt_text":"","ref_audio_path":"data/murasame_voice_dataset_ja/audio/murasame_0001.mp3"}}
+{"yoshino":{"label":"芳乃","voice":"yoshino","languages":"中 / 日 / 英","supported_languages":["zh","en"],"target_language":"zh","prompt_lang":"ja","prompt_text":"","ref_audio_path":"data/voice/yoshino-reference.wav"}}
 ```
+
+`supported_languages` 只能是非空、无重复的 `zh`、`ja`、`en` 列表；错误配置会 fail-closed，菜单仍显示
+角色但标为“语音暂不可用”。
+
+每个角色还可选填 `text_split_method` 来覆盖 GPT-SoVITS 的文本切分方式，只接受 API 已知的 `cut0` 至
+`cut5`。例如已通过长句试听的小丛雨可单独填 `"text_split_method":"cut3"`；未填的茉子不会携带
+该字段，继续让 sidecar 使用当前默认 `cut5`。非法值会在请求 TTS 前回退文字。
 
 `prompt_lang` 和 `prompt_text` 必须与 `ref_audio_path` 指向的**同一条参考音频**一致；不能把
 中文录音标为日语，也不能凭文件名猜台词。当前稳定的本机 GPT-SoVITS v2 配置刻意使用空
@@ -70,11 +79,68 @@ GPT_SOVITS_PYTHON=../qq-chatrobot-voice/GPT-SoVITS/.venv/Scripts/python.exe
 GPT_SOVITS_TTS_CONFIG=GPT_SoVITS/configs/tts_infer.yaml
 # 在下方验收通过前必须留空；通过后再填入已验收数据集生成的实际权重路径。
 GPT_SOVITS_SOVITS_WEIGHTS=
+# 权重路由在部署并验收每个本地路径前必须留空；e13 目前尚未部署。
+VOICE_SOVITS_WEIGHTS_BY_LANGUAGE_JSON=
+VOICE_SOVITS_WEIGHTS_BY_PROFILE_JSON=
 ```
 
 执行 `scripts\\start_all.ps1` 时，如果本地目录、独立 Python 环境和模型配置都存在，
 脚本会自动启动 `api_v2.py` 并等待 `9880/tts` 就绪；缺少依赖时只记录警告，不会阻止
 QQ 机器人启动。参考音频和训练模型均只保存在本机。
+
+验收用的独立 sidecar 必须先复制配置，随后将复制出的路径传给 `api_v2.py -c`，并使用非生产端口。
+不要让验收进程直接使用生产 `tts_infer.yaml`：验收与生产应各有启动配置，避免候选权重或人工改动混入生产对照。换权接口改变当前进程中的模型状态，不能据此断言它会写回 YAML。
+
+```powershell
+..\qq-chatrobot-voice\GPT-SoVITS\.venv_cpu\Scripts\python.exe .\scripts\prepare_voice_acceptance_config.py `
+  --source ..\qq-chatrobot-voice\GPT-SoVITS\GPT_SoVITS\configs\tts_infer.yaml `
+  --output .\logs\voice-acceptance\tts_infer.acceptance.yaml `
+  --sovits-weights "C:\accepted-weights\murasame_voice_candidate.pth"
+# 将上一步打印出的路径传给验收 sidecar：api_v2.py -a 127.0.0.1 -p 9881 -c <output>
+```
+
+`--sovits-weights` 必须是已存在的候选 `.pth`，它只会写进新建的验收副本的
+`custom.vits_weights_path`，不会改动 source/live YAML。若省略该参数，工具会明确警告验收副本
+继承 source 当前的 `custom.vits_weights_path`；它不保证是基础模型，也不应被当作基础模型对照。
+
+GPT-SoVITS 的英语前端还需要 NLTK 的 `averaged_perceptron_tagger_eng` 数据。若英语请求返回该资源
+缺失错误，使用**实际启动 sidecar 的 GPT-SoVITS Python**一次性安装它（不切换权重、不改 YAML）：
+
+```powershell
+..\qq-chatrobot-voice\GPT-SoVITS\.venv_cpu\Scripts\python.exe -m nltk.downloader averaged_perceptron_tagger_eng
+```
+
+安装后先重试英语请求；若进程仍报资源缺失，再按正常流程重启 sidecar。在资源缺失期间，机器人会保留 LLM 的文字回退，而不会静默丢弃回复。
+
+`accept_voice_audio.py` 只分析生成好的 WAV，不能修复已用生产配置生成样本的 sidecar。生产启动若明确
+设置 `GPT_SOVITS_SOVITS_WEIGHTS`，则必须成功同步该权重；同步失败会明确停止启动流程，避免以错误模型提供语音。
+
+映射为空时仍使用原来的单一模型。映射中的权重文件在每次合成前检查；缺失、JSON 格式错误或
+切换接口失败时，该消息会回退成普通文字。切换和合成会在机器人内串行执行。由于当前 api_v2
+没有可读取的进程身份或活动权重接口，已配置路由的每次合成都会在锁内重申对应权重，确保 sidecar
+重启或外部换权后首条请求不会串音色。启动脚本在路由模式下无论 sidecar 已存在或刚启动，都不会再用
+`GPT_SOVITS_SOVITS_WEIGHTS` 覆盖它；映射为空时才保留该单一初始权重行为。
+
+`VOICE_SOVITS_WEIGHTS_BY_LANGUAGE_JSON` 只适用于默认角色。配置
+`VOICE_SOVITS_WEIGHTS_BY_PROFILE_JSON` 后，非默认角色必须在其中有对应的角色和语言权重；
+缺失时不会借用默认角色权重，而是回退文字。这避免不同角色在单一 sidecar 切换时串用音色。
+
+角色档案也可以按合成语言选择参考音频和提示文本，同时保留旧字段作为缺项回退：
+
+```json
+{
+  "label": "角色显示名",
+  "ref_audio_path": "data/voice/default-reference.wav",
+  "ref_audio_path_by_language": {"zh": "data/voice/zh-reference.wav", "ja": "data/voice/ja-reference.wav"},
+  "prompt_text": "默认提示文本",
+  "prompt_text_by_language": {"zh": "中文提示文本", "ja": "日本語の提示文"},
+  "prompt_lang": "zh",
+  "prompt_lang_by_language": {"zh": "zh", "ja": "ja"}
+}
+```
+
+映射只接受 `zh`、`ja`、`en`、`ko`、`yue` 键。某语言没有映射时使用原字段；映射类型、语言键或非空
+参考音频／提示语言的值不正确时，该条语音会回退文字。菜单始终只展示角色显示名和支持语言。
 
 ## 启用微调权重前的验收
 
