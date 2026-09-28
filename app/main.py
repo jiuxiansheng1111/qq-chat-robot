@@ -1320,7 +1320,7 @@ def ensure_default_murasame_voice(
         return answer
     if answer.startswith(("```", "<WEB_SEARCH>")):
         return answer
-    if response_language in {"en", "ja"}:
+    if response_language in {"en", "ja", "yue"}:
         # Persona markers and the comfort-length suffix are Chinese.  Keep
         # foreign-language replies in the language the user requested so the
         # TTS frontend receives a coherent single-language sentence.
@@ -2561,7 +2561,12 @@ async def _send_anime_character_lookup(
         source_note = (
             "萌娘百科图片暂时无法获取（可能是条目无图或图片服务器不可达）。"
             if settings.anime_moegirl_only
-            else "图片暂时没有找到可靠来源。"
+            and not settings.anime_moegirl_preferred_with_fallback
+            else (
+                "萌娘百科及 Bangumi、VNDB 等备用来源均未找到可靠图片。"
+                if settings.anime_moegirl_preferred_with_fallback
+                else "图片暂时没有找到可靠来源。"
+            )
         )
         await send_group_message(group_id, caption + "\n" + source_note)
 
@@ -3728,7 +3733,12 @@ async def onebot_webhook(
                     source_note = (
                         "萌娘百科图片暂时无法获取（可能是条目无图或图片服务器不可达）。"
                         if settings.anime_moegirl_only
-                        else "图片暂时没有找到可靠来源。"
+                        and not settings.anime_moegirl_preferred_with_fallback
+                        else (
+                            "萌娘百科及 Bangumi、VNDB 等备用来源均未找到可靠图片。"
+                            if settings.anime_moegirl_preferred_with_fallback
+                            else "图片暂时没有找到可靠来源。"
+                        )
                     )
                     await send_group_message(group_id, caption + "\n" + source_note)
     elif text in DAILY_ANIME_CHARACTER_COMMANDS or mentioned_image_command(
@@ -3767,7 +3777,12 @@ async def onebot_webhook(
                 + (
                     "\n萌娘百科图片暂时无法获取（可能是条目无图或图片服务器不可达）。"
                     if settings.anime_moegirl_only
-                    else "\n图片暂时没找到可靠来源，已尝试 Wikipedia/Bing 和 LLM 辅助搜索词。"
+                    and not settings.anime_moegirl_preferred_with_fallback
+                    else (
+                        "\n萌娘百科及 Bangumi、VNDB 等备用来源均未找到可靠图片。"
+                        if settings.anime_moegirl_preferred_with_fallback
+                        else "\n图片暂时没找到可靠来源，已尝试 Wikipedia/Bing 和 LLM 辅助搜索词。"
+                    )
                 ),
             )
     elif text in MY_ANIME_CHARACTER_COMMANDS or (
@@ -4431,6 +4446,7 @@ async def onebot_webhook(
             "zh": "本轮请用自然中文回答。英文名称可以保留原文。",
             "ja": "本轮用户明确要求日语，请用自然日语回答，不要夹入中文称呼或中文口头禅。",
             "en": "The user explicitly requested English. Reply in natural English without Chinese catchphrases.",
+            "yue": "本轮用户明确要求粤语，请用自然口语粤语回答，使用粤语词汇和语序，不要把普通话逐字转成粤语读音。",
         }[response_language]
         messages[0]["content"] += "\n\n【本轮回答语言】" + language_instruction
         group_cache = request.app.state.recent_group_messages.setdefault(

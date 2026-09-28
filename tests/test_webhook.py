@@ -994,6 +994,11 @@ def test_romance_voice_avoids_legacy_prefix_and_fixed_tsundere_tail():
     assert len(reply.replace(" ", "").replace("\n", "")) >= 50
 
 
+def test_requested_cantonese_answer_keeps_cantonese_wording():
+    answer = "我哋今日一齐去行下，好唔好？"
+    assert ensure_default_murasame_voice(answer, response_language="yue") == answer
+
+
 def test_romance_chat_starts_natural_then_advances_after_delivered_replies(tmp_path):
     previous_database_path = settings.database_path
     previous_api_base = settings.onebot_api_base

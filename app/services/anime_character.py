@@ -5,6 +5,7 @@ import html
 import json
 import math
 import re
+import time
 import unicodedata
 from dataclasses import dataclass
 from difflib import SequenceMatcher
@@ -140,7 +141,7 @@ def _load_extra_anime_characters() -> tuple[AnimeCharacter, ...]:
 
 ANIME_CHARACTER_ROSTER += _load_extra_anime_characters()
 ANIME_CHARACTER_BY_NAME = {item.name: item for item in ANIME_CHARACTER_ROSTER}
-ANIME_IMAGE_CACHE_VERSION = "v4-staged-quality-20260924"
+ANIME_IMAGE_CACHE_VERSION = "v5-moegirl-preferred-fallback-20260928"
 
 ANIME_SERIES_ALIASES: dict[str, tuple[str, ...]] = {
     # A slash is not preserved by ``_normalize``.  Keep the independently
@@ -292,6 +293,20 @@ def _verified_moegirl_image(result: ImageResolution) -> bool:
         and image.scheme == "https"
         and image.hostname is not None
         and image.hostname.endswith(".moegirl.org.cn")
+    )
+
+
+def _anime_moegirl_image_strict(settings: Settings) -> bool:
+    """Whether the image resolver must fail closed outside Moegirl.
+
+    ``ANIME_MOEGIRL_ONLY`` remains backwards-compatible for deployments that
+    need a strict source boundary.  The explicit preferred-with-fallback mode
+    only relaxes image retrieval after a verified Moegirl image cannot be
+    downloaded; profile source handling remains strict elsewhere.
+    """
+    return bool(
+        settings.anime_moegirl_only
+        and not settings.anime_moegirl_preferred_with_fallback
     )
 
 
@@ -2340,6 +2355,8 @@ def _anime_image_cache_path(
     digest = hashlib.sha256(
         (
             f"{ANIME_IMAGE_CACHE_VERSION}|moegirl_only={settings.anime_moegirl_only}"
+            "|moegirl_preferred_with_fallback="
+            f"{settings.anime_moegirl_preferred_with_fallback}"
             f"|{character.name}|{character.series}"
         ).encode()
     ).hexdigest()[:24]
@@ -2348,6 +2365,21 @@ def _anime_image_cache_path(
 
 def _anime_image_cache_metadata_path(path: Path) -> Path:
     return path.with_suffix(path.suffix + ".json")
+
+
+def _preferred_image_cache_is_fresh(
+    character: AnimeCharacter, settings: Settings, cached: ImageResolution
+) -> bool:
+    """Retry Moegirl periodically after a temporary failure led to fallback art."""
+    if not (settings.anime_moegirl_only and settings.anime_moegirl_preferred_with_fallback):
+        return True
+    if _verified_moegirl_image(cached):
+        return True
+    try:
+        age_seconds = time.time() - _anime_image_cache_path(character, settings).stat().st_mtime
+    except OSError:
+        return False
+    return age_seconds < 6 * 60 * 60
 
 
 def _load_anime_image_cache(
@@ -2442,7 +2474,20 @@ def _with_anime_source_attribution(
                 width, height = decoded.size
         except (ValueError, OSError):
             width, height = 0, 0
-    if result.source_page_url and width == result.width and height == result.height:
+    # A fallback resolver must never retain a stale/incorrect Moegirl label.
+    # This can happen with legacy adapters returning ImageResolution rather
+    # than their usual base64 payload.  Preserve the actual URL/evidence, but
+    # identify it as the resolver that supplied the image.
+    source_is_moegirl = source_name == "萌娘百科角色/作品页"
+    provider = result.provider
+    if not source_is_moegirl and provider == "萌娘百科":
+        provider = source_name
+    if (
+        result.source_page_url
+        and width == result.width
+        and height == result.height
+        and provider == result.provider
+    ):
         return result
     # A number of legacy providers intentionally return only the normalized
     # image payload (their public helpers are also used by older callers). Do
@@ -2463,7 +2508,7 @@ def _with_anime_source_attribution(
     }
     return ImageResolution(
         data=result.data,
-        provider=result.provider or source_name,
+        provider=provider or source_name,
         source_page_url=result.source_page_url or source_pages.get(source_name, ""),
         image_url=result.image_url,
         label=result.label or character.name,
@@ -2628,13 +2673,15 @@ async def resolve_anime_character_image(
     write cache, and unfinished contenders are cancelled before returning.
     """
 
+    strict_moegirl = _anime_moegirl_image_strict(settings)
     cached = _load_anime_image_cache(character, settings)
     if cached is not None and (
-        not settings.anime_moegirl_only or _verified_moegirl_image(cached)
+        (not strict_moegirl or _verified_moegirl_image(cached))
+        and _preferred_image_cache_is_fresh(character, settings, cached)
     ):
         return cached
 
-    if settings.anime_moegirl_only:
+    if strict_moegirl:
         if not settings.moegirl_image_provider_enabled:
             raise RuntimeError("二次元图鉴限定萌娘百科来源，但萌娘百科图片提供方尚未启用")
         timeout = max(0.2, min(float(settings.anime_image_resolve_timeout_seconds), 30.0))
@@ -2668,8 +2715,8 @@ async def resolve_anime_character_image(
         ),
         (
             (
-                ("VNDB", _vndb_image),
                 ("Bangumi", _bangumi_image),
+                ("VNDB", _vndb_image),
                 ("AniList", _anilist_image),
             ),
             10.0,

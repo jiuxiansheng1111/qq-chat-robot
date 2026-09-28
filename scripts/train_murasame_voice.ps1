@@ -323,12 +323,22 @@ function Invoke-Stage {
     $log = Join-Path $logDir "$Name.log"
     foreach ($item in $Environment.GetEnumerator()) { Set-Item "Env:$($item.Key)" $item.Value }
     Push-Location $voiceRoot
+    $previousErrorActionPreference = $ErrorActionPreference
+    $stageExitCode = 0
     try {
+        # Some upstream Python dependencies print harmless deprecation notices
+        # to stderr. With Stop at script scope, PowerShell promotes those
+        # native stderr lines into terminating errors before the child process
+        # can finish. Keep this stage running and judge success by Python's
+        # actual exit code below.
+        $ErrorActionPreference = "Continue"
         & $python $Script *>&1 | Tee-Object -FilePath $log
+        $stageExitCode = $LASTEXITCODE
     } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
         Pop-Location
     }
-    if ($LASTEXITCODE -ne 0) { throw "$Name failed; see $log" }
+    if ($stageExitCode -ne 0) { throw "$Name failed with exit code $stageExitCode; see $log" }
 }
 
 if (-not (Test-Path (Join-Path $dataset "2-name2text.txt"))) {

@@ -85,9 +85,14 @@ class Settings(BaseSettings):
     # Moegirl restricts automated/off-site image use. Keep disabled until the
     # deployer has obtained the permissions required for their bot/use case.
     moegirl_image_provider_enabled: bool = False
-    # When enabled, anime character profiles/images never borrow another
-    # website's content or label a non-Moegirl cache entry as Moegirl.
+    # When enabled, character profiles and (unless the explicit image fallback
+    # option below is set) images never borrow another website's content.
     anime_moegirl_only: bool = False
+    # Keep Moegirl as the first image source but, when its image CDN or a
+    # verified page image is unavailable, allow the bounded catalog fallback
+    # chain.  This intentionally affects images only: profile attribution
+    # remains governed by ``anime_moegirl_only``.
+    anime_moegirl_preferred_with_fallback: bool = False
     # Optional image-generation provider. The endpoint follows the OpenAI
     # /v1/images/generations response shape (data[].b64_json or data[].url).
     image_generation_enabled: bool = False

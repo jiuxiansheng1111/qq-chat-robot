@@ -45,6 +45,27 @@ def test_overall_gate_fails_for_missing_or_failed_language():
     assert result["failed_languages"] == ["en", "ja"]
 
 
+def test_overall_gate_can_require_cantonese_for_four_language_acceptance():
+    result = overall_gate(
+        {"zh_asr_gate": True, "en_asr_gate": True, "ja_asr_gate": True},
+        require_yue=True,
+    )
+
+    assert result["required_languages"] == ["zh", "en", "ja", "yue"]
+    assert result["missing_languages"] == ["yue"]
+    assert result["failed_languages"] == ["yue"]
+    assert result["overall_asr_gate"] is False
+
+
+def test_overall_gate_keeps_existing_three_language_default():
+    result = overall_gate(
+        {"zh_asr_gate": True, "en_asr_gate": True, "ja_asr_gate": True}
+    )
+
+    assert result["required_languages"] == ["zh", "en", "ja"]
+    assert result["overall_asr_gate"] is True
+
+
 def test_japanese_explicit_orthographic_candidate_preserves_raw_cer_and_passes_gate(
     tmp_path: Path,
 ):
@@ -107,3 +128,21 @@ def test_english_gate_rejects_bad_single_sample_despite_passing_aggregate_wer():
 
     assert summary["en_aggregate_wer"] == 0.10
     assert summary["en_asr_gate"] is False
+
+
+def test_cantonese_case_scores_characters_and_requires_yue_asr_tag(tmp_path: Path):
+    row = run_case(
+        _FixedAsr("<|yue|>今日天气真好，我哋一齐出去行下啦。"),
+        _wav(tmp_path / "yue.wav"),
+        {
+            "file": "yue.wav",
+            "language": "yue",
+            "text": "今日天气真好，我哋一齐出去行下啦。",
+        },
+    )
+    summary: dict[str, object] = {}
+    apply_language_gates(summary, [row], {"yue_cer_max": 0.1})
+
+    assert row["language_match"] is True
+    assert row["cer"] == 0
+    assert summary["yue_asr_gate"] is True

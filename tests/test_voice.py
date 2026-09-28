@@ -111,6 +111,9 @@ def test_detect_speech_language_for_chinese_and_english():
         ("能否用英文回复", "en"),
         ("你可以用英语回答吗？", "en"),
         ("能不能用日语说一遍？", "ja"),
+        ("请用粤语回答", "yue"),
+        ("用广东话说一遍", "yue"),
+        ("不要用粤语", "zh"),
         ("in English, please", "en"),
         ("用日语说一遍", "ja"),
         ("日本語で答えて", "ja"),
@@ -333,13 +336,16 @@ async def test_supported_languages_controls_menu_and_blocks_unaccepted_tts(monke
             "yoshino": {
                 "label": "芳乃",
                 "ref_audio_path": str(reference),
-                "languages": "中 / 日 / 英",
-                "supported_languages": ["zh", "en"],
+                "languages": "中 / 日 / 英 / 粤",
+                "supported_languages": ["zh", "en", "yue"],
             }
         }
     )
 
-    assert voice_profile_menu(settings) == "可用角色\n- 芳乃（中文 / 英语）\n发送“选择角色 角色名”切换"
+    assert voice_profile_menu(settings) == (
+        "可用角色\n- 芳乃（中文 / 英语 / 粤语）\n发送“选择角色 角色名”切换\n"
+        "明确说“用粤语回答”可切换本轮语音，默认中文"
+    )
     await synthesize_voice("Hello there", settings, target_language="en")
     request_count = len(_RecordingGptSovitsClient.payloads)
 
@@ -347,6 +353,81 @@ async def test_supported_languages_controls_menu_and_blocks_unaccepted_tts(monke
         await synthesize_voice("こんにちは", settings, target_language="ja")
 
     assert len(_RecordingGptSovitsClient.payloads) == request_count
+
+
+@pytest.mark.asyncio
+async def test_legacy_profiles_must_explicitly_accept_cantonese_before_synthesis(
+    monkeypatch, tmp_path
+):
+    from app.services import voice
+
+    _RecordingGptSovitsClient.payloads = []
+    monkeypatch.setattr(voice.httpx, "AsyncClient", _RecordingGptSovitsClient)
+    reference = tmp_path / "legacy-reference.wav"
+    reference.write_bytes(b"test")
+    settings = Settings(
+        _env_file=None,
+        voice_enabled=True,
+        voice_provider="gpt_sovits",
+        voice_api_url="http://voice.test:19890",
+        voice_profiles_json=json.dumps(
+            {"murasame": {"label": "小丛雨", "ref_audio_path": str(reference)}}
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="尚未验收 粤语"):
+        await synthesize_voice(
+            "今日天气真好，我哋一齐出去行下啦。",
+            settings,
+            profile_name="murasame",
+            target_language="yue",
+        )
+
+    assert _RecordingGptSovitsClient.payloads == []
+
+
+@pytest.mark.asyncio
+async def test_cantonese_profile_routes_cantonese_text_with_chinese_voice_reference(
+    monkeypatch, tmp_path
+):
+    from app.services import voice
+
+    _RecordingGptSovitsClient.payloads = []
+    monkeypatch.setattr(voice.httpx, "AsyncClient", _RecordingGptSovitsClient)
+    reference = tmp_path / "cantonese-reference.wav"
+    reference.write_bytes(b"test")
+    settings = Settings(
+        _env_file=None,
+        voice_enabled=True,
+        voice_provider="gpt_sovits",
+        voice_api_url="http://voice.test:19891",
+        voice_profiles_json=json.dumps(
+            {
+                "aimisi": {
+                    "label": "爱弥斯",
+                    "ref_audio_path": str(reference),
+                    "prompt_lang": "zh",
+                    "prompt_text": "希望这份力量，也能让隧者更长久地保护拉海洛。",
+                    "supported_languages": ["zh", "ja", "en", "yue"],
+                }
+            }
+        ),
+    )
+
+    menu = voice_profile_menu(settings)
+    assert "爱弥斯（中文 / 日语 / 英语 / 粤语）" in menu
+    assert "明确说“用粤语回答”可切换本轮语音，默认中文" in menu
+    await synthesize_voice(
+        "今日天气真好，我哋一齐出去行下啦。",
+        settings,
+        profile_name="aimisi",
+        target_language="yue",
+    )
+
+    payload = _RecordingGptSovitsClient.payloads[-1]
+    assert payload["text_lang"] == "all_yue"
+    assert payload["prompt_lang"] == "zh"
+    assert payload["ref_audio_path"] == str(reference.resolve())
 
 
 @pytest.mark.asyncio
@@ -437,7 +518,7 @@ async def test_invalid_supported_languages_remains_visible_but_fails_closed(monk
     )
 
     assert voice_profile_menu(settings) == "可用角色\n- 芳乃（语音暂不可用）\n发送“选择角色 角色名”切换"
-    with pytest.raises(RuntimeError, match="仅可包含不重复的 zh、ja、en"):
+    with pytest.raises(RuntimeError, match="仅可包含不重复的 zh、ja、en、yue"):
         await synthesize_voice("你好", settings, profile_name="yoshino", target_language="zh")
 
 

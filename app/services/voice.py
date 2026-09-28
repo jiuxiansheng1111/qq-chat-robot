@@ -21,8 +21,8 @@ _KANA_RE = re.compile(r"[\u3040-\u30ff]")
 # the mutable /set_sovits_weights call and the following /tts request.
 _GPT_SOVITS_LOCKS: dict[tuple[int, str], asyncio.Lock] = {}
 _SUPPORTED_GPT_SOVITS_WEIGHT_LANGUAGES = frozenset({"zh", "ja", "en", "ko", "yue"})
-_SUPPORTED_PROFILE_LANGUAGES = frozenset({"zh", "ja", "en"})
-_PROFILE_LANGUAGE_LABELS = {"zh": "中文", "ja": "日语", "en": "英语"}
+_SUPPORTED_PROFILE_LANGUAGES = frozenset({"zh", "ja", "en", "yue"})
+_PROFILE_LANGUAGE_LABELS = {"zh": "中文", "ja": "日语", "en": "英语", "yue": "粤语"}
 _SUPPORTED_GPT_SOVITS_TEXT_SPLIT_METHODS = frozenset(
     {f"cut{index}" for index in range(6)}
 )
@@ -35,9 +35,9 @@ _LANGUAGE_DIRECTIVE_RE = re.compile(
     r"(?:"
     r"(?P<negation>不要|别|不需要|无需|禁止)?(?:再)?"
     r"(?:改用|换成|用|说|讲|读)(?:标准)?"
-    r"(?P<language>中文|汉语|普通话|日语|日文|英语|英文)"
+    r"(?P<language>中文|汉语|普通话|日语|日文|英语|英文|粤语|广东话)"
     r"(?:回答|回复|朗读|说|讲)?|"
-    r"(?P<language_first>中文|汉语|普通话|日语|日文|英语|英文)"
+    r"(?P<language_first>中文|汉语|普通话|日语|日文|英语|英文|粤语|广东话)"
     r"(?:回答|回复|朗读|说|讲)"
     r")",
 )
@@ -49,6 +49,8 @@ _LANGUAGE_CODES = {
     "日文": "ja",
     "英语": "en",
     "英文": "en",
+    "粤语": "yue",
+    "广东话": "yue",
 }
 _ENGLISH_DIRECTIVE_RE = re.compile(r"\bin\s+english\b", re.IGNORECASE)
 _JAPANESE_DIRECTIVE_RE = re.compile(r"日本語で")
@@ -133,7 +135,9 @@ def profile_supported_languages(profile: dict[str, object]) -> tuple[str, ...] |
         any(not isinstance(language, str) or language not in _SUPPORTED_PROFILE_LANGUAGES for language in raw_languages)
         or len(set(raw_languages)) != len(raw_languages)
     ):
-        raise RuntimeError("所选角色的 supported_languages 仅可包含不重复的 zh、ja、en，已回退文字回复")
+        raise RuntimeError(
+            "所选角色的 supported_languages 仅可包含不重复的 zh、ja、en、yue，已回退文字回复"
+        )
     return tuple(raw_languages)
 
 
@@ -199,11 +203,22 @@ def voice_profile_authorized(settings: Settings, profile_id: str, bot_self_id: s
 
 def voice_profile_menu(settings: Settings, bot_self_id: str | None = None) -> str:
     lines = ["可用角色"]
+    cantonese_available = False
     for profile_id, profile in voice_profiles(settings).items():
         if not voice_profile_authorized(settings, profile_id, bot_self_id):
             continue
         lines.append(f"- {character_label(profile_id, profile)}（{character_languages(profile)}）")
+        try:
+            cantonese_available = cantonese_available or (
+                "yue" in (profile_supported_languages(profile) or ())
+            )
+        except RuntimeError:
+            # Invalid per-role language configuration is already displayed as
+            # unavailable by character_languages; do not advertise it here.
+            continue
     lines.append("发送“选择角色 角色名”切换")
+    if cantonese_available:
+        lines.append("明确说“用粤语回答”可切换本轮语音，默认中文")
     return "\n".join(lines)
 
 
@@ -581,6 +596,11 @@ async def synthesize_voice(
             or "zh",
         )
         supported_languages = profile_supported_languages(profile)
+        if target_language == "yue" and (
+            supported_languages is None or target_language not in supported_languages
+        ):
+            language_label = _PROFILE_LANGUAGE_LABELS[target_language]
+            raise RuntimeError(f"所选角色尚未验收 {language_label} 语音，已回退文字回复")
         if supported_languages is not None and target_language not in supported_languages:
             language_label = _PROFILE_LANGUAGE_LABELS.get(target_language, target_language)
             raise RuntimeError(
@@ -607,7 +627,9 @@ async def synthesize_voice(
         text_split_method = profile_text_split_method(profile)
         payload = {
             "text": clean,
-            "text_lang": target_language,
+            # GPT-SoVITS uses all_yue for speech spoken entirely in Cantonese;
+            # plain yue denotes Cantonese-English mixed input in its front end.
+            "text_lang": "all_yue" if target_language == "yue" else target_language,
             "ref_audio_path": reference,
             "prompt_lang": prompt_lang,
             "prompt_text": prompt_text,

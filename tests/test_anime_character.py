@@ -1,5 +1,7 @@
 import base64
 import json
+import os
+import time
 from io import BytesIO
 
 import httpx
@@ -919,6 +921,80 @@ async def test_moegirl_only_caches_only_verified_page_and_image(monkeypatch, tmp
     assert first.provider == second.provider == "萌娘百科"
     assert second.cache_hit is True
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_moegirl_preferred_mode_falls_back_and_keeps_actual_cache_provider(
+    monkeypatch, tmp_path
+):
+    """A failed Moegirl download may fall back without mislabelling its cache."""
+    character = anime.ANIME_CHARACTER_BY_NAME["丛雨"]
+    settings = Settings(
+        _env_file=None,
+        moegirl_image_provider_enabled=True,
+        anime_moegirl_only=True,
+        anime_moegirl_preferred_with_fallback=True,
+        anime_image_cache_dir=str(tmp_path),
+    )
+    calls: list[str] = []
+
+    async def no_moegirl(*args, **kwargs):
+        calls.append("moegirl")
+
+    async def bangumi_result(*args, **kwargs):
+        calls.append("bangumi")
+        # Simulate a stale adapter label.  Its result still belongs to the
+        # fallback resolver and must not enter cache as 萌娘百科.
+        return ImageResolution(
+            data=jpeg_base64(720, 960),
+            provider="萌娘百科",
+            source_page_url="https://bgm.tv/character/123",
+            image_url="https://lain.bgm.tv/pic/crt/l/example.jpg",
+            label=character.name,
+        )
+
+    async def no_result(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(anime, "_moegirl_image", no_moegirl)
+    monkeypatch.setattr(anime, "_bangumi_image", bangumi_result)
+    for name in (
+        "_vndb_image", "_anilist_image", "_web_page_character_image",
+        "_wikipedia_image", "_baidu_image", "_bing_image",
+        "_bing_image_relaxed", "_search_engine_first_image",
+    ):
+        monkeypatch.setattr(anime, name, no_result)
+
+    first = await anime.resolve_anime_character_image(character, settings)
+    second = await anime.resolve_anime_character_image(character, settings)
+    metadata_path = anime._anime_image_cache_metadata_path(
+        anime._anime_image_cache_path(character, settings)
+    )
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    assert calls == ["moegirl", "bangumi"]
+    assert first.provider == second.provider == "Bangumi"
+    assert first.source_page_url == "https://bgm.tv/character/123"
+    assert metadata["provider"] == "Bangumi"
+    assert second.cache_hit is True
+
+    async def verified_moegirl(*args, **kwargs):
+        calls.append("moegirl")
+        return ImageResolution(
+            data=jpeg_base64(800, 1100),
+            provider="萌娘百科",
+            source_page_url="https://zh.moegirl.org.cn/丛雨",
+            image_url="https://storage.moegirl.org.cn/moegirl/commons/murasame.jpg",
+            label=character.name,
+        )
+
+    cache_path = anime._anime_image_cache_path(character, settings)
+    old_timestamp = time.time() - 7 * 60 * 60
+    os.utime(cache_path, (old_timestamp, old_timestamp))
+    monkeypatch.setattr(anime, "_moegirl_image", verified_moegirl)
+    refreshed = await anime.resolve_anime_character_image(character, settings)
+    assert refreshed.provider == "萌娘百科"
+    assert calls == ["moegirl", "bangumi", "moegirl"]
 
 
 @pytest.mark.asyncio

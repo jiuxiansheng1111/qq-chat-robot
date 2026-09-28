@@ -168,7 +168,8 @@ GPT-SoVITS 的英语前端还需要 NLTK 的 `averaged_perceptron_tagger_eng` �
 ## 启用微调权重前的验收
 
 训练完成后，分别用 `zh`、`en`、`ja` 生成固定测试句并保存为 WAV；运行本地 ASR 检查脚本，
-同时进行人工盲听。ASR 是门槛，不代替人工验收：脚本输出中的每个语言 gate 都应为 `true`，
+同时进行人工盲听。若本次候选还包含粤语，加入 `yue` 测试句并同时传入 `--require-yue`。
+ASR 是门槛，不代替人工验收：脚本输出中的每个语言 gate 都应为 `true`，
 且盲听确认发音、语言和音色均可接受，才可把新权重写入 `.env`。
 
 ```powershell
@@ -182,7 +183,7 @@ GPT-SoVITS 的英语前端还需要 NLTK 的 `averaged_perceptron_tagger_eng` �
   --fail-on-gate
 ```
 
-验收清单应对应待验收权重生成的固定中文、英文、日文短句及较长句 WAV；所有 WAV 保留在本机 `logs`，不提交。命令要求中、英、日三类样本全部存在且 ASR gate 均通过，否则以非零状态退出。旧基础权重对照另用
+验收清单应对应待验收权重生成的固定中文、英文、日文短句及较长句 WAV；所有 WAV 保留在本机 `logs`，不提交。默认要求中、英、日三类样本全部存在且 ASR gate 均通过，否则以非零状态退出；传入 `--require-yue` 时，还要求粤语样本存在且通过粤语语言识别与 CER 门槛。旧基础权重对照另用
 `logs\voice_acceptance_baseline_manifest.json` 和独立报告路径，避免把对照音频混入候选权重 gate。
 英语 gate 同时检查聚合 WER 和每条 WAV 的 WER，两个默认上限均为 0.10；这样一条短句的明显错误不能被
 较长句的零错误聚合掩盖。可按验收方案通过 `--max-en-wer` 和 `--max-single-en-wer` 分别显式调整。

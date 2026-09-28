@@ -240,16 +240,19 @@ def word_distance(reference: list[str], hypothesis: list[str]) -> int:
     return previous[-1]
 
 
-def overall_gate(summary: dict[str, Any]) -> dict[str, Any]:
-    """Require all three languages for automation-grade acceptance."""
-    missing = [language for language, gate in LANGUAGE_GATES.items() if gate not in summary]
+def overall_gate(summary: dict[str, Any], *, require_yue: bool = False) -> dict[str, Any]:
+    """Require the core languages and optionally Cantonese for acceptance."""
+    gates = dict(LANGUAGE_GATES)
+    if require_yue:
+        gates["yue"] = "yue_asr_gate"
+    missing = [language for language, gate in gates.items() if gate not in summary]
     failed = [
         language
-        for language, gate in LANGUAGE_GATES.items()
+        for language, gate in gates.items()
         if summary.get(gate) is not True
     ]
     return {
-        "required_languages": list(LANGUAGE_GATES),
+        "required_languages": list(gates),
         "missing_languages": missing,
         "failed_languages": failed,
         "overall_asr_gate": not missing and not failed,
@@ -296,6 +299,19 @@ def apply_language_gates(
             and all(row["language_match"] for row in ja_rows)
             and all(row["gate_cer"] <= thresholds["ja_cer_max"] for row in ja_rows)
         )
+    yue_rows = [row for row in report if row["expected_language"] == "yue"]
+    if yue_rows:
+        yue_reference_chars = sum(row["reference_characters"] for row in yue_rows)
+        yue_errors = sum(row["character_errors"] for row in yue_rows)
+        summary["yue_aggregate_cer"] = round(
+            yue_errors / max(1, yue_reference_chars), 4
+        )
+        summary["yue_all_languages_match"] = all(row["language_match"] for row in yue_rows)
+        summary["yue_asr_gate"] = bool(
+            summary["yue_aggregate_cer"] <= thresholds["yue_cer_max"]
+            and summary["yue_all_languages_match"]
+            and all(row["cer"] <= thresholds["yue_cer_max"] for row in yue_rows)
+        )
 
 
 def main() -> int:
@@ -329,10 +345,16 @@ def main() -> int:
         help="Maximum WER for each English sample; defaults to the aggregate limit",
     )
     parser.add_argument("--max-ja-cer", type=float, default=0.05)
+    parser.add_argument("--max-yue-cer", type=float, default=0.10)
     parser.add_argument(
         "--fail-on-gate",
         action="store_true",
-        help="Exit nonzero unless zh, en, and ja are all present and pass their ASR gates",
+        help="Exit nonzero unless all required languages are present and pass their ASR gates",
+    )
+    parser.add_argument(
+        "--require-yue",
+        action="store_true",
+        help="Also require Cantonese samples to pass when --fail-on-gate is set",
     )
     args = parser.parse_args()
 
@@ -350,8 +372,8 @@ def main() -> int:
     if args.case:
         for item in args.case:
             parts = item.split("|", 2)
-            if len(parts) != 3 or parts[1].casefold() not in {"zh", "en", "ja"}:
-                parser.error("--case must be FILE|zh|TEXT, FILE|en|TEXT, or FILE|ja|TEXT")
+            if len(parts) != 3 or parts[1].casefold() not in {"zh", "en", "ja", "yue"}:
+                parser.error("--case must be FILE|zh|TEXT, FILE|en|TEXT, FILE|ja|TEXT, or FILE|yue|TEXT")
             cases.append({"file": parts[0], "language": parts[1].casefold(), "text": parts[2]})
 
     from funasr import AutoModel
@@ -371,11 +393,12 @@ def main() -> int:
         "en_wer_max": args.max_en_wer,
         "en_single_wer_max": args.max_single_en_wer,
         "ja_cer_max": args.max_ja_cer,
+        "yue_cer_max": args.max_yue_cer,
     }
     apply_language_gates(summary, report, summary["thresholds"])
     summary["human_blind_listen_still_required"] = True
     if args.fail_on_gate:
-        summary.update(overall_gate(summary))
+        summary.update(overall_gate(summary, require_yue=args.require_yue))
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(
