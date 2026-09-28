@@ -263,14 +263,32 @@ function Start-GptSovitsSidecar {
         New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
         $voiceOutLog = Join-Path $logRoot "gpt_sovits.out.log"
         $voiceErrorLog = Join-Path $logRoot "gpt_sovits.error.log"
+        # fast-langdetect's Windows model loader cannot reopen temporary files
+        # when the user profile path contains non-ASCII characters.  Give only
+        # the sidecar an ASCII temp path; do not alter the machine-wide setting.
+        $voiceTempRoot = Join-Path $env:PUBLIC "GPTSoVITS_temp"
+        if ($voiceTempRoot -match '[^\x00-\x7F]') {
+            throw "GPT-SoVITS requires an ASCII temporary directory: $voiceTempRoot"
+        }
+        New-Item -ItemType Directory -Path $voiceTempRoot -Force | Out-Null
         Write-Host "[VOICE] Starting GPT-SoVITS on $voiceHost`:$voicePort..." -ForegroundColor Yellow
-        Start-Process `
-            -FilePath $gptPython `
-            -ArgumentList @("api_v2.py", "-a", $voiceHost, "-p", [string]$voicePort, "-c", $ttsConfig) `
-            -WorkingDirectory $gptRoot `
-            -RedirectStandardOutput $voiceOutLog `
-            -RedirectStandardError $voiceErrorLog `
-            -WindowStyle Hidden
+        $previousTemp = $env:TEMP
+        $previousTmp = $env:TMP
+        try {
+            $env:TEMP = $voiceTempRoot
+            $env:TMP = $voiceTempRoot
+            Start-Process `
+                -FilePath $gptPython `
+                -ArgumentList @("api_v2.py", "-a", $voiceHost, "-p", [string]$voicePort, "-c", $ttsConfig) `
+                -WorkingDirectory $gptRoot `
+                -RedirectStandardOutput $voiceOutLog `
+                -RedirectStandardError $voiceErrorLog `
+                -WindowStyle Hidden
+        }
+        finally {
+            $env:TEMP = $previousTemp
+            $env:TMP = $previousTmp
+        }
     }
 
     if (Wait-LocalPort -Port $voicePort -TimeoutSeconds 90) {

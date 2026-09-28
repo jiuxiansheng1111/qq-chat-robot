@@ -20,3 +20,13 @@ def test_explicit_startup_weight_must_synchronize_instead_of_only_warning():
     assert 'throw "Configured SoVITS weights not found: $weightsPath"' in script
     assert "Failed to synchronize configured SoVITS weights" in script
     assert "Invoke-RestMethod -Uri $endpoint -Method Get -TimeoutSec 180 -ErrorAction Stop" in script
+
+
+def test_sidecar_uses_ascii_temp_without_changing_parent_environment():
+    script = Path("scripts/start_all.ps1").read_text(encoding="utf-8")
+
+    assert 'Join-Path $env:PUBLIC "GPTSoVITS_temp"' in script
+    assert "$env:TEMP = $voiceTempRoot" in script
+    assert "$env:TMP = $voiceTempRoot" in script
+    assert "$env:TEMP = $previousTemp" in script
+    assert "$env:TMP = $previousTmp" in script
