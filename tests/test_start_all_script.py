@@ -30,3 +30,13 @@ def test_sidecar_uses_ascii_temp_without_changing_parent_environment():
     assert "$env:TMP = $voiceTempRoot" in script
     assert "$env:TEMP = $previousTemp" in script
     assert "$env:TMP = $previousTmp" in script
+
+
+def test_sidecar_process_on_another_port_does_not_block_configured_port_start():
+    script = Path("scripts/start_all.ps1").read_text(encoding="utf-8")
+
+    assert "$targetPortPattern" in script
+    assert "$explicitPortPattern" in script
+    assert "CommandLine -match $targetPortPattern" in script
+    assert "CommandLine -notmatch $explicitPortPattern" in script
+    assert '"[VOICE] GPT-SoVITS for port $voicePort exists; waiting for it..."' in script

@@ -250,14 +250,21 @@ function Start-GptSovitsSidecar {
         return $false
     }
 
+    $targetPortPattern = '(?i)(?:^|\s)-p\s+' + [regex]::Escape([string]$voicePort) + '(?:\s|$)'
+    $explicitPortPattern = '(?i)(?:^|\s)-p\s+\d+(?:\s|$)'
     $existing = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         Where-Object {
             $_.Name -match "^(python|pythonw)(\.exe)?$" -and
             $_.CommandLine -and
-            $_.CommandLine -match '(?i)api_v2\.py'
+            $_.CommandLine -match '(?i)api_v2\.py' -and
+            (
+                $_.CommandLine -match $targetPortPattern -or
+                # api_v2 defaults to 9880 when no -p argument is supplied.
+                $_.CommandLine -notmatch $explicitPortPattern
+            )
         })
     if ($existing.Count -gt 0) {
-        Write-Host "[VOICE] GPT-SoVITS process exists; waiting for port $voicePort..." -ForegroundColor Cyan
+        Write-Host "[VOICE] GPT-SoVITS for port $voicePort exists; waiting for it..." -ForegroundColor Cyan
     }
     else {
         New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
