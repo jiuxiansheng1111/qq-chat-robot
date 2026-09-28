@@ -98,7 +98,11 @@ from app.services.music import (
     parse_music_identity,
     search_netease_music,
 )
-from app.services.onebot_routing import onebot_route, set_current_onebot_self_id
+from app.services.onebot_routing import (
+    current_onebot_self_id,
+    onebot_route,
+    set_current_onebot_self_id,
+)
 from app.services.possession_style import (
     fetch_group_context,
     fetch_member_recall_samples,
@@ -150,6 +154,7 @@ from app.services.voice import (
     requested_speech_language,
     resolve_character_profile,
     synthesize_voice,
+    voice_profile_authorized,
     voice_profile_menu,
     voice_profiles,
 )
@@ -2415,18 +2420,21 @@ async def maybe_send_voice_reply(
     """Send TTS only for users who explicitly enabled voice mode."""
     if not settings.voice_enabled or not await request.app.state.db.voice_mode(group_id, user_id):
         return False
-    limiter = getattr(request.app.state, "voice_send_limiter", None)
-    if limiter is not None and not await limiter.allow(f"{group_id}:{user_id}"):
-        return False
     try:
         profile = await request.app.state.db.voice_profile(
             group_id, user_id, settings.voice_profile_default
         )
+        if not voice_profile_authorized(settings, profile, current_onebot_self_id()):
+            return False
+        limiter = getattr(request.app.state, "voice_send_limiter", None)
+        if limiter is not None and not await limiter.allow(f"{group_id}:{user_id}"):
+            return False
         record = await synthesize_voice(
             text,
             settings,
             profile,
             target_language=target_language,
+            bot_self_id=current_onebot_self_id(),
         )
         return await send_group_record(group_id, record)
     except Exception as exc:  # noqa: BLE001 - voice failure must fall back to text
@@ -2550,7 +2558,12 @@ async def _send_anime_character_lookup(
         await send_group_image(group_id, image.data, caption)
     except (RuntimeError, httpx.HTTPError) as exc:
         logger.warning("anime character lookup image failed for %s: %s", character.name, exc)
-        await send_group_message(group_id, caption + "\n图片暂时没有找到可靠来源。")
+        source_note = (
+            "萌娘百科图片暂时无法获取（可能是条目无图或图片服务器不可达）。"
+            if settings.anime_moegirl_only
+            else "图片暂时没有找到可靠来源。"
+        )
+        await send_group_message(group_id, caption + "\n" + source_note)
 
 
 async def _send_ultraman_character_lookup(
@@ -3439,14 +3452,14 @@ async def onebot_webhook(
             await send_group_message(
                 group_id,
                 "已开启你的语音回复。语音服务恢复后会自动使用已选角色。\n\n"
-                + voice_profile_menu(settings)
+                + voice_profile_menu(settings, current_onebot_self_id())
                 + "\n\n发送“关闭语音”即可关闭。",
             )
         else:
             await send_group_message(
                 group_id,
                 "已开启你的语音回复。\n\n"
-                + voice_profile_menu(settings)
+                + voice_profile_menu(settings, current_onebot_self_id())
                 + "\n\n发送“关闭语音”即可关闭。",
             )
     elif text in VOICE_OFF_COMMANDS:
@@ -3463,9 +3476,19 @@ async def onebot_webhook(
         # ``murasame_ja``.  Never expose that ID in a group message; treat it
         # as the current default character until the user selects another one.
         profile = profiles.get(profile_id)
-        if profile is None:
-            profile_id = settings.voice_profile_default
-            profile = profiles.get(profile_id) or next(iter(profiles.values()), {})
+        if profile is None or not voice_profile_authorized(
+            settings, profile_id, current_onebot_self_id()
+        ):
+            profile = next(
+                (
+                    item
+                    for candidate_id, item in profiles.items()
+                    if voice_profile_authorized(
+                        settings, candidate_id, current_onebot_self_id()
+                    )
+                ),
+                {},
+            )
         profile_hint = f"；角色：{profile.get('label') or '默认角色'}"
         if settings.voice_enabled:
             await send_group_message(
@@ -3481,15 +3504,20 @@ async def onebot_webhook(
             )
     elif text in VOICE_CHARACTER_LIST_COMMANDS or text.startswith(VOICE_CHARACTER_SELECT_PREFIXES):
         if text in VOICE_CHARACTER_LIST_COMMANDS:
-            await send_group_message(group_id, voice_profile_menu(settings))
+            await send_group_message(
+                group_id, voice_profile_menu(settings, current_onebot_self_id())
+            )
         else:
             character_name = text.split(" ", 1)[1].strip()
             profiles = voice_profiles(settings)
-            profile_id = resolve_character_profile(settings, character_name)
+            profile_id = resolve_character_profile(
+                settings, character_name, current_onebot_self_id()
+            )
             if profile_id is None:
                 await send_group_message(
                     group_id,
-                    f"没有找到角色“{character_name}”。\n\n{voice_profile_menu(settings)}",
+                    f"没有找到角色“{character_name}”。\n\n"
+                    f"{voice_profile_menu(settings, current_onebot_self_id())}",
                 )
             else:
                 await request.app.state.db.set_voice_profile(group_id, user_id, profile_id)
@@ -3697,7 +3725,12 @@ async def onebot_webhook(
                     await send_group_image(group_id, image.data, caption)
                 except (RuntimeError, httpx.HTTPError) as exc:
                     logger.warning("catalog hub anime image failed: %s", exc)
-                    await send_group_message(group_id, caption + "\n图片暂时没有找到可靠来源。")
+                    source_note = (
+                        "萌娘百科图片暂时无法获取（可能是条目无图或图片服务器不可达）。"
+                        if settings.anime_moegirl_only
+                        else "图片暂时没有找到可靠来源。"
+                    )
+                    await send_group_message(group_id, caption + "\n" + source_note)
     elif text in DAILY_ANIME_CHARACTER_COMMANDS or mentioned_image_command(
         event, DAILY_ANIME_CHARACTER_COMMANDS
     ):
@@ -3730,7 +3763,12 @@ async def onebot_webhook(
             logger.warning("anime character image failed: %s", exc)
             await send_group_message(
                 group_id,
-                caption + "\n图片暂时没找到可靠来源，已尝试 Wikipedia/Bing 和 LLM 辅助搜索词。",
+                caption
+                + (
+                    "\n萌娘百科图片暂时无法获取（可能是条目无图或图片服务器不可达）。"
+                    if settings.anime_moegirl_only
+                    else "\n图片暂时没找到可靠来源，已尝试 Wikipedia/Bing 和 LLM 辅助搜索词。"
+                ),
             )
     elif text in MY_ANIME_CHARACTER_COMMANDS or (
         bot_mentioned(event) and text in MY_ANIME_CHARACTER_COMMANDS

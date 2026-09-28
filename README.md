@@ -217,6 +217,10 @@ Windows 一键启动 NapCatQQ Desktop、OneBot 和 FastAPI：
 `GPT_SOVITS_ROOT`/`GPT_SOVITS_PYTHON` 自动启动 GPT-SoVITS `api_v2.py`，等待 `9880/tts`
 就绪后再启动机器人；语音服务依赖或模型缺失只会写入 `logs/gpt_sovits.error.log`，不阻止普通机器人启动。
 
+`VOICE_PRIMARY_ACCOUNT_PROFILE_IDS` 可把指定角色音色限定到 `ONEBOT_SELF_ID` 对应的主机器人账号；
+其他账号的角色菜单会隐藏它们，合成时也会再次校验，事件缺少 `self_id` 时按未授权处理。
+例如仅在已获准的账号上使用芳乃、茉子：`VOICE_PRIMARY_ACCOUNT_PROFILE_IDS=yoshino,mako`。
+
 为了避免重启电脑或机器人进程退出后出现 `ECONNREFUSED 127.0.0.1:8000`，管理员身份双击：
 
 ```text
@@ -526,6 +530,14 @@ python -m scripts.audit_anime_character_images --report data/anime-character-ima
 角色资料也会先读取萌娘百科角色摘要和联网检索结果，再交给 LLM 做有依据的改写，输出约 200～320 字的“角色简介”和“角色背景”。LLM 只整理已提供的资料，不凭空补写设定；LLM 不可用时仍会使用经过压缩改写的公开摘要，并附资料来源链接。
 
 萌娘百科来源默认关闭。萌娘百科的用户协议对机器人抓取及站外图片使用有额外限制；只有在你已获得部署场景所需许可后，才在 `.env` 设置 `MOEGIRL_IMAGE_PROVIDER_ENABLED=true`。开启后，机器人只会通过其公开 MediaWiki API 严格核验角色条目标题和作品证据，不会调用被禁用的 `imageinfo` 接口。
+
+若同时设置 `ANIME_MOEGIRL_ONLY=true`，角色资料与图片不会回退到其他站点；条目缺少 `pageimages`、是消歧义页、或角色/作品证据不完整时，会明确显示为未找到，而不会借用封面或同名角色。可在已获许可的部署环境做低速的 300 条目录元数据审计（不下载图片）：
+
+```powershell
+python -m scripts.audit_moegirl_catalog_sources --report $env:TEMP\anime-moegirl-source-audit.json --delay 0.35
+```
+
+审计会对网络、限流与服务端错误做有限指数退避重试（普通 4xx 不重试），并分别统计严格匹配、已确认角色页但没有 `pageimages`、未核实以及请求失败。未核实会进一步标记为标题/别名不匹配、作品证据不足或仅有消歧义页，并保留少量 API 候选标题供人工核对别名；它们不会被当作可用来源。这是 API 元数据覆盖率，不能证明每张远程图片在 QQ 侧均可下载或发送。
 
 如果要扩充 Galgame/二次元角色，不建议让机器人启动时盲目抓整站；可在确认拥有相应使用许可后，按你选择的分类或关键词执行：
 

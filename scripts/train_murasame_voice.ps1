@@ -6,10 +6,17 @@ param(
     [int]$BatchSize = 1,
     [ValidatePattern('^[A-Za-z0-9_-]+$')]
     [string]$DatasetName = "murasame_voice_dataset_ja",
+    [ValidatePattern('^[A-Za-z0-9_-]+$')]
+    [string]$ManifestStem = "murasame",
+    [ValidatePattern('^[A-Za-z0-9_-]*$')]
+    [string]$ExperimentName = "",
     # "mixed" accepts only per-row ja/zh labels and requires both languages.
     # It must use a new dataset root so the single-language cache is untouched.
     [ValidateSet("ja", "zh", "en", "mixed")]
     [string]$ExpectedLanguage = "ja",
+    # A new character has no previous e10 checkpoint. Explicitly opt into a
+    # base-model mixed run; the legacy Murasame mixed-resume preflight stays on.
+    [switch]$TrainMixedFromBase,
     # Leave empty to select a free ASCII SUBST drive without disturbing an
     # existing user mapping.  A value such as T: can be supplied explicitly.
     [string]$ProjectDrive = "",
@@ -24,6 +31,19 @@ $datasetActual = Join-Path $projectRoot ("data\" + $DatasetName)
 
 if ($ExpectedLanguage -eq "mixed" -and $DatasetName -eq "murasame_voice_dataset_ja") {
     throw "Mixed ja+zh training requires a new dataset root. For example: -DatasetName murasame_voice_dataset_ja_zh -ExpectedLanguage mixed"
+}
+if ($ManifestStem -ne "murasame" -and -not $ExperimentName) {
+    throw "A non-Murasame manifest requires an explicit unique -ExperimentName."
+}
+if ($TrainMixedFromBase -and $ExpectedLanguage -ne "mixed") {
+    throw "-TrainMixedFromBase only applies to -ExpectedLanguage mixed."
+}
+if ($TrainMixedFromBase) {
+    $existingCheckpointRoot = Join-Path $datasetActual "logs_s2_v2"
+    if ((Test-Path -LiteralPath $existingCheckpointRoot) -and
+        @(Get-ChildItem -LiteralPath $existingCheckpointRoot -File -ErrorAction SilentlyContinue).Count -gt 0) {
+        throw "Base-model training requires a new dataset without existing checkpoints: $existingCheckpointRoot"
+    }
 }
 
 if (-not ("VoiceSubst.NativeMethods" -as [type])) {
@@ -148,9 +168,9 @@ Register-SubstPSDrive $voiceAlias
 $voiceRoot = Join-Path $voiceAlias "GPT-SoVITS"
 $python = Join-Path $voiceRoot ".venv_cpu\Scripts\python.exe"
 $dataset = Join-Path $projectAlias ("data\" + $DatasetName)
-$sourceListPath = Join-Path $datasetActual "murasame.list"
-$listPath = Join-Path $dataset "murasame.train.list"
-$experimentName = "murasame_voice_$ExpectedLanguage"
+$sourceListPath = Join-Path $datasetActual ($ManifestStem + ".list")
+$listPath = Join-Path $dataset ($ManifestStem + ".train.list")
+$experimentName = if ($ExperimentName) { $ExperimentName } else { "murasame_voice_$ExpectedLanguage" }
 $bertDir = Join-Path $voiceRoot "GPT_SoVITS\pretrained_models\chinese-roberta-wwm-ext-large"
 $hubertDir = Join-Path $voiceRoot "GPT_SoVITS\pretrained_models\chinese-hubert-base"
 $s2g = Join-Path $voiceRoot "GPT_SoVITS\pretrained_models\gsv-v2final-pretrained\s2G2333k.pth"
@@ -192,7 +212,7 @@ function Assert-MixedResumeCheckpoint {
     return [int]$epochLines[0].Substring("RESUME_EPOCH=".Length)
 }
 
-if ($ExpectedLanguage -eq "mixed") {
+if ($ExpectedLanguage -eq "mixed" -and -not $TrainMixedFromBase) {
     $resumeEpoch = Assert-MixedResumeCheckpoint (Join-Path $dataset "logs_s2_v2")
     if ($Epochs -le $resumeEpoch) {
         throw "Epochs ($Epochs) must be greater than mixed resume epoch ($resumeEpoch)."
@@ -422,8 +442,10 @@ Write-Host "[TRAIN] Starting SoVITS CPU fine-tune ($Epochs epoch(s), batch $Batc
 if ($Epochs -lt 10) {
     Write-Warning "Epochs below 10 is a smoke test and is not expected to produce usable speech."
 }
-if ($ExpectedLanguage -eq "mixed") {
+if ($ExpectedLanguage -eq "mixed" -and -not $TrainMixedFromBase) {
     Write-Host "[TRAIN] Verified mixed resume checkpoint at epoch $resumeEpoch; upstream should start epoch $($resumeEpoch + 1)."
+} elseif ($ExpectedLanguage -eq "mixed") {
+    Write-Host "[TRAIN] Explicit new-character mixed run from the pretrained base."
 }
 Push-Location $voiceRoot
 try {

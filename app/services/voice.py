@@ -184,20 +184,41 @@ def character_label(profile_id: str, profile: dict[str, object]) -> str:
     return str(profile.get("label") or profile_id)
 
 
-def voice_profile_menu(settings: Settings) -> str:
+def voice_profile_authorized(settings: Settings, profile_id: str, bot_self_id: str | None) -> bool:
+    """Keep account-scoped character licenses off other OneBot accounts."""
+    restricted = {
+        item.strip()
+        for item in settings.voice_primary_account_profile_ids.split(",")
+        if item.strip()
+    }
+    if profile_id not in restricted:
+        return True
+    primary_id = str(settings.onebot_self_id or "").strip()
+    return bool(primary_id and str(bot_self_id or "").strip() == primary_id)
+
+
+def voice_profile_menu(settings: Settings, bot_self_id: str | None = None) -> str:
     lines = ["可用角色"]
     for profile_id, profile in voice_profiles(settings).items():
+        if not voice_profile_authorized(settings, profile_id, bot_self_id):
+            continue
         lines.append(f"- {character_label(profile_id, profile)}（{character_languages(profile)}）")
     lines.append("发送“选择角色 角色名”切换")
     return "\n".join(lines)
 
 
-def resolve_character_profile(settings: Settings, selection: str) -> str | None:
+def resolve_character_profile(
+    settings: Settings, selection: str, bot_self_id: str | None = None
+) -> str | None:
     """Resolve a user-facing character name, preserving old internal IDs as aliases."""
     requested = re.sub(r"\s+", "", str(selection or "")).casefold()
     if not requested:
         return None
-    profiles = voice_profiles(settings)
+    profiles = {
+        profile_id: profile
+        for profile_id, profile in voice_profiles(settings).items()
+        if voice_profile_authorized(settings, profile_id, bot_self_id)
+    }
     if selection in profiles:
         return selection
     matches = [
@@ -512,6 +533,7 @@ async def synthesize_voice(
     settings: Settings,
     profile_name: str | None = None,
     target_language: str | None = None,
+    bot_self_id: str | None = None,
 ) -> str:
     if not settings.voice_enabled:
         raise RuntimeError("语音服务暂不可用，请稍后再试。")
@@ -545,6 +567,8 @@ async def synthesize_voice(
             if settings.voice_profile_default in profiles
             else next(iter(profiles))
         )
+    if not voice_profile_authorized(settings, selected_profile_id, bot_self_id):
+        raise RuntimeError("该角色音色仅获准在指定机器人账号使用，已回退文字回复")
     profile = profiles[selected_profile_id]
     if provider in {"gpt_sovits", "gpt-sovits"}:
         if not endpoint.endswith("/tts"):

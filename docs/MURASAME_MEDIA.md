@@ -63,6 +63,29 @@ ASCII 临时盘符路径清单（优先 `R:`，若已被占用则自动选择空
 每次启动会把预处理和训练日志保存到按数据集、运行时间独立命名的 `logs/murasame-training/` 子目录，避免覆盖前次日志。
 训练模型和录音都在 `.gitignore` 覆盖的 `data/` 下，不会提交到 GitHub。
 
+其他角色或混合语种素材使用 `prepare_character_voice_dataset.py` 准备独立数据集。
+输入是人工核对后的 UTF-8 JSONL，每行须有相对于 `--source-root` 的 `file`、
+真实 `language`（`zh`/`ja`/`en`）、逐句 `text` 以及人工核对后的
+`"human_verified":true`；文件名、自动听写草稿和音效不能
+自动当作正确台词。示例：
+
+```json
+{"file":"zh_voice_01.wav","language":"zh","text":"你好，今天过得怎么样？","human_verified":true}
+{"file":"ja_voice_01.wav","language":"ja","text":"こんにちは、元気ですか。","human_verified":true}
+```
+
+```powershell
+python -m scripts.prepare_character_voice_dataset .\reviewed.jsonl `
+  --source-root .\authorized_audio --output .\data\character_voice_mixed `
+  --speaker character --manifest-stem character
+powershell -ExecutionPolicy Bypass -File .\scripts\train_murasame_voice.ps1 `
+  -DatasetName character_voice_mixed -ManifestStem character `
+  -ExperimentName character_voice_mixed -ExpectedLanguage mixed -TrainMixedFromBase
+```
+
+`-TrainMixedFromBase` 仅用于全新角色的中日混合集；旧小丛雨混合集仍须通过配对检查点
+续训预检。输出语音必须分别试听、核对中日英语种与说话人后才能接入机器人。
+
 ## GPT-SoVITS 本地后端
 
 GPT-SoVITS 的 `api_v2.py` 默认监听 `9880`。本项目默认以 `text_lang=zh` 合成；用户明确

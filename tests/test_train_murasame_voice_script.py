@@ -39,3 +39,14 @@ def test_sovits_wrapper_logs_native_stderr_without_treating_warnings_as_failure(
     assert "$ErrorActionPreference = $originalErrorActionPreference" in script
     assert "$trainerExitCode = $LASTEXITCODE" in script
     assert "if ($trainerExitCode -ne 0)" in script
+
+
+def test_character_training_requires_unique_name_and_explicit_mixed_base_opt_in():
+    script = Path("scripts/train_murasame_voice.ps1").read_text(encoding="utf-8")
+
+    assert '[string]$ManifestStem = "murasame"' in script
+    assert '[string]$ExperimentName = ""' in script
+    assert '[switch]$TrainMixedFromBase' in script
+    assert 'if ($ManifestStem -ne "murasame" -and -not $ExperimentName)' in script
+    assert 'if ($ExpectedLanguage -eq "mixed" -and -not $TrainMixedFromBase)' in script
+    assert 'Base-model training requires a new dataset without existing checkpoints' in script

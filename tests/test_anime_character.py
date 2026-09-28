@@ -251,6 +251,36 @@ async def test_profile_uses_moegirl_evidence_and_llm_rewrites_it(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_moegirl_profile_skips_disambiguation_and_uses_strict_search(monkeypatch):
+    character = anime.ANIME_CHARACTER_BY_NAME["丛雨"]
+
+    async def handler(request: httpx.Request):
+        if request.url.params.get("generator") == "search":
+            return httpx.Response(200, json={"query": {"pages": [{
+                "title": "丛雨(千恋＊万花)",
+                "fullurl": "https://zh.moegirl.org.cn/丛雨(千恋＊万花)",
+                "extract": "《千恋＊万花》中的角色。",
+            }]}})
+        return httpx.Response(200, json={"query": {"pages": [{
+            "title": "丛雨", "pageprops": {"disambiguation": ""},
+            "extract": "不应作为角色资料。",
+        }]}})
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        anime.httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(transport=transport, **kwargs),
+    )
+    result = await anime._moegirl_character_profile(
+        character,
+        Settings(_env_file=None, moegirl_image_provider_enabled=True),
+    )
+    assert result == ("《千恋＊万花》中的角色。", "https://zh.moegirl.org.cn/丛雨(千恋＊万花)")
+
+
+@pytest.mark.asyncio
 async def test_resolver_persists_cache_and_skips_network_next_time(
     monkeypatch,
     tmp_path,
@@ -303,9 +333,9 @@ async def test_moegirl_api_returns_attributed_exact_character_image(monkeypatch)
     async def handler(request: httpx.Request):
         if request.url.host == "zh.moegirl.org.cn":
             assert request.url.params["action"] == "query"
-            assert request.url.params["generator"] == "search"
-            assert "千恋" in request.url.params["gsrsearch"]
-            assert request.url.params["prop"] == "pageimages|info|extracts|categories"
+            assert "丛雨" in request.url.params["titles"]
+            assert request.url.params["prop"] == "pageimages|info|extracts|categories|pageprops"
+            assert request.url.params["redirects"] == "1"
             assert "imageinfo" not in request.url.params
             return httpx.Response(
                 200,
@@ -393,6 +423,75 @@ async def test_moegirl_rejects_wrong_character_even_when_work_matches(monkeypatc
         Settings(_env_file=None, moegirl_image_provider_enabled=True),
     )
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_moegirl_skips_direct_disambiguation_and_uses_strict_search_result(monkeypatch):
+    character = anime.ANIME_CHARACTER_BY_NAME["丛雨"]
+
+    async def handler(request: httpx.Request):
+        assert request.url.params["redirects"] == "1"
+        assert "pageprops" in request.url.params["prop"]
+        if request.url.params.get("generator") == "search":
+            return httpx.Response(200, json={"query": {"pages": [{
+                "title": "丛雨(千恋＊万花)",
+                "fullurl": "https://zh.moegirl.org.cn/丛雨(千恋＊万花)",
+                "extract": "《千恋＊万花》中的角色。",
+                "original": {"source": "https://img.moegirl.org.cn/murasame.jpg"},
+            }]}})
+        return httpx.Response(200, json={"query": {"pages": [{
+            "title": "丛雨", "pageprops": {"disambiguation": ""},
+            "original": {"source": "https://img.moegirl.org.cn/wrong.jpg"},
+        }]}})
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(anime.httpx, "AsyncClient", lambda **kwargs: original_client(transport=transport, **kwargs))
+
+    async def download(client, url, referer, settings):
+        assert url.endswith("murasame.jpg")
+        return jpeg_base64()
+
+    monkeypatch.setattr(anime, "_download_image", download)
+    result = await anime._moegirl_image(
+        character, character.aliases, Settings(_env_file=None, moegirl_image_provider_enabled=True)
+    )
+    assert result is not None
+    assert result.label == "丛雨(千恋＊万花)"
+
+
+@pytest.mark.asyncio
+async def test_moegirl_searches_when_direct_page_has_no_pageimage(monkeypatch):
+    character = anime.ANIME_CHARACTER_BY_NAME["初音未来"]
+
+    async def handler(request: httpx.Request):
+        if request.url.params.get("generator") == "search":
+            return httpx.Response(200, json={"query": {"pages": [{
+                "title": "初音未来", "fullurl": "https://zh.moegirl.org.cn/初音未来",
+                "categories": [{"title": "分类:VOCALOID角色"}],
+                "original": {"source": "https://img.moegirl.org.cn/miku.jpg"},
+            }]}})
+        return httpx.Response(200, json={"query": {"pages": [{
+            "title": "初音未来", "categories": [{"title": "分类:VOCALOID角色"}],
+        }]}})
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        anime.httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(transport=transport, **kwargs),
+    )
+
+    async def download(*args):
+        return jpeg_base64()
+
+    monkeypatch.setattr(anime, "_download_image", download)
+    result = await anime._moegirl_image(
+        character, character.aliases, Settings(_env_file=None, moegirl_image_provider_enabled=True)
+    )
+    assert result is not None
+    assert result.image_url.endswith("miku.jpg")
 
 
 @pytest.mark.asyncio
@@ -720,6 +819,7 @@ async def test_moegirl_pageimages_resolves_hange(monkeypatch):
                             "123": {
                                 "pageid": 123,
                                 "title": "韩吉·佐耶",
+                                "extract": "《进击的巨人》的调查兵团成员。",
                                 "original": {
                                     "source": "https://commons.example/hange.jpg"
                                 },
@@ -755,3 +855,88 @@ async def test_moegirl_pageimages_resolves_hange(monkeypatch):
     with Image.open(BytesIO(decoded)) as image:
         assert image.width == 420
         assert image.height == 640
+
+
+@pytest.mark.asyncio
+async def test_moegirl_only_ignores_non_moegirl_cache_and_never_uses_fallback(
+    monkeypatch, tmp_path
+):
+    character = anime.ANIME_CHARACTER_BY_NAME["丛雨"]
+    settings = Settings(
+        _env_file=None,
+        moegirl_image_provider_enabled=True,
+        anime_moegirl_only=True,
+        anime_image_cache_dir=str(tmp_path),
+    )
+    anime._save_anime_image_cache(
+        character,
+        settings,
+        ImageResolution(
+            data=jpeg_base64(),
+            provider="Bangumi",
+            source_page_url="https://bgm.tv/character/123",
+            image_url="https://bgm.tv/image.jpg",
+        ),
+    )
+
+    async def no_moegirl(*args, **kwargs):
+        return None
+
+    async def forbidden_fallback(*args, **kwargs):
+        raise AssertionError("another provider must not be called")
+
+    monkeypatch.setattr(anime, "_moegirl_image", no_moegirl)
+    monkeypatch.setattr(anime, "_vndb_image", forbidden_fallback)
+    with pytest.raises(RuntimeError, match="萌娘百科暂未找到"):
+        await anime.resolve_anime_character_image(character, settings)
+
+
+@pytest.mark.asyncio
+async def test_moegirl_only_caches_only_verified_page_and_image(monkeypatch, tmp_path):
+    character = anime.ANIME_CHARACTER_BY_NAME["丛雨"]
+    settings = Settings(
+        _env_file=None,
+        moegirl_image_provider_enabled=True,
+        anime_moegirl_only=True,
+        anime_image_cache_dir=str(tmp_path),
+    )
+    calls = 0
+
+    async def verified(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return ImageResolution(
+            data=jpeg_base64(),
+            provider="萌娘百科",
+            source_page_url="https://zh.moegirl.org.cn/丛雨",
+            image_url="https://storage.moegirl.org.cn/moegirl/commons/murasame.jpg",
+            label="丛雨",
+        )
+
+    monkeypatch.setattr(anime, "_moegirl_image", verified)
+    first = await anime.resolve_anime_character_image(character, settings)
+    second = await anime.resolve_anime_character_image(character, settings)
+    assert first.provider == second.provider == "萌娘百科"
+    assert second.cache_hit is True
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_moegirl_only_profile_does_not_include_other_site_sources(monkeypatch):
+    character = anime.ANIME_CHARACTER_BY_NAME["丛雨"]
+
+    async def verified(*args, **kwargs):
+        return "丛雨是《千恋＊万花》的角色。", "https://zh.moegirl.org.cn/丛雨"
+
+    async def forbidden_search(*args, **kwargs):
+        raise AssertionError("web search must not run in Moegirl-only mode")
+
+    monkeypatch.setattr(anime, "_moegirl_character_profile", verified)
+    monkeypatch.setattr(anime, "search_web", forbidden_search)
+    anime._ANIME_PROFILE_CACHE.clear()
+    result = await anime.resolve_anime_character_profile(
+        character,
+        Settings(_env_file=None, moegirl_image_provider_enabled=True, anime_moegirl_only=True),
+    )
+    assert "https://zh.moegirl.org.cn/丛雨" in result
+    assert "bgm.tv" not in result

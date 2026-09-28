@@ -143,6 +143,10 @@ ANIME_CHARACTER_BY_NAME = {item.name: item for item in ANIME_CHARACTER_ROSTER}
 ANIME_IMAGE_CACHE_VERSION = "v4-staged-quality-20260924"
 
 ANIME_SERIES_ALIASES: dict[str, tuple[str, ...]] = {
+    # A slash is not preserved by ``_normalize``.  Keep the independently
+    # meaningful product/family names so a real 初音未来 page categorized as
+    # either VOCALOID or Piapro Characters is not rejected as unrelated.
+    "VOCALOID / Piapro Characters": ("VOCALOID", "Piapro Characters"),
     "《千恋＊万花》": ("Senren * Banka", "Senren Banka", "千恋＊万花"),
     "《魔女的夜宴》": ("Sanoba Witch", "サノバウィッチ"),
     "《Re:从零开始的异世界生活》": (
@@ -224,7 +228,71 @@ def anime_character_profile_text(character: AnimeCharacter) -> str:
     )
 
 
-_ANIME_PROFILE_CACHE: dict[tuple[str, bool], str] = {}
+_ANIME_PROFILE_CACHE: dict[tuple[str, bool, bool, bool], str] = {}
+
+
+def _moegirl_pages(payload: object) -> list[dict]:
+    if not isinstance(payload, dict):
+        return []
+    query = payload.get("query")
+    if not isinstance(query, dict):
+        return []
+    pages = query.get("pages", [])
+    if isinstance(pages, dict):
+        pages = list(pages.values())
+    return [page for page in pages if isinstance(page, dict)] if isinstance(pages, list) else []
+
+
+def _moegirl_title_candidates(character: AnimeCharacter) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(
+        value.strip() for value in (character.name, *character.aliases)
+        if value.strip() and "|" not in value
+    ))[:12]
+
+
+def _moegirl_search_queries(character: AnimeCharacter) -> tuple[str, ...]:
+    """Search candidates for redirects/disambiguations; never use them as evidence."""
+    series = character.series.strip("《》 ")
+    return tuple(
+        dict.fromkeys(
+            f"{name} {series}"
+            for name in _moegirl_title_candidates(character)
+            if name
+        )
+    )[:8]
+
+
+def _moegirl_page_evidence(page: dict) -> str:
+    raw_categories = page.get("categories")
+    if not isinstance(raw_categories, list):
+        raw_categories = []
+    categories = " ".join(
+        str(item.get("title") or "")
+        for item in raw_categories
+        if isinstance(item, dict)
+    )
+    # Search terms are never evidence: they contain the work name even when
+    # the returned page is unrelated to that work.
+    return " ".join((str(page.get("title") or ""), str(page.get("extract") or ""), categories))
+
+
+def _is_moegirl_disambiguation(page: dict) -> bool:
+    """Return whether MediaWiki marks this result as a disambiguation page."""
+    pageprops = page.get("pageprops")
+    return isinstance(pageprops, dict) and "disambiguation" in pageprops
+
+
+def _verified_moegirl_image(result: ImageResolution) -> bool:
+    page = urlparse(result.source_page_url)
+    image = urlparse(result.image_url)
+    return (
+        result.provider == "萌娘百科"
+        and page.scheme == "https"
+        and page.hostname == "zh.moegirl.org.cn"
+        and image.scheme == "https"
+        and image.hostname is not None
+        and image.hostname.endswith(".moegirl.org.cn")
+    )
 
 
 async def _moegirl_character_profile(
@@ -235,8 +303,6 @@ async def _moegirl_character_profile(
     if not settings.moegirl_image_provider_enabled:
         return None
     timeout = max(3.0, min(float(settings.media_timeout_seconds), 10.0))
-    series = character.series.strip("《》 ")
-    query = f"{character.name} {series}".strip()
     headers = {"User-Agent": "qq-chatrobot/0.1 (profile attribution resolver)"}
     try:
         async with httpx.AsyncClient(
@@ -244,54 +310,68 @@ async def _moegirl_character_profile(
             follow_redirects=True,
             headers=headers,
         ) as client:
+            api_params = {
+                "action": "query",
+                "redirects": "1",
+                "prop": "info|extracts|categories|pageprops",
+                "ppprop": "disambiguation",
+                "inprop": "url",
+                "exintro": "1",
+                "explaintext": "1",
+                "exsentences": "8",
+                "cllimit": "max",
+                "format": "json",
+                "formatversion": "2",
+            }
+
+            async def matching_profile(pages: list[dict]) -> tuple[str, str] | None:
+                series_terms = _series_match_terms(character)
+                for page in pages:
+                    if page.get("missing") or _is_moegirl_disambiguation(page):
+                        continue
+                    title = str(page.get("title") or "")
+                    extract = re.sub(r"\s+", " ", str(page.get("extract") or "")).strip()
+                    # The search query intentionally is not part of evidence:
+                    # only the returned page can establish work membership.
+                    evidence = _normalize(_moegirl_page_evidence(page))
+                    if not _candidate_name_matches(character, tuple(character.aliases), [title]):
+                        continue
+                    if series_terms and not any(term in evidence for term in series_terms):
+                        continue
+                    if not extract:
+                        continue
+                    page_url = str(page.get("fullurl") or "")
+                    if not page_url:
+                        page_url = "https://zh.moegirl.org.cn/" + quote(title.replace(" ", "_"))
+                    return extract[:1800], page_url
+                return None
+
             response = await client.get(
                 "https://zh.moegirl.org.cn/api.php",
-                params={
-                    "action": "query",
-                    "generator": "search",
-                    "gsrsearch": query,
-                    "gsrnamespace": "0",
-                    "gsrlimit": "8",
-                    "prop": "info|extracts|categories",
-                    "inprop": "url",
-                    "exintro": "1",
-                    "explaintext": "1",
-                    "exsentences": "8",
-                    "cllimit": "max",
-                    "format": "json",
-                    "formatversion": "2",
-                },
+                params={**api_params, "titles": "|".join(_moegirl_title_candidates(character))},
             )
             response.raise_for_status()
-            pages_payload = response.json().get("query", {}).get("pages", [])
+            profile = await matching_profile(_moegirl_pages(response.json()))
+            if profile is not None:
+                return profile
+
+            for query in _moegirl_search_queries(character):
+                response = await client.get(
+                    "https://zh.moegirl.org.cn/api.php",
+                    params={
+                        **api_params,
+                        "generator": "search",
+                        "gsrsearch": query,
+                        "gsrnamespace": "0",
+                        "gsrlimit": "10",
+                    },
+                )
+                response.raise_for_status()
+                profile = await matching_profile(_moegirl_pages(response.json()))
+                if profile is not None:
+                    return profile
     except (httpx.HTTPError, ValueError, AttributeError):
         return None
-
-    pages = list(pages_payload.values()) if isinstance(pages_payload, dict) else pages_payload
-    if not isinstance(pages, list):
-        return None
-    series_terms = _series_match_terms(character)
-    for page in pages:
-        if not isinstance(page, dict):
-            continue
-        title = str(page.get("title") or "")
-        extract = re.sub(r"\s+", " ", str(page.get("extract") or "")).strip()
-        categories = " ".join(
-            str(item.get("title") or "")
-            for item in page.get("categories", [])
-            if isinstance(item, dict)
-        )
-        evidence = _normalize(f"{title} {extract} {categories}")
-        if not _candidate_name_matches(character, tuple(character.aliases), [title]):
-            continue
-        if series_terms and not any(term in evidence for term in series_terms):
-            continue
-        if not extract:
-            continue
-        page_url = str(page.get("fullurl") or "")
-        if not page_url:
-            page_url = "https://zh.moegirl.org.cn/" + quote(title.replace(" ", "_"))
-        return extract[:1800], page_url
     return None
 
 
@@ -320,7 +400,12 @@ async def resolve_anime_character_profile(
     The model is only asked to rewrite supplied evidence; it is not allowed to
     invent a biography or pretend that an unavailable source was consulted.
     """
-    cache_key = (character.name, callable(getattr(llm, "ask", None)))
+    cache_key = (
+        character.name,
+        callable(getattr(llm, "ask", None)),
+        settings.anime_moegirl_only,
+        settings.moegirl_image_provider_enabled,
+    )
     cached = _ANIME_PROFILE_CACHE.get(cache_key)
     if cached:
         return cached
@@ -340,13 +425,14 @@ async def resolve_anime_character_profile(
         f"{character.name} {character.series} character profile",
     )
     search_results = []
-    for query in queries:
-        try:
-            search_results = await search_web(query, limit=6, timeout=7)
-        except (httpx.HTTPError, RuntimeError, ValueError):
-            search_results = []
-        if search_results:
-            break
+    if not settings.anime_moegirl_only:
+        for query in queries:
+            try:
+                search_results = await search_web(query, limit=6, timeout=7)
+            except (httpx.HTTPError, RuntimeError, ValueError):
+                search_results = []
+            if search_results:
+                break
     evidence.extend(_profile_search_evidence(character, search_results))
     source_urls.extend(
         result.url
@@ -2127,14 +2213,7 @@ async def _moegirl_image(
 
     timeout = max(3.0, min(float(settings.media_timeout_seconds), 10.0))
     headers = {"User-Agent": "qq-chatrobot/0.1 (image attribution resolver)"}
-    series = character.series.strip("《》 ")
-    queries = tuple(
-        dict.fromkeys(
-            f"{name} {series}"
-            for name in (character.name, *character.aliases, *aliases)
-            if name.strip()
-        )
-    )[:8]
+    queries = _moegirl_search_queries(character)
     series_terms = _series_match_terms(character)
     saw_pages = False
     async with httpx.AsyncClient(
@@ -2142,91 +2221,103 @@ async def _moegirl_image(
         follow_redirects=True,
         headers=headers,
     ) as client:
+        async def matching_image(pages: list[dict]) -> ImageResolution | None:
+            for page in pages:
+                if page.get("missing") or _is_moegirl_disambiguation(page):
+                    continue
+                title = str(page.get("title") or "")
+                evidence_text = _moegirl_page_evidence(page)
+                normalized_evidence = _normalize(evidence_text)
+                # The requested work name is not evidence; only content from
+                # the returned page can establish the character's series.
+                if not _candidate_name_matches(character, aliases, [title]):
+                    continue
+                if series_terms and not any(term in normalized_evidence for term in series_terms):
+                    continue
+                original = page.get("original")
+                thumbnail = page.get("thumbnail")
+                image_urls = tuple(dict.fromkeys(
+                    str(image.get("source") or "")
+                    for image in (original, thumbnail)
+                    if isinstance(image, dict) and image.get("source")
+                ))
+                page_url = str(page.get("fullurl") or "")
+                if not page_url:
+                    page_url = "https://zh.moegirl.org.cn/" + quote(title.replace(" ", "_"))
+                for image_url in image_urls:
+                    try:
+                        data = await _download_image(client, image_url, page_url, settings)
+                    except (httpx.HTTPError, RuntimeError, OSError, ValueError):
+                        continue
+                    return ImageResolution(
+                        data=data,
+                        provider="萌娘百科",
+                        source_page_url=page_url,
+                        image_url=image_url,
+                        label=title,
+                        evidence=(
+                            "角色名/别名命中条目标题；作品名命中条目标题、简介或分类："
+                            + evidence_text[:400]
+                        ),
+                    )
+            return None
+
+        api_params = {
+            "action": "query",
+            "redirects": "1",
+            "prop": "pageimages|info|extracts|categories|pageprops",
+            "ppprop": "disambiguation",
+            "piprop": "original|thumbnail",
+            "pithumbsize": "1200",
+            "inprop": "url",
+            "exintro": "1",
+            "explaintext": "1",
+            "exsentences": "3",
+            "cllimit": "max",
+            "format": "json",
+            "formatversion": "2",
+        }
+        # Exact titles/aliases are both faster and more precise than a broad
+        # search for the common case. Search remains a fallback for redirects
+        # or disambiguated titles.
+        try:
+            response = await client.get(
+                "https://zh.moegirl.org.cn/api.php",
+                params={**api_params, "titles": "|".join(_moegirl_title_candidates(character))},
+            )
+            response.raise_for_status()
+            pages = _moegirl_pages(response.json())
+        except (httpx.HTTPError, ValueError, AttributeError):
+            pages = []
+        saw_pages = bool(pages)
+        direct_result = await matching_image(pages)
+        if direct_result is not None:
+            return direct_result
+
         for query in queries:
             try:
                 response = await client.get(
                     "https://zh.moegirl.org.cn/api.php",
                     params={
-                        "action": "query",
+                        **api_params,
                         "generator": "search",
                         "gsrsearch": query,
                         "gsrnamespace": "0",
                         "gsrlimit": "10",
-                        "prop": "pageimages|info|extracts|categories",
-                        "piprop": "original|thumbnail",
-                        "pithumbsize": "1200",
-                        "inprop": "url",
-                        "exintro": "1",
-                        "explaintext": "1",
-                        "exsentences": "3",
-                        "cllimit": "max",
-                        "format": "json",
-                        "formatversion": "2",
                     },
                 )
                 response.raise_for_status()
-                pages_payload = response.json().get("query", {}).get("pages", [])
-                if isinstance(pages_payload, dict):
-                    pages = list(pages_payload.values())
-                else:
-                    pages = pages_payload
+                pages = _moegirl_pages(response.json())
             except (httpx.HTTPError, ValueError, AttributeError):
                 continue
-
-            if not isinstance(pages, list):
-                continue
             saw_pages = saw_pages or bool(pages)
-            for page in pages:
-                if not isinstance(page, dict):
-                    continue
-                title = str(page.get("title") or "")
-                category_titles = [
-                    str(item.get("title") or "")
-                    for item in page.get("categories", [])
-                    if isinstance(item, dict)
-                ]
-                evidence_text = " ".join(
-                    (title, query, str(page.get("extract") or ""), *category_titles)
-                )
-                normalized_evidence = _normalize(evidence_text)
-                # Identity must be in the page title; work evidence may live
-                # in the intro/categories because many correct character pages
-                # (for example “丛雨”) intentionally use only the name as title.
-                if not _candidate_name_matches(character, aliases, [title]):
-                    continue
-                if not any(term in normalized_evidence for term in series_terms):
-                    continue
-                original = page.get("original")
-                thumbnail = page.get("thumbnail")
-                image_url = ""
-                if isinstance(original, dict):
-                    image_url = str(original.get("source") or "")
-                if not image_url and isinstance(thumbnail, dict):
-                    image_url = str(thumbnail.get("source") or "")
-                if not image_url:
-                    continue
-                page_url = str(page.get("fullurl") or "")
-                if not page_url:
-                    page_url = "https://zh.moegirl.org.cn/" + quote(title.replace(" ", "_"))
-                try:
-                    data = await _download_image(client, image_url, page_url, settings)
-                except (httpx.HTTPError, RuntimeError, OSError, ValueError):
-                    continue
-                return ImageResolution(
-                    data=data,
-                    provider="萌娘百科",
-                    source_page_url=page_url,
-                    image_url=image_url,
-                    label=title,
-                    evidence=(
-                        "角色名/别名命中条目标题；作品名命中条目标题、简介或分类："
-                        + evidence_text[:400]
-                    ),
-                )
+            search_result = await matching_image(pages)
+            if search_result is not None:
+                return search_result
     # Keep the remote branch's direct/work-page strategy as a last resort, but
     # adapt its legacy string payload to the shared provenance contract.
     legacy_data = None
-    if not saw_pages:
+    if not saw_pages and not settings.anime_moegirl_only:
         legacy_data = await _moegirl_legacy_image(character, aliases, settings)
     if legacy_data:
         page_url = "https://zh.moegirl.org.cn/" + quote(character.name)
@@ -2247,7 +2338,10 @@ def _anime_image_cache_path(
     cache_dir = Path(settings.anime_image_cache_dir).expanduser().resolve()
     cache_dir.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256(
-        f"{ANIME_IMAGE_CACHE_VERSION}|{character.name}|{character.series}".encode()
+        (
+            f"{ANIME_IMAGE_CACHE_VERSION}|moegirl_only={settings.anime_moegirl_only}"
+            f"|{character.name}|{character.series}"
+        ).encode()
     ).hexdigest()[:24]
     return cache_dir / f"{digest}.jpg"
 
@@ -2535,8 +2629,29 @@ async def resolve_anime_character_image(
     """
 
     cached = _load_anime_image_cache(character, settings)
-    if cached is not None:
+    if cached is not None and (
+        not settings.anime_moegirl_only or _verified_moegirl_image(cached)
+    ):
         return cached
+
+    if settings.anime_moegirl_only:
+        if not settings.moegirl_image_provider_enabled:
+            raise RuntimeError("二次元图鉴限定萌娘百科来源，但萌娘百科图片提供方尚未启用")
+        timeout = max(0.2, min(float(settings.anime_image_resolve_timeout_seconds), 30.0))
+        try:
+            async with asyncio.timeout(timeout):
+                moegirl = await _moegirl_image(character, tuple(character.aliases), settings)
+        except (TimeoutError, httpx.HTTPError, RuntimeError, OSError, ValueError) as exc:
+            raise RuntimeError(
+                f"萌娘百科暂无法获取“{character.name}”的图片：{exc}"
+            ) from exc
+        if moegirl is None or not _verified_moegirl_image(moegirl):
+            raise RuntimeError(
+                f"萌娘百科暂未找到“{character.name}”的可下载图片；"
+                "可能是条目无图或图片服务器不可达"
+            )
+        _save_anime_image_cache(character, settings, moegirl)
+        return moegirl
 
     aliases = tuple(character.aliases)
     # Do not hammer every remote provider at the same time. Some of the

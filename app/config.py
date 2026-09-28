@@ -85,6 +85,9 @@ class Settings(BaseSettings):
     # Moegirl restricts automated/off-site image use. Keep disabled until the
     # deployer has obtained the permissions required for their bot/use case.
     moegirl_image_provider_enabled: bool = False
+    # When enabled, anime character profiles/images never borrow another
+    # website's content or label a non-Moegirl cache entry as Moegirl.
+    anime_moegirl_only: bool = False
     # Optional image-generation provider. The endpoint follows the OpenAI
     # /v1/images/generations response shape (data[].b64_json or data[].url).
     image_generation_enabled: bool = False
@@ -110,6 +113,10 @@ class Settings(BaseSettings):
     voice_name: str = "alloy"
     voice_profile_default: str = "murasame"
     voice_supports_language_fields: bool = False
+    # Comma-separated profile IDs licensed only for the configured primary
+    # OneBot account. Restricted profiles fail closed when event self_id is
+    # absent or differs from ONEBOT_SELF_ID.
+    voice_primary_account_profile_ids: str = ""
     # JSON object keyed by a safe internal id. User-facing menus only show
     # the character label and supported languages.
     voice_profiles_json: str = (

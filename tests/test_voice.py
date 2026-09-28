@@ -19,6 +19,7 @@ from app.services.voice import (
     selected_gpt_sovits_weight,
     synthesize_voice,
     validate_voice_text_language,
+    voice_profile_authorized,
     voice_profile_menu,
     voice_profiles,
 )
@@ -47,6 +48,34 @@ def test_character_menu_hides_internal_profile_ids_and_supports_character_name()
     assert "音色" not in menu
     assert resolve_character_profile(settings, "小丛雨") == "murasame"
     assert resolve_character_profile(settings, "murasame") == "murasame"
+
+
+@pytest.mark.asyncio
+async def test_account_scoped_voice_profile_is_hidden_and_cannot_synthesize():
+    settings = Settings(
+        _env_file=None,
+        onebot_self_id="primary-test-id",
+        onebot_self_id_2="secondary-test-id",
+        voice_enabled=True,
+        voice_api_url="http://127.0.0.1:1",
+        voice_primary_account_profile_ids="yoshino,mako",
+        voice_profiles_json=json.dumps({
+            "murasame": {"label": "小丛雨"},
+            "yoshino": {"label": "芳乃"},
+            "mako": {"label": "茉子"},
+        }),
+    )
+    assert voice_profile_authorized(settings, "yoshino", "primary-test-id")
+    assert not voice_profile_authorized(settings, "yoshino", "secondary-test-id")
+    assert not voice_profile_authorized(settings, "yoshino", None)
+    assert "芳乃" in voice_profile_menu(settings, "primary-test-id")
+    assert "芳乃" not in voice_profile_menu(settings, "secondary-test-id")
+    assert resolve_character_profile(settings, "芳乃", "secondary-test-id") is None
+    assert resolve_character_profile(settings, "芳乃", "primary-test-id") == "yoshino"
+    with pytest.raises(RuntimeError, match="指定机器人账号"):
+        await synthesize_voice(
+            "你好", settings, profile_name="yoshino", bot_self_id="secondary-test-id"
+        )
 
 
 def test_detect_speech_language_for_chinese_and_english():
