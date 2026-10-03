@@ -22,9 +22,17 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--seed-root", type=Path, required=True)
     parser.add_argument("--source", type=Path, required=True, help="Separated original vocal")
     parser.add_argument("--converted", type=Path, required=True, help="Converted vocal")
-    parser.add_argument("--reference", type=Path, required=True, help="Target speaker recording")
+    parser.add_argument("--reference", type=Path, required=True, help="Conversion prompt / target speaker recording")
+    parser.add_argument(
+        "--identity-reference", type=Path,
+        help="Optional independent target identity recording; adds a diagnostic similarity score",
+    )
     parser.add_argument("--output", type=Path, required=True, help="JSON report path")
     parser.add_argument("--max-pitch-cents", type=float, default=100)
+    parser.add_argument(
+        "--expected-semitone-shift", type=int, choices=range(-6, 7), default=0,
+        help="Expected source-to-converted pitch shift for controlled transposition checks",
+    )
     parser.add_argument("--min-within-semitone", type=float, default=0.70)
     parser.add_argument("--min-voiced-recall", type=float, default=0.70)
     parser.add_argument("--max-duration-error", type=float, default=0.03)
@@ -103,7 +111,16 @@ def _evaluate(args: argparse.Namespace) -> dict:
     source = args.source.resolve(strict=True)
     converted = args.converted.resolve(strict=True)
     reference = args.reference.resolve(strict=True)
-    if not all(path.is_file() for path in (source, converted, reference)):
+    identity_reference = (
+        args.identity_reference.resolve(strict=True)
+        if args.identity_reference is not None else None
+    )
+    if identity_reference == reference and args.identity_reference is not None:
+        raise ValueError("--identity-reference must be a separate file from --reference")
+    input_paths = (source, converted, reference) + (
+        (identity_reference,) if identity_reference is not None else ()
+    )
+    if not all(path.is_file() for path in input_paths):
         raise ValueError("All input paths must be audio files")
     # Keep this project's ``app`` package ahead of Seed-VC's ``app.py``.
     sys.path.insert(1, str(seed_root))
@@ -129,13 +146,24 @@ def _evaluate(args: argparse.Namespace) -> dict:
     source_16k, _ = librosa.load(source, sr=16000, mono=True)
     converted_16k, _ = librosa.load(converted, sr=16000, mono=True)
     reference_16k, _ = librosa.load(reference, sr=16000, mono=True)
+    identity_reference_16k = (
+        librosa.load(identity_reference, sr=16000, mono=True)[0]
+        if identity_reference is not None else None
+    )
     converted_native, _ = librosa.load(converted, sr=None, mono=True)
-    if not source_16k.size or not converted_16k.size or not reference_16k.size:
+    if (
+        not source_16k.size or not converted_16k.size or not reference_16k.size
+        or (identity_reference_16k is not None and not identity_reference_16k.size)
+    ):
         raise ValueError("One of the audio files is empty")
 
     source_f0 = _infer_f0(rmvpe, source_16k)
     converted_f0 = _infer_f0(rmvpe, converted_16k)
     reference_embedding = _speaker_embedding(campplus, reference_16k, device)
+    identity_reference_embedding = (
+        _speaker_embedding(campplus, identity_reference_16k, device)
+        if identity_reference_16k is not None else None
+    )
     converted_embedding = _speaker_embedding(campplus, converted_16k, device)
     report = compute_quality_report(
         source_f0,
@@ -145,6 +173,8 @@ def _evaluate(args: argparse.Namespace) -> dict:
         converted_16k.size / 16000,
         reference_embedding,
         converted_embedding,
+        identity_reference_embedding=identity_reference_embedding,
+        expected_semitone_shift=args.expected_semitone_shift,
     )
     failures = quality_failures(
         report,
@@ -157,7 +187,12 @@ def _evaluate(args: argparse.Namespace) -> dict:
         min_voice_similarity=args.min_voice_similarity,
         min_source_voiced_frames=args.min_source_voiced_frames,
     )
-    return {"accepted": not failures, "failures": failures, **report}
+    return {
+        "accepted": not failures,
+        "failures": failures,
+        "voice_similarity_basis": "conversion_prompt",
+        **report,
+    }
 
 
 def main() -> int:

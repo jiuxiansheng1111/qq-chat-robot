@@ -171,6 +171,10 @@ class Settings(BaseSettings):
     singing_ffmpeg_path: str = "./data/singing/runtime/bin/ffmpeg.exe"
     singing_ffprobe_path: str = "./data/singing/runtime/bin/ffprobe.exe"
     singing_use_trained_tts_reference: bool = True
+    # Seed-VC should condition Murasame's song conversion on an original game
+    # recording; keep trained TTS references available for the other profiles.
+    singing_real_reference_profile_ids: str = "murasame"
+    singing_reference_audio_by_profile_json: str = "{}"
     singing_chunk_seconds: float = Field(default=55, gt=0, le=55)
     singing_max_song_seconds: float = Field(default=600, gt=0, le=1800)
     singing_max_source_bytes: int = Field(default=104857600, gt=0, le=524288000)

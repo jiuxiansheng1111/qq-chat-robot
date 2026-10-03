@@ -215,7 +215,25 @@ async def prepare_voice_reference(
     ):
         raise SingingPipelineError("当前机器人不可使用这个角色音色。")
     profile = profiles[profile_id]
-    if settings.singing_use_trained_tts_reference:
+    real_reference_profiles = {
+        item.strip()
+        for item in settings.singing_real_reference_profile_ids.split(",")
+        if item.strip()
+    }
+    try:
+        reference_overrides = json.loads(settings.singing_reference_audio_by_profile_json or "{}")
+    except (TypeError, ValueError) as exc:
+        raise SingingPipelineError("翻唱参考录音配置不是有效的 JSON。") from exc
+    if not isinstance(reference_overrides, dict):
+        raise SingingPipelineError("翻唱参考录音配置应为角色到录音路径的映射。")
+    override = reference_overrides.get(profile_id)
+    if override is not None and (not isinstance(override, str) or not override.strip()):
+        raise SingingPipelineError("这个角色的翻唱参考录音路径无效。")
+    if (
+        settings.singing_use_trained_tts_reference
+        and profile_id not in real_reference_profiles
+        and override is None
+    ):
         # The trained speech model produces the timbre reference only. The
         # song's timing and pitch come from the original singing, never TTS.
         supported = profile.get("supported_languages") or ["zh"]
@@ -242,7 +260,7 @@ async def prepare_voice_reference(
         target = job_dir / "voice_reference.wav"
         target.write_bytes(data)
         return target
-    value = str(profile.get("ref_audio_path") or "")
+    value = str(override or profile.get("ref_audio_path") or "")
     path = _project_path(value)
     if not value or not path.is_file():
         raise SingingPipelineError("这个角色缺少可用的音色参考录音。")

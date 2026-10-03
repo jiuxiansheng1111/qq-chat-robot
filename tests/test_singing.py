@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -44,16 +45,65 @@ def test_qq_chunk_limit_is_validated_even_when_config_is_wrong():
 
 
 @pytest.mark.asyncio
-async def test_trained_tts_provides_voice_reference_without_reading_song_lyrics(tmp_path, monkeypatch):
-    settings = Settings(voice_profiles_json='{"murasame":{"label":"小丛雨","supported_languages":["zh"]}}')
+async def test_trained_tts_reference_remains_available_for_other_profiles(tmp_path, monkeypatch):
+    settings = Settings(
+        voice_profiles_json='{"yoshino":{"label":"芳乃","supported_languages":["zh"]}}',
+        voice_primary_account_profile_ids="",
+    )
     synth = AsyncMock(return_value="base64://" + base64.b64encode(b"test-wave").decode())
     monkeypatch.setattr("app.services.singing.synthesize_voice", synth)
-    path = await prepare_voice_reference("murasame", tmp_path, settings, "bot")
+    path = await prepare_voice_reference("yoshino", tmp_path, settings, "bot")
     assert path.read_bytes() == b"test-wave"
     args, kwargs = synth.call_args
     assert "声音" in args[0]
     assert kwargs["target_language"] == "zh"
     assert kwargs["bot_self_id"] == "bot"
+
+
+@pytest.mark.asyncio
+async def test_murasame_uses_original_game_recording_as_singing_reference(tmp_path, monkeypatch):
+    original = tmp_path / "murasame-ja.wav"
+    original.write_bytes(b"game-recording")
+    settings = Settings(
+        voice_profiles_json=json.dumps(
+            {"murasame": {"label": "小丛雨", "supported_languages": ["zh"], "ref_audio_path": str(original)}}
+        )
+    )
+    synth = AsyncMock()
+    monkeypatch.setattr("app.services.singing.synthesize_voice", synth)
+    reference = await prepare_voice_reference("murasame", tmp_path, settings, "bot")
+    assert reference == original
+    assert not synth.await_count
+
+
+@pytest.mark.asyncio
+async def test_singing_reference_override_does_not_modify_chat_reference(tmp_path, monkeypatch):
+    original = tmp_path / "original.wav"
+    original.write_bytes(b"original")
+    cute = tmp_path / "cute.wav"
+    cute.write_bytes(b"cute")
+    profiles = {"murasame": {"label": "丛雨", "ref_audio_path": str(original)}}
+    settings = Settings(
+        voice_profiles_json=json.dumps(profiles),
+        singing_reference_audio_by_profile_json=json.dumps({"murasame": str(cute)}),
+    )
+    synth = AsyncMock()
+    monkeypatch.setattr("app.services.singing.synthesize_voice", synth)
+    reference = await prepare_voice_reference("murasame", tmp_path, settings, "bot")
+    assert reference == cute
+    assert json.loads(settings.voice_profiles_json)["murasame"]["ref_audio_path"] == str(original)
+    assert not synth.await_count
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", ["[1]", "invalid", '{"murasame":123}'])
+async def test_bad_reference_overrides_raise_safe_configuration_errors(tmp_path, value):
+    settings = Settings(
+        voice_profiles_json='{"murasame":{"label":"丛雨"}}',
+        singing_reference_audio_by_profile_json=value,
+    )
+    with pytest.raises(SingingPipelineError, match="配置|路径"):
+        await prepare_voice_reference("murasame", tmp_path, settings, "bot")
 
 
 @pytest.mark.asyncio

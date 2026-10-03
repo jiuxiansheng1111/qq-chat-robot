@@ -2,6 +2,7 @@ import json
 from argparse import Namespace
 
 import numpy as np
+import pytest
 
 from app.services.singing_quality import (
     compute_quality_report,
@@ -11,7 +12,10 @@ from app.services.singing_quality import (
 from scripts import check_singing_quality
 
 
-def _report(source_f0, converted_f0, *, audio=None, reference=None, converted=None, duration=2.0):
+def _report(
+    source_f0, converted_f0, *, audio=None, reference=None, converted=None,
+    identity_reference=None, expected_semitone_shift=0, duration=2.0,
+):
     if audio is None:
         audio = np.full(32000, 0.1)
     if reference is None:
@@ -26,6 +30,11 @@ def _report(source_f0, converted_f0, *, audio=None, reference=None, converted=No
         duration,
         np.asarray(reference, dtype=float),
         np.asarray(converted, dtype=float),
+        identity_reference_embedding=(
+            np.asarray(identity_reference, dtype=float)
+            if identity_reference is not None else None
+        ),
+        expected_semitone_shift=expected_semitone_shift,
     )
 
 
@@ -66,6 +75,61 @@ def test_missing_voiced_frames_and_accompaniment_fail():
     assert no_vocal["source_voiced_frames"] == 0
     assert no_vocal["pitch_median_cents"] is None
     assert "原始人声的有声帧不足" in quality_failures(no_vocal)
+
+
+def test_voiced_precision_reports_conversion_only_voicing_without_changing_gate():
+    source = np.concatenate([np.zeros(50), np.full(100, 220.0), np.zeros(50)])
+    converted = np.concatenate([np.full(150, 220.0), np.zeros(50)])
+    report = _report(source, converted)
+    assert report["voiced_recall"] == 1
+    assert report["voiced_precision"] == 100 / 150
+    assert "转换后保留的有声帧比例不足" not in quality_failures(report)
+
+
+def test_expected_pitch_shift_uses_transposed_source_and_reports_median_hz():
+    source = np.full(200, 220.0)
+    shift = 3
+    converted = source * 2 ** (shift / 12)
+
+    unshifted_report = _report(source, converted)
+    shifted_report = _report(source, converted, expected_semitone_shift=shift)
+
+    assert unshifted_report["pitch_median_cents"] == pytest.approx(300)
+    assert shifted_report["pitch_median_cents"] == pytest.approx(0, abs=1e-8)
+    assert shifted_report["source_voiced_median_f0_hz"] == pytest.approx(220)
+    assert shifted_report["converted_voiced_median_f0_hz"] == pytest.approx(converted[0])
+    assert shifted_report["expected_semitone_shift"] == 3
+    assert "转换后音高偏差过大" not in quality_failures(shifted_report)
+
+
+def test_identity_similarity_uses_held_out_embedding_and_keeps_prompt_score():
+    f0 = np.full(200, 220.0)
+    report = _report(
+        f0, f0, reference=np.array([1.0, 0.0]),
+        identity_reference=np.array([0.0, 1.0]), converted=np.array([0.0, 1.0]),
+    )
+    assert report["voice_similarity"] == 0
+    assert report["identity_reference_similarity"] == 1
+
+
+def test_identity_reference_cli_option_is_optional(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "check_singing_quality.py",
+            "--seed-root", "seed",
+            "--source", "source.wav",
+            "--converted", "converted.wav",
+            "--reference", "prompt.wav",
+            "--identity-reference", "held-out.wav",
+            "--expected-semitone-shift", "3",
+            "--output", "quality.json",
+        ],
+    )
+    args = check_singing_quality._parse_args()
+    assert str(args.reference) == "prompt.wav"
+    assert str(args.identity_reference) == "held-out.wav"
+    assert args.expected_semitone_shift == 3
 
 
 def test_f0_delay_search_aligns_up_to_100_ms():

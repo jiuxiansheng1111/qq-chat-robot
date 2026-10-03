@@ -42,6 +42,8 @@ flowchart TD
 
 安装完成后，在 `.env` 设置 `SINGING_ENABLED=true`。默认运行路径由 `SINGING_PYTHON`、`SINGING_SEED_ROOT`、`SINGING_FFMPEG_PATH`、`SINGING_FFPROBE_PATH` 指定；默认值均已列在 `.env.example`。使用已有 GPT-SoVITS 训练音色合成短参考句时，保持 `SINGING_USE_TRAINED_TTS_REFERENCE=true`，并确保 `VOICE_ENABLED=true`、`VOICE_PROVIDER=gpt_sovits` 及原有语音服务可用。如果只用角色的 `ref_audio_path` 本地录音，设 `SINGING_USE_TRAINED_TTS_REFERENCE=false`。
 
+丛雨默认以真实游戏录音作为翻唱参考，由 `SINGING_REAL_REFERENCE_PROFILE_IDS=murasame` 指定。其它角色仍遵循上述 TTS 参考设置。为翻唱单独选择录音时，可设置 `SINGING_REFERENCE_AUDIO_BY_PROFILE_JSON`，例如 `{"murasame":"data/singing/acceptance/cute-references/murasame_soft_affection_0055_mono44k.wav"}`；路径相对项目根目录，此设置仅供翻唱使用。
+
 | 主要 `.env` 项 | 默认值 | 作用 |
 | --- | --- | --- |
 | `SINGING_HF_OFFLINE` | `false` | 首次下载模型后可设为 `true`，避免每次转换重新向 Hugging Face 检查缓存；仅影响歌声模型加载 |
@@ -104,7 +106,7 @@ data\singing\runtime\.venv\Scripts\python.exe .\scripts\train_singing_voices.py 
 
 角色 ID 使用当前 `VOICE_PROFILES_JSON` 的配置：`murasame`、`yoshino`、`mako`、`aimisi`、`lena`、`roka`、`koharu`。脚本只读取该角色已有训练清单中的音频，规范化为单声道 44.1 kHz WAV；大于 30 秒的音频会切成 25 秒片段，短于 1 秒或无法解码的片段会跳过。需要显式指定清单时，使用 `--manifest` 和对应的 `--audio-root`。仅有参考音频而没有训练清单时会停止，避免把单条参考录音误当完整训练集。
 
-运行完成后，候选权重只写到独立的 `data/singing/candidates.json`，状态为 `candidate_requires_human_review`、`accepted=false`。因此不会覆盖现有角色唱歌配置，也不会自动接入机器人。经过听测验收后，管理员再将候选中的 `checkpoint` 与 `config` 作为该角色新配置复制到 `data/singing/voices.json`，并设置 `accepted=true`、`status=accepted`。同一 `run-name` 可用 `--resume` 训练多轮并更新候选条目；若同一角色存在另一个 run 的候选，脚本会停止，保留该候选供人工归档。
+运行完成后，候选权重只写到独立的 `data/singing/candidates.json`，状态为 `candidate_requires_human_review`、`accepted=false`。因此不会覆盖现有角色唱歌配置，也不会自动接入机器人。经过听测选择后，先把检查点和配置复制到独立的已选版本目录，避免后续训练改写当前正在使用的文件；再将这两个路径登记到 `data/singing/voices.json`，并设置 `accepted=true`、`status=accepted`。同一 `run-name` 可用 `--resume` 训练多轮并更新候选条目；若同一角色存在另一个 run 的候选，脚本会停止，保留该候选供人工归档。
 
 ## 数据和验收边界
 
@@ -113,6 +115,10 @@ data\singing\runtime\.venv\Scripts\python.exe .\scripts\train_singing_voices.py 
 转换时启用 F0 条件，`auto-f0-adjust=false`、半音偏移为 `0`，以保留原唱旋律。建议使用免人声版权风险的测试音频；实际群聊发送仍遵守本机器人现有语音权限和审听流程。
 
 转换后，`check_singing_quality.py` 用 RMVPE 比较原唱人声与转换人声的逐帧 F0（最多校正 100 毫秒固定延迟），用 CAMPPlus 比较多个 5–10 秒窗口的音色向量，并检查时长、音量和削波。默认验收阈值为音高中位偏差 **小于 100 cents**、一半音内比例至少 **0.70**、有声帧召回至少 **0.70**、时长误差不超过 **3%**、RMS 大于 **1e-4**、削波比例小于 **0.01**、目标音色余弦相似度至少 **0.35**。未通过时会增加 15 个 diffusion steps 重试一次；报告写入当前任务目录的 `quality.json` 或 `quality_retry.json`。`SINGING_MAX_PITCH_ERROR_CENTS` 与 `SINGING_MIN_VOICE_SIMILARITY` 可调整对应门槛，但不应靠调阈值掩盖走调。指标只能筛出明显问题，实际歌曲的自然度、咬字和音色仍需听辨。
+
+比较角色身份时，听审 CLI 可传 `--identity-reference` 指定另一条真实角色录音；报告的 `voice_similarity` 仍指生成时的参考，而 `identity_reference_similarity` 指这条独立录音。不同版本应使用相同的独立录音才能比较；独立于转换参考不等于训练未见，需另行核对训练清单。报告同时提供有声帧 precision、原唱及转换后的有声音高中位数，辅助检查额外出现的有声帧和音区差异；这些诊断指标不能证明声音像原角色。
+
+试听对照时，`run_singing_model.py --semitone-shift 3` 可显式升 3 个半音，允许范围为 −6 到 +6，默认 0。质量检查需同步传 `check_singing_quality.py --expected-semitone-shift 3`，混音前还需给伴奏做相同的变调并保持速度。当前群聊生成使用默认原调；此 CLI 参数不会自动改变机器人唱歌设置。
 
 一首完整歌曲会在本地混音后，按歌词时间点或低能量停顿连续切成最长 `SINGING_CHUNK_SECONDS`（默认且最高 55）秒的语音，按顺序发送，不截掉结尾。已发送任务最近 5 份 `cover.wav`、`lyrics.lrc` 和质量报告保存在 `data/singing/results/` 供本地听审；中间人声、伴奏和原曲下载文件会清理。
 

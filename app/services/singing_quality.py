@@ -15,12 +15,18 @@ def cosine_similarity(first: np.ndarray, second: np.ndarray) -> float | None:
     return float(np.clip(np.dot(a, b) / norm, -1, 1)) if norm > 1e-12 else None
 
 
+def _voiced_median_f0(f0: np.ndarray) -> float | None:
+    values = np.asarray(f0, dtype=np.float64).reshape(-1)
+    voiced = values[np.isfinite(values) & (values > 0)]
+    return float(np.median(voiced)) if voiced.size else None
+
+
 def _aligned_pitch_metrics(
     source_f0: np.ndarray,
     converted_f0: np.ndarray,
     f0_hop_seconds: float,
     max_delay_seconds: float,
-) -> tuple[float | None, float, float, int]:
+) -> tuple[float | None, float, float, float | None, int]:
     source = np.asarray(source_f0, dtype=np.float64).reshape(-1)
     converted = np.asarray(converted_f0, dtype=np.float64).reshape(-1)
     if f0_hop_seconds <= 0 or max_delay_seconds < 0:
@@ -28,13 +34,15 @@ def _aligned_pitch_metrics(
     source_voiced = np.isfinite(source) & (source > 0)
     converted_voiced = np.isfinite(converted) & (converted > 0)
     source_voiced_frames = int(np.count_nonzero(source_voiced))
+    converted_voiced_frames = int(np.count_nonzero(converted_voiced))
     if source_voiced_frames == 0:
-        return None, 0.0, 0.0, 0
+        precision = 0.0 if converted_voiced_frames else None
+        return None, 0.0, 0.0, precision, 0
 
     max_delay_frames = round(max_delay_seconds / f0_hop_seconds)
     source_positions = np.arange(len(source))
     best_score: tuple[float, float, float, int] | None = None
-    best_metrics: tuple[float | None, float, float, int] | None = None
+    best_metrics: tuple[float | None, float, float, float | None, int] | None = None
     for shift in range(-max_delay_frames, max_delay_frames + 1):
         converted_positions = source_positions + shift
         in_bounds = (converted_positions >= 0) & (converted_positions < len(converted))
@@ -62,7 +70,8 @@ def _aligned_pitch_metrics(
         )
         if best_score is None or score > best_score:
             best_score = score
-            best_metrics = (median_cents, within_ratio, recall, shift)
+            precision = matched_count / converted_voiced_frames if converted_voiced_frames else None
+            best_metrics = (median_cents, within_ratio, recall, precision, shift)
     assert best_metrics is not None
     return best_metrics
 
@@ -76,21 +85,28 @@ def compute_quality_report(
     reference_embedding: np.ndarray,
     converted_embedding: np.ndarray,
     *,
+    identity_reference_embedding: np.ndarray | None = None,
+    expected_semitone_shift: int = 0,
     f0_hop_seconds: float = 0.01,
     max_delay_seconds: float = 0.1,
 ) -> dict[str, float | int | None]:
     """Compute measurable pitch, voice, length, and waveform checks.
 
-    A missing pitch or speaker estimate is represented by ``None`` and fails
-    the default acceptance check. This report does not measure naturalness.
+    A missing pitch or prompt speaker estimate is represented by ``None`` and
+    fails the default acceptance check. The independent identity score is
+    optional and diagnostic. Speaker cosine is only an embedding proxy; this
+    report does not measure perceived identity or naturalness.
     """
     audio = np.asarray(converted_audio, dtype=np.float64).reshape(-1)
     if source_duration_seconds <= 0 or converted_duration_seconds <= 0 or not audio.size:
         raise ValueError("Audio and both durations must be nonempty and positive")
     if not np.all(np.isfinite(audio)):
         raise ValueError("Converted audio contains non-finite samples")
-    pitch_median, within_ratio, recall, delay_frames = _aligned_pitch_metrics(
-        source_f0, converted_f0, f0_hop_seconds, max_delay_seconds
+    pitch_source_f0 = np.asarray(source_f0, dtype=np.float64).reshape(-1).copy()
+    source_voiced = np.isfinite(pitch_source_f0) & (pitch_source_f0 > 0)
+    pitch_source_f0[source_voiced] *= 2 ** (expected_semitone_shift / 12)
+    pitch_median, within_ratio, recall, precision, delay_frames = _aligned_pitch_metrics(
+        pitch_source_f0, converted_f0, f0_hop_seconds, max_delay_seconds
     )
     source_voiced_frames = int(
         np.count_nonzero(np.isfinite(source_f0) & (np.asarray(source_f0) > 0))
@@ -99,7 +115,15 @@ def compute_quality_report(
         "pitch_median_cents": pitch_median,
         "pitch_within_semitone_ratio": within_ratio,
         "voiced_recall": recall,
+        "voiced_precision": precision,
+        "source_voiced_median_f0_hz": _voiced_median_f0(source_f0),
+        "converted_voiced_median_f0_hz": _voiced_median_f0(converted_f0),
+        "expected_semitone_shift": expected_semitone_shift,
         "voice_similarity": cosine_similarity(reference_embedding, converted_embedding),
+        "identity_reference_similarity": (
+            cosine_similarity(identity_reference_embedding, converted_embedding)
+            if identity_reference_embedding is not None else None
+        ),
         "duration_ratio": float(converted_duration_seconds / source_duration_seconds),
         "source_voiced_frames": source_voiced_frames,
         "converted_rms": float(np.sqrt(np.mean(np.square(audio)))),
