@@ -25,6 +25,10 @@ def rps_winner(left: str, right: str) -> str:
     return _RPS_BEATS.get((left, right)) or _RPS_BEATS.get((right, left)) or ""
 
 
+
+
+
+
 def _extract_rps_choices(text: str) -> list[str]:
     lowered = str(text or "").casefold()
     matches: list[tuple[int, str]] = []

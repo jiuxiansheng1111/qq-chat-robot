@@ -227,14 +227,75 @@
   {
     "name": "鞍马小春",
     "series": "《千恋＊万花》",
-    "description": "《千恋＊万花》中的主要或代表性角色。",
-    "aliases": []
+    "description": "有地将臣的表妹，比将臣小一岁，在甜品店打工；性格明亮温和，对哥哥廉太郎格外严厉。",
+    "aliases": [
+      "鞍馬小春",
+      "Koharu Kurama"
+    ]
   },
   {
     "name": "马庭芦花",
     "series": "《千恋＊万花》",
-    "description": "《千恋＊万花》中的主要或代表性角色。",
-    "aliases": []
+    "description": "有地将臣年长的青梅竹马，经营家里的甜点店；常装成熟，实际上对恋爱并不熟悉。",
+    "aliases": [
+      "馬庭芦花",
+      "Maniwa Roka"
+    ]
+  },
+  {
+    "name": "驹川美津叶",
+    "series": "《千恋＊万花》",
+    "description": "穗织的女医生，出身医生世家，也负责芳乃的诊疗；性格冷静可靠。",
+    "aliases": [
+      "駒川みづは",
+      "駒川美津葉",
+      "驹川美津羽",
+      "驹川三叶",
+      "Komakawa Mizuha",
+      "Mizuha Komakawa"
+    ]
+  },
+  {
+    "name": "中条比奈实",
+    "series": "《千恋＊万花》",
+    "description": "鹈茅学院的教师，是将臣等人的班主任；与穗织的学生们有日常交集。",
+    "aliases": [
+      "中条比奈実",
+      "Chujo Hinami",
+      "Chūjō Hinami"
+    ]
+  },
+  {
+    "name": "猪谷心子",
+    "series": "《千恋＊万花》",
+    "description": "志那都庄的女将，负责旅馆日常经营；待人亲切，是穗织生活圈的重要一员。",
+    "aliases": [
+      "猪谷もとこ",
+      "猪谷 もとこ",
+      "Inotani Motoko",
+      "Motoko Inotani"
+    ]
+  },
+  {
+    "name": "朝武秋穗",
+    "series": "《千恋＊万花》",
+    "description": "朝武芳乃的母亲；她与芳乃承担巫女职责的经历及朝武家的故事相关。",
+    "aliases": [
+      "朝武秋穂",
+      "Tomotake Akiho",
+      "Akiho Tomotake"
+    ]
+  },
+  {
+    "name": "丛云",
+    "series": "《千恋＊万花》",
+    "description": "穗织传说中的女神角色，与朝武家祖先及神刀丛雨丸的起源有关。",
+    "aliases": [
+      "叢雲",
+      "丛云女神",
+      "叢雲女神",
+      "Murakumo"
+    ]
   },
   {
     "name": "三司绫濑",

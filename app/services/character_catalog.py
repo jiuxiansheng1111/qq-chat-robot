@@ -41,7 +41,7 @@ def character_catalog_menu(ultraman_count: int, anime_count: int) -> str:
         "│  @我 查询二次元角色 雷姆\n"
         "│\n"
         "│  两类收藏独立统计，本命不会混在一起。\n"
-        "┗ 直接 @我 + 角色名 也可以查看资料 ┛"
+        "┗ @我 + 角色名看图；“介绍一下 角色名”查图鉴或联网背景 ┛"
     )
 
 

@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.prepare_character_voice_dataset as dataset_module
 from scripts.prepare_character_voice_dataset import prepare_dataset
 
 
@@ -44,6 +45,30 @@ def test_prepare_mixed_character_dataset_from_reviewed_jsonl(tmp_path: Path):
     assert lines[0].endswith("|aimisi|zh|你好。")
     assert lines[1].endswith("|aimisi|ja|こんにちは。")
     assert (tmp_path / "aimisi" / "audio" / "aimisi_0001.wav").is_file()
+
+
+def test_transient_windows_directory_lock_is_retried(monkeypatch, tmp_path: Path):
+    staged = tmp_path / ".staged"
+    staged.mkdir()
+    output = tmp_path / "published"
+    real_replace = dataset_module.os.replace
+    calls = 0
+
+    def replace_with_transient_lock(source: Path, destination: Path):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            error = PermissionError(13, "access denied")
+            error.winerror = 5
+            raise error
+        real_replace(source, destination)
+
+    monkeypatch.setattr(dataset_module.os, "replace", replace_with_transient_lock)
+    dataset_module._publish_staged_directory(staged, output)
+
+    assert calls == 2
+    assert output.is_dir()
+    assert not staged.exists()
 
 
 def test_rejects_escaping_path_and_does_not_publish_dataset(tmp_path: Path):

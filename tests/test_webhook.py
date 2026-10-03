@@ -1,6 +1,8 @@
 import base64
 import hashlib
 import hmac
+import json
+from datetime import datetime
 from io import BytesIO
 from unittest.mock import AsyncMock
 
@@ -57,6 +59,7 @@ from app.main import (
     split_qq_text,
     webhook_token_valid,
 )
+from app.services.anime_character import extract_anime_character_profile_query
 from app.services.image_resolution import ImageResolution
 from app.services.ultraman_encyclopedia import EncyclopediaImage
 
@@ -118,6 +121,12 @@ def test_persona_name_counts_as_direct_address_without_at():
 
     payload = event("穗织幼刀姬，别装死")
     assert murasame_addressed(payload, message_text(payload))
+
+    assert murasame_addressed(
+        event("小丛雨介绍爱弥斯"), "小丛雨介绍爱弥斯"
+    )
+    assert extract_anime_character_profile_query("小丛雨介绍爱弥斯") == "爱弥斯"
+    assert extract_anime_character_profile_query("小青是谁") is None
 
     assert not murasame_addressed(event("今天天气不错"), "今天天气不错")
 
@@ -752,6 +761,197 @@ def test_voice_reply_suppresses_duplicate_text_and_falls_back_on_failure(monkeyp
         settings.onebot_api_base = previous_onebot_api_base
         settings.onebot_self_id = previous_self_id
         settings.voice_enabled = previous_voice_enabled
+
+
+def test_unmentioned_character_invocation_uses_per_member_persona_and_voice(
+    monkeypatch, tmp_path
+):
+    previous_database_path = settings.database_path
+    previous_onebot_api_base = settings.onebot_api_base
+    previous_self_id = settings.onebot_self_id
+    previous_voice_enabled = settings.voice_enabled
+    previous_voice_profiles = settings.voice_profiles_json
+    previous_voice_profile_default = settings.voice_profile_default
+    previous_primary_profiles = settings.voice_primary_account_profile_ids
+    settings.database_path = str(tmp_path / "voice-persona-invocation.db")
+    settings.onebot_api_base = ""
+    settings.onebot_self_id = "bot-1"
+    settings.voice_enabled = True
+    settings.voice_profile_default = "murasame"
+    settings.voice_primary_account_profile_ids = ""
+    settings.voice_profiles_json = json.dumps(
+        {
+            "murasame": {"label": "小丛雨"},
+            "yoshino": {"label": "芳乃"},
+            "mako": {"label": "茉子"},
+            "roka": {"label": "芦花"},
+        },
+        ensure_ascii=False,
+    )
+    sent_text: list[tuple[str, str]] = []
+    sent_records: list[tuple[str, str]] = []
+    synthesized_profiles: list[str] = []
+    llm_messages: list[list[dict[str, str]]] = []
+
+    async def fake_send_text(group_id: str, message: str) -> None:
+        sent_text.append((group_id, message))
+
+    async def fake_send_record(group_id: str, record: str) -> bool:
+        sent_records.append((group_id, record))
+        return True
+
+    async def fake_synthesize(*args, **kwargs) -> str:
+        synthesized_profiles.append(args[2])
+        return "base64://voice"
+
+    async def fake_ask(messages: list[dict[str, str]]) -> str:
+        llm_messages.append(messages)
+        if len(llm_messages) == 2:
+            # Simulate another request changing the stored profile while this
+            # response is waiting on the LLM. Its voice must stay on this
+            # request's Mako snapshot.
+            await client.app.state.db.set_voice_profile(
+                "persona-group", "persona-b", "yoshino"
+            )
+        return "我在，想聊什么？"
+
+    monkeypatch.setattr("app.main.send_group_long_message", fake_send_text)
+    monkeypatch.setattr("app.main.send_group_record", fake_send_record)
+    monkeypatch.setattr("app.main.synthesize_voice", fake_synthesize)
+
+    try:
+        with TestClient(app) as client:
+            client.app.state.llm.ask = AsyncMock(side_effect=fake_ask)
+            client.app.state.voice_send_limiter = None
+            first = event("芳乃，陪我聊聊", "persona-group", "persona-a")
+            first["self_id"] = "bot-1"
+            first["message_id"] = "persona-yoshino-no-at"
+            assert post_event(client, first).json()["ok"] is True
+
+            assert len(llm_messages) == 1
+            assert llm_messages[0][0]["content"].count("【当前角色：朝武芳乃】") == 1
+            assert llm_messages[0][-1]["content"] == "陪我聊聊"
+            assert sent_text == [("persona-group", "我在，想聊什么？")]
+            assert client.portal.call(
+                client.app.state.db.voice_profile, "persona-group", "persona-a", "murasame"
+            ) == "yoshino"
+
+            # A second member can summon a different role and receives that
+            # profile's TTS voice without changing the first member's choice.
+            client.portal.call(
+                client.app.state.db.set_voice_mode,
+                "persona-group",
+                "persona-b",
+                True,
+            )
+            second = event("叫茉子出来一下", "persona-group", "persona-b")
+            second["self_id"] = "bot-1"
+            second["message_id"] = "persona-mako-no-at"
+            assert post_event(client, second).json()["ok"] is True
+
+            assert "【当前角色：常陆茉子】" in llm_messages[1][0]["content"]
+            assert llm_messages[1][-1]["content"] == (
+                "有人叫你出来聊聊。请用你自己的身份自然打个招呼。"
+            )
+            assert synthesized_profiles == ["mako"]
+            assert sent_records == [("persona-group", "base64://voice")]
+            assert client.portal.call(
+                client.app.state.db.voice_profile, "persona-group", "persona-a", "murasame"
+            ) == "yoshino"
+            assert client.portal.call(
+                client.app.state.db.voice_profile, "persona-group", "persona-b", "murasame"
+            ) == "yoshino"
+
+            # A role mention in ordinary third-person prose is not a summons.
+            third_person = event("介绍一下芳乃", "other-persona-group", "persona-a")
+            third_person["self_id"] = "bot-1"
+            third_person["message_id"] = "persona-third-person"
+            assert post_event(client, third_person).json()["ok"] is True
+            assert len(llm_messages) == 2
+            assert client.portal.call(
+                client.app.state.db.voice_profile,
+                "other-persona-group",
+                "persona-a",
+                "murasame",
+            ) == "murasame"
+    finally:
+        settings.database_path = previous_database_path
+        settings.onebot_api_base = previous_onebot_api_base
+        settings.onebot_self_id = previous_self_id
+        settings.voice_enabled = previous_voice_enabled
+        settings.voice_profiles_json = previous_voice_profiles
+        settings.voice_profile_default = previous_voice_profile_default
+        settings.voice_primary_account_profile_ids = previous_primary_profiles
+
+
+def test_character_invocation_temporarily_overrides_group_possession(
+    monkeypatch, tmp_path
+):
+    previous_database_path = settings.database_path
+    previous_onebot_api_base = settings.onebot_api_base
+    previous_self_id = settings.onebot_self_id
+    previous_voice_profiles = settings.voice_profiles_json
+    previous_voice_profile_default = settings.voice_profile_default
+    settings.database_path = str(tmp_path / "voice-persona-possession.db")
+    settings.onebot_api_base = ""
+    settings.onebot_self_id = "bot-1"
+    settings.voice_profile_default = "murasame"
+    settings.voice_profiles_json = json.dumps(
+        {
+            "murasame": {"label": "小丛雨"},
+            "yoshino": {"label": "芳乃"},
+        },
+        ensure_ascii=False,
+    )
+    llm_messages: list[list[dict[str, str]]] = []
+
+    async def fake_ask(messages: list[dict[str, str]]) -> str:
+        llm_messages.append(messages)
+        return "我在。"
+
+    monkeypatch.setattr("app.main.send_group_long_message", AsyncMock())
+
+    try:
+        with TestClient(app) as client:
+            client.app.state.llm.ask = AsyncMock(side_effect=fake_ask)
+            group_id = "persona-possession-group"
+            user_id = "persona-possession-user"
+            today = datetime.now().astimezone().date().isoformat()
+            client.portal.call(
+                client.app.state.db.set_targeted_possession,
+                group_id,
+                today,
+                "possessed-member",
+                "被夺舍群友",
+            )
+
+            summoned = event("芳乃", group_id, user_id)
+            summoned["self_id"] = "bot-1"
+            summoned["message_id"] = "persona-possession-summon"
+            assert post_event(client, summoned).json()["ok"] is True
+            assert "【当前角色：朝武芳乃】" in llm_messages[0][0]["content"]
+            assert "【最高优先级身份状态】" not in llm_messages[0][0]["content"]
+
+            # The next addressed turn resumes the still-active group possession.
+            follow_up = event("继续说", group_id, user_id)
+            follow_up["self_id"] = "bot-1"
+            follow_up["message_id"] = "persona-possession-followup"
+            follow_up["message"] = [
+                {"type": "at", "data": {"qq": "bot-1"}},
+                {"type": "text", "data": {"text": "继续说"}},
+            ]
+            assert post_event(client, follow_up).json()["ok"] is True
+            assert "【最高优先级身份状态】" in llm_messages[1][0]["content"]
+            assert "被夺舍群友" in llm_messages[1][0]["content"]
+            assert client.portal.call(
+                client.app.state.db.daily_possession, group_id, today
+            ) == ("possessed-member", "被夺舍群友", "targeted")
+    finally:
+        settings.database_path = previous_database_path
+        settings.onebot_api_base = previous_onebot_api_base
+        settings.onebot_self_id = previous_self_id
+        settings.voice_profiles_json = previous_voice_profiles
+        settings.voice_profile_default = previous_voice_profile_default
 
 
 def test_identity_lookup_uses_opted_in_voice_instead_of_text(monkeypatch, tmp_path):

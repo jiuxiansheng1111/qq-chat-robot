@@ -2,6 +2,8 @@ import html
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -29,6 +31,48 @@ def parse_bing_rss(payload: str, limit: int = 5) -> list[SearchResult]:
         snippet = _plain_text(item.findtext("description", ""))
         if title and urlparse(url).scheme in {"http", "https"}:
             results.append(SearchResult(title, url, snippet[:400]))
+        if len(results) >= limit:
+            break
+    return results
+
+
+def parse_google_news_rss(
+    payload: str,
+    limit: int = 20,
+    *,
+    now: datetime | None = None,
+    max_age_hours: int = 48,
+) -> list[SearchResult]:
+    """Parse only recent Google News items, using RSS publication timestamps."""
+    root = ET.fromstring(payload)
+    current = (now or datetime.now(UTC)).astimezone(UTC)
+    oldest = current - timedelta(hours=max(1, max_age_hours))
+    results: list[SearchResult] = []
+    for item in root.findall(".//item"):
+        title = _plain_text(item.findtext("title", ""))
+        url = (item.findtext("link", "") or "").strip()
+        source = _plain_text(item.findtext("source", ""))
+        published_text = (item.findtext("pubDate", "") or "").strip()
+        try:
+            published = parsedate_to_datetime(published_text)
+            if published.tzinfo is None:
+                published = published.replace(tzinfo=UTC)
+            published = published.astimezone(UTC)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        # Ignore future-dated entries as well as stale search pages. A small
+        # clock-skew allowance keeps legitimate just-published items usable.
+        if published < oldest or published > current + timedelta(minutes=15):
+            continue
+        if not title or urlparse(url).scheme not in {"http", "https"}:
+            continue
+        age = current - published
+        if age < timedelta(hours=1):
+            age_text = f"{max(1, int(age.total_seconds() // 60))} 分钟前"
+        else:
+            age_text = f"{max(1, int(age.total_seconds() // 3600))} 小时前"
+        snippet = f"{source + ' · ' if source else ''}发布于 {age_text}"
+        results.append(SearchResult(title, url, snippet))
         if len(results) >= limit:
             break
     return results
@@ -155,3 +199,56 @@ async def search_web(query: str, limit: int = 5, timeout: float = 12) -> list[Se
     if errors:
         raise RuntimeError("；".join(errors))
     return []
+
+
+async def search_news_feed(
+    topic: str = "TOP",
+    *,
+    limit: int = 20,
+    timeout: float = 12,
+    max_age_hours: int = 48,
+) -> list[SearchResult]:
+    """Fetch a live, timestamped Chinese Google News RSS section."""
+    topic = re.sub(r"[^A-Z]", "", str(topic or "TOP").upper()) or "TOP"
+    allowed_topics = {
+        "TOP",
+        "NATION",
+        "WORLD",
+        "BUSINESS",
+        "TECHNOLOGY",
+        "ENTERTAINMENT",
+        "SPORTS",
+        "SCIENCE",
+        "HEALTH",
+    }
+    if topic not in allowed_topics:
+        raise ValueError(f"不支持的新闻分类：{topic}")
+    if topic == "TOP":
+        url = "https://news.google.com/rss"
+    else:
+        url = f"https://news.google.com/rss/headlines/section/topic/{topic}"
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 Chrome/131 Safari/537.36 qq-chatrobot/0.1"
+        ),
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7",
+    }
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        headers=headers,
+    ) as client:
+        response = await client.get(
+            url,
+            params={"hl": "zh-CN", "gl": "CN", "ceid": "CN:zh-Hans"},
+        )
+        response.raise_for_status()
+    try:
+        return parse_google_news_rss(
+            response.text,
+            limit=limit,
+            max_age_hours=max_age_hours,
+        )
+    except ET.ParseError as exc:
+        raise RuntimeError(f"新闻 RSS 解析失败：{exc}") from exc

@@ -17,8 +17,8 @@ from app.config import Settings
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
 _KANA_RE = re.compile(r"[\u3040-\u30ff]")
 
-# A GPT-SoVITS sidecar has exactly one active SoVITS model. The lock covers
-# the mutable /set_sovits_weights call and the following /tts request.
+# A GPT-SoVITS sidecar has one active GPT and SoVITS model. The lock covers
+# both mutable weight switches and the following /tts request.
 _GPT_SOVITS_LOCKS: dict[tuple[int, str], asyncio.Lock] = {}
 _SUPPORTED_GPT_SOVITS_WEIGHT_LANGUAGES = frozenset({"zh", "ja", "en", "ko", "yue"})
 _SUPPORTED_PROFILE_LANGUAGES = frozenset({"zh", "ja", "en", "yue"})
@@ -94,6 +94,11 @@ def voice_profiles(settings: Settings) -> dict[str, dict[str, object]]:
                 "prompt_lang_by_language",
                 "supported_languages",
                 "text_split_method",
+                "seed",
+                "top_k",
+                "temperature",
+                "parallel_infer",
+                "split_bucket",
             ):
                 if field in value:
                     profile[field] = value[field]
@@ -158,6 +163,42 @@ def profile_text_split_method(profile: dict[str, object]) -> str | None:
             "所选角色的 text_split_method 仅可为 cut0 至 cut5，已回退文字回复"
         )
     return method
+
+
+def profile_inference_overrides(profile: dict[str, object]) -> dict[str, int | float | bool]:
+    """Validate optional per-character GPT-SoVITS sampling overrides."""
+    overrides: dict[str, int | float | bool] = {}
+    if "seed" in profile:
+        seed = profile["seed"]
+        if type(seed) is not int or not (-1 <= seed < 2**32):
+            raise RuntimeError("所选角色的 seed 必须是 -1 至 2^32-1 的整数，已回退文字回复")
+        overrides["seed"] = seed
+    if "top_k" in profile:
+        top_k = profile["top_k"]
+        if type(top_k) is not int or not (1 <= top_k <= 100):
+            raise RuntimeError("所选角色的 top_k 必须是 1 至 100 的整数，已回退文字回复")
+        overrides["top_k"] = top_k
+    if "temperature" in profile:
+        temperature = profile["temperature"]
+        try:
+            numeric_temperature = float(temperature)
+        except (OverflowError, TypeError, ValueError):
+            numeric_temperature = float("nan")
+        if (
+            isinstance(temperature, bool)
+            or not isinstance(temperature, (int, float))
+            or not math.isfinite(numeric_temperature)
+            or not (0.1 <= numeric_temperature <= 2.0)
+        ):
+            raise RuntimeError("所选角色的 temperature 必须在 0.1 至 2.0 之间，已回退文字回复")
+        overrides["temperature"] = numeric_temperature
+    for field in ("parallel_infer", "split_bucket"):
+        if field in profile:
+            value = profile[field]
+            if type(value) is not bool:
+                raise RuntimeError(f"所选角色的 {field} 必须是布尔值，已回退文字回复")
+            overrides[field] = value
+    return overrides
 
 
 def character_languages(profile: dict[str, object]) -> str:
@@ -467,6 +508,31 @@ def selected_gpt_sovits_weight(
     return selected_weight
 
 
+def selected_gpt_weight(settings: Settings, profile_id: str) -> str | None:
+    """Resolve an explicit GPT route, never retaining another role's model."""
+    raw = str(settings.voice_gpt_weights_by_profile_json or "").strip()
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("GPT 角色权重 JSON 配置无效，已回退文字回复") from exc
+    if not isinstance(payload, dict):
+        raise TypeError("GPT 角色权重必须是 JSON 对象，已回退文字回复")
+    if not payload:
+        return None
+    for key, value in payload.items():
+        if not re_safe_profile_id(key) or not isinstance(value, str) or not value.strip():
+            raise RuntimeError("GPT 角色权重包含无效角色或路径，已回退文字回复")
+    configured_path = payload.get(profile_id)
+    if not configured_path:
+        raise RuntimeError(f"{profile_id} 未配置专属 GPT 权重，已回退文字回复")
+    resolved_path = _project_relative_path(configured_path.strip())
+    if not Path(resolved_path).is_file():
+        raise RuntimeError(f"{profile_id} 配置的 GPT 权重不可用，已回退文字回复")
+    return resolved_path
+
+
 def _gpt_sovits_control_endpoint(tts_endpoint: str) -> str:
     """Return api_v2's weight-switch endpoint for a normalized /tts URL."""
     return tts_endpoint.rsplit("/tts", 1)[0] + "/set_sovits_weights"
@@ -624,7 +690,9 @@ async def synthesize_voice(
         selected_weight = selected_gpt_sovits_weight(
             settings, selected_profile_id, target_language
         )
+        selected_gpt = selected_gpt_weight(settings, selected_profile_id)
         text_split_method = profile_text_split_method(profile)
+        inference_overrides = profile_inference_overrides(profile)
         payload = {
             "text": clean,
             # GPT-SoVITS uses all_yue for speech spoken entirely in Cantonese;
@@ -642,6 +710,7 @@ async def synthesize_voice(
         }
         if text_split_method is not None:
             payload["text_split_method"] = text_split_method
+        payload.update(inference_overrides)
     else:
         if not endpoint.endswith("/audio/speech"):
             endpoint += "/audio/speech"
@@ -665,6 +734,13 @@ async def synthesize_voice(
         if provider in {"gpt_sovits", "gpt-sovits"}:
             # Keep model switching and its synthesis request indivisible.
             async with _gpt_sovits_lock(endpoint):
+                if selected_gpt:
+                    switch = await client.get(
+                        endpoint.rsplit("/tts", 1)[0] + "/set_gpt_weights",
+                        headers=headers,
+                        params={"weights_path": selected_gpt},
+                    )
+                    switch.raise_for_status()
                 # api_v2 exposes no stable process identity or active-weight
                 # read endpoint. Reassert a configured route for every
                 # synthesis: a restarted sidecar or external weight change

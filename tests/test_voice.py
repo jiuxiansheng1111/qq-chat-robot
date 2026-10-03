@@ -17,6 +17,7 @@ from app.services.voice import (
     requested_speech_language,
     resolve_character_profile,
     selected_gpt_sovits_weight,
+    selected_gpt_weight,
     synthesize_voice,
     validate_voice_text_language,
     voice_profile_authorized,
@@ -38,6 +39,7 @@ def test_voice_profile_is_one_multilingual_murasame_character():
     assert profile["ref_audio_path"].endswith("murasame_0001.mp3")
     assert settings.voice_sovits_weights_by_language_json == ""
     assert settings.voice_sovits_weights_by_profile_json == ""
+    assert settings.voice_gpt_weights_by_profile_json == ""
 
 
 def test_character_menu_hides_internal_profile_ids_and_supports_character_name():
@@ -635,3 +637,235 @@ async def test_gpt_sovits_switch_and_synthesis_are_serialized(monkeypatch, tmp_p
     assert events[0][1] == events[1][1]
     assert events[2][1] == events[3][1]
     assert events[0][1] != events[2][1]
+
+
+@pytest.mark.parametrize(
+    ("raw", "error"),
+    [
+        ("[]", TypeError),
+        ("{", RuntimeError),
+        ('{"murasame": 4}', RuntimeError),
+        ('{"murasame": "missing.ckpt"}', RuntimeError),
+    ],
+)
+def test_gpt_profile_routing_fails_closed(tmp_path, raw, error):
+    settings = _mapped_gpt_sovits_settings(tmp_path)
+    settings.voice_gpt_weights_by_profile_json = raw
+    with pytest.raises(error):
+        selected_gpt_weight(settings, "murasame")
+
+
+@pytest.mark.parametrize("raw", ["", "{}"])
+def test_empty_gpt_profile_routing_preserves_legacy_shared_model(tmp_path, raw):
+    settings = _mapped_gpt_sovits_settings(tmp_path)
+    settings.voice_gpt_weights_by_profile_json = raw
+
+    assert selected_gpt_weight(settings, "murasame") is None
+
+
+@pytest.mark.asyncio
+async def test_gpt_and_sovits_role_switches_are_one_transaction(monkeypatch, tmp_path):
+    from app.services import voice
+
+    events = []
+
+    class Client(_RecordingGptSovitsClient):
+        async def get(self, url, **kwargs):
+            events.append((url.rsplit("/", 1)[1], kwargs["params"]["weights_path"]))
+            await asyncio.sleep(0)
+            return _FakeTtsResponse()
+
+        async def post(self, url, **kwargs):
+            events.append(("tts", kwargs["json"]["text"]))
+            return _FakeTtsResponse()
+
+    monkeypatch.setattr(voice.httpx, "AsyncClient", Client)
+    settings = _mapped_gpt_sovits_settings(tmp_path)
+    profiles = json.loads(settings.voice_profiles_json)
+    profiles["rena"] = dict(profiles["murasame"], label="蕾娜")
+    settings.voice_profiles_json = json.dumps(profiles)
+    gpt_map = {}
+    for role in profiles:
+        checkpoint = tmp_path / f"{role}.ckpt"
+        checkpoint.write_bytes(b"checkpoint")
+        gpt_map[role] = str(checkpoint)
+    settings.voice_gpt_weights_by_profile_json = json.dumps(gpt_map)
+    sovits_map = {}
+    for role in profiles:
+        checkpoint = tmp_path / f"{role}-sovits.pth"
+        checkpoint.write_bytes(b"checkpoint")
+        sovits_map[role] = {"zh": str(checkpoint)}
+    settings.voice_sovits_weights_by_profile_json = json.dumps(sovits_map)
+    await asyncio.gather(
+        synthesize_voice("你好", settings, profile_name="murasame"),
+        synthesize_voice("你好", settings, profile_name="rena"),
+    )
+    assert [event[0] for event in events] == ["set_gpt_weights", "set_sovits_weights", "tts"] * 2
+    assert events[0][1] == gpt_map["murasame"]
+    assert events[1][1] == sovits_map["murasame"]["zh"]
+    assert events[3][1] == gpt_map["rena"]
+    assert events[4][1] == sovits_map["rena"]["zh"]
+
+
+@pytest.mark.asyncio
+async def test_missing_gpt_profile_route_fails_before_any_switch_or_synthesis(monkeypatch, tmp_path):
+    from app.services import voice
+
+    calls = []
+
+    class Client(_RecordingGptSovitsClient):
+        async def get(self, url, **kwargs):
+            calls.append(("get", url))
+            return _FakeTtsResponse()
+
+        async def post(self, url, **kwargs):
+            calls.append(("post", url))
+            return _FakeTtsResponse()
+
+    monkeypatch.setattr(voice.httpx, "AsyncClient", Client)
+    settings = _mapped_gpt_sovits_settings(tmp_path)
+    reference = tmp_path / "rena.wav"
+    reference.write_bytes(b"reference")
+    rena_sovits = tmp_path / "rena.pth"
+    rena_sovits.write_bytes(b"checkpoint")
+    rena_gpt = tmp_path / "murasame.ckpt"
+    rena_gpt.write_bytes(b"checkpoint")
+    settings.voice_profiles_json = json.dumps(
+        {
+            "murasame": {"label": "小丛雨", "ref_audio_path": str(reference)},
+            "rena": {"label": "蕾娜", "ref_audio_path": str(reference)},
+        }
+    )
+    settings.voice_sovits_weights_by_profile_json = json.dumps(
+        {"rena": {"zh": str(rena_sovits)}}
+    )
+    settings.voice_gpt_weights_by_profile_json = json.dumps(
+        {"murasame": str(rena_gpt)}
+    )
+
+    with pytest.raises(RuntimeError, match="rena 未配置专属 GPT 权重"):
+        await synthesize_voice("你好", settings, profile_name="rena")
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_profile_sampling_overrides_are_local_to_each_role(monkeypatch, tmp_path):
+    from app.services import voice
+
+    voice._GPT_SOVITS_LOCKS.clear()
+    _RecordingGptSovitsClient.payloads = []
+    monkeypatch.setattr(voice.httpx, "AsyncClient", _RecordingGptSovitsClient)
+    settings = _mapped_gpt_sovits_settings(tmp_path)
+    reference = tmp_path / "pilot.wav"
+    reference.write_bytes(b"reference")
+    settings.voice_seed = 123
+    settings.voice_top_k = 13
+    settings.voice_temperature = 0.7
+    settings.voice_sovits_weights_by_profile_json = json.dumps(
+        {"pilot": {"zh": str(tmp_path / "e13.pth")}}
+    )
+    settings.voice_profiles_json = json.dumps(
+        {
+            "murasame": {"label": "小丛雨", "ref_audio_path": str(reference)},
+            "pilot": {
+                "label": "试听角色",
+                "ref_audio_path": str(reference),
+                "seed": 20260929,
+                "top_k": 5,
+                "temperature": 1.0,
+                "parallel_infer": False,
+                "split_bucket": False,
+                "text_split_method": "cut5",
+            },
+        }
+    )
+
+    await synthesize_voice("你好", settings, profile_name="pilot")
+    pilot_payload = _RecordingGptSovitsClient.payloads[-1]
+    await synthesize_voice("你好", settings, profile_name="murasame")
+    legacy_payload = _RecordingGptSovitsClient.payloads[-1]
+
+    assert {
+        key: pilot_payload[key]
+        for key in ("seed", "top_k", "temperature", "parallel_infer", "split_bucket", "text_split_method")
+    } == {
+        "seed": 20260929,
+        "top_k": 5,
+        "temperature": 1.0,
+        "parallel_infer": False,
+        "split_bucket": False,
+        "text_split_method": "cut5",
+    }
+    assert legacy_payload["seed"] == 123
+    assert legacy_payload["top_k"] == 13
+    assert legacy_payload["temperature"] == 0.7
+    assert "parallel_infer" not in legacy_payload
+    assert "split_bucket" not in legacy_payload
+    assert "text_split_method" not in legacy_payload
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("seed", True),
+        ("seed", -2),
+        ("seed", 2**32),
+        ("top_k", False),
+        ("top_k", 0),
+        ("top_k", 101),
+        ("temperature", True),
+        ("temperature", 0.09),
+        ("temperature", 2.01),
+        ("temperature", "1.0"),
+        ("temperature", float("inf")),
+        ("parallel_infer", 0),
+        ("split_bucket", "false"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_invalid_profile_sampling_override_fails_before_tts(
+    monkeypatch, tmp_path, field, value
+):
+    from app.services import voice
+
+    _RecordingGptSovitsClient.payloads = []
+    monkeypatch.setattr(voice.httpx, "AsyncClient", _RecordingGptSovitsClient)
+    settings = _mapped_gpt_sovits_settings(tmp_path)
+    reference = tmp_path / "invalid-param.wav"
+    reference.write_bytes(b"reference")
+    settings.voice_profiles_json = json.dumps(
+        {
+            "murasame": {
+                "label": "小丛雨",
+                "ref_audio_path": str(reference),
+                field: value,
+            }
+        }
+    )
+
+    with pytest.raises(RuntimeError, match=field):
+        await synthesize_voice("你好", settings)
+
+    assert _RecordingGptSovitsClient.payloads == []
+
+
+@pytest.mark.asyncio
+async def test_gpt_switch_failure_prevents_synthesis(monkeypatch, tmp_path):
+    from app.services import voice
+
+    class Client(_RecordingGptSovitsClient):
+        async def get(self, url, **kwargs):
+            assert url.endswith("/set_gpt_weights")
+            return httpx.Response(500, request=httpx.Request("GET", url))
+
+        async def post(self, *_args, **_kwargs):
+            pytest.fail("Synthesis must not run with the previous GPT checkpoint")
+
+    monkeypatch.setattr(voice.httpx, "AsyncClient", Client)
+    settings = _mapped_gpt_sovits_settings(tmp_path)
+    checkpoint = tmp_path / "role.ckpt"
+    checkpoint.write_bytes(b"checkpoint")
+    settings.voice_gpt_weights_by_profile_json = json.dumps({"murasame": str(checkpoint)})
+    with pytest.raises(httpx.HTTPStatusError):
+        await synthesize_voice("你好", settings)

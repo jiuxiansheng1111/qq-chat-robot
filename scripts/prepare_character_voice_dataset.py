@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import tempfile
+import time
 import warnings
 from pathlib import Path
 
@@ -20,6 +22,24 @@ _LANGUAGES = frozenset({"zh", "ja", "en"})
 _AUDIO_SUFFIXES = frozenset({".wav", ".mp3", ".flac", ".ogg", ".m4a"})
 _MAX_AUDIO_BYTES = 100 * 1024 * 1024
 _MAX_TOTAL_BYTES = 512 * 1024 * 1024
+_PUBLISH_RETRIES = 5
+
+
+def _publish_staged_directory(staged: Path, output_root: Path) -> None:
+    """Atomically publish a staged directory, retrying transient Windows locks."""
+    for attempt in range(_PUBLISH_RETRIES):
+        try:
+            os.replace(staged, output_root)
+            return
+        except PermissionError as error:
+            # Windows antivirus/indexing services can briefly deny a directory
+            # rename after files have just been written. Retry only sharing and
+            # access violations; persistent ACL errors still fail promptly.
+            if getattr(error, "winerror", None) not in {5, 32}:
+                raise
+            if attempt + 1 == _PUBLISH_RETRIES:
+                raise
+            time.sleep(0.05 * (2**attempt))
 
 
 def _safe_name(value: str, label: str) -> str:
@@ -171,7 +191,7 @@ def prepare_dataset(
             + "\n",
             encoding="utf-8",
         )
-        staged.replace(output_root)
+        _publish_staged_directory(staged, output_root)
     finally:
         if staged.exists():
             shutil.rmtree(staged)

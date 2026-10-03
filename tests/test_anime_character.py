@@ -60,7 +60,8 @@ def test_murasame_has_disambiguated_search_terms():
 
 
 def test_every_catalog_character_has_name_series_and_search_queries():
-    assert len(anime.ANIME_CHARACTER_ROSTER) == 300
+    assert len(anime.ANIME_CHARACTER_ROSTER) >= 300
+    assert len(anime.ANIME_CHARACTER_BY_NAME) == len(anime.ANIME_CHARACTER_ROSTER)
     for character in anime.ANIME_CHARACTER_ROSTER:
         assert character.name.strip()
         assert character.series.strip()
@@ -349,13 +350,13 @@ async def test_moegirl_api_returns_attributed_exact_character_image(monkeypatch)
                                 "fullurl": "https://zh.moegirl.org.cn/丛雨",
                                 "extract": "《千恋＊万花》中的角色。",
                                 "categories": [{"title": "分类:千恋＊万花"}],
-                                "original": {"source": "https://img.example/murasame.jpg"},
+                                "original": {"source": "https://img.moegirl.org.cn/murasame.jpg"},
                             }
                         ]
                     }
                 },
             )
-        if request.url.host == "img.example":
+        if request.url.host == "img.moegirl.org.cn":
             return httpx.Response(
                 200,
                 headers={"content-type": "image/jpeg"},
@@ -654,7 +655,9 @@ async def test_vndb_resolves_murasame_character_art(monkeypatch):
         Settings(_env_file=None),
     )
     assert result is not None
-    decoded = base64.b64decode(result.removeprefix("base64://"))
+    assert result.provider == "VNDB"
+    assert result.source_page_url == "https://vndb.org/c-test"
+    decoded = base64.b64decode(result.data.removeprefix("base64://"))
     with Image.open(BytesIO(decoded)) as image:
         assert image.width == 256
         assert image.height == 300
@@ -720,7 +723,11 @@ async def test_bangumi_resolves_chinese_character_art(monkeypatch):
         Settings(_env_file=None),
     )
     assert result is not None
-    decoded = base64.b64decode(result.removeprefix("base64://"))
+    assert result.provider == "Bangumi"
+    assert result.source_page_url == "https://bgm.tv/character/123"
+    assert result.image_url == "https://img.example/mai.jpg"
+    assert "青春" in result.evidence
+    decoded = base64.b64decode(result.data.removeprefix("base64://"))
     with Image.open(BytesIO(decoded)) as image:
         assert image.width == 300
         assert image.height == 420
@@ -794,7 +801,10 @@ async def test_bangumi_uses_dedicated_character_image_endpoint_when_payload_has_
         Settings(_env_file=None),
     )
     assert result is not None
-    decoded = base64.b64decode(result.removeprefix("base64://"))
+    assert result.provider == "Bangumi"
+    assert result.source_page_url == "https://bgm.tv/character/456"
+    assert "千恋" in result.evidence
+    decoded = base64.b64decode(result.data.removeprefix("base64://"))
     with Image.open(BytesIO(decoded)) as image:
         assert image.width == 250
         assert image.height == 300
@@ -823,14 +833,14 @@ async def test_moegirl_pageimages_resolves_hange(monkeypatch):
                                 "title": "韩吉·佐耶",
                                 "extract": "《进击的巨人》的调查兵团成员。",
                                 "original": {
-                                    "source": "https://commons.example/hange.jpg"
+                                    "source": "https://storage.moegirl.org.cn/hange.jpg"
                                 },
                             }
                         }
                     }
                 },
             )
-        if request.url.host == "commons.example":
+        if request.url.host == "storage.moegirl.org.cn":
             return httpx.Response(
                 200,
                 headers={"content-type": "image/jpeg"},
@@ -994,11 +1004,16 @@ async def test_moegirl_preferred_mode_falls_back_and_keeps_actual_cache_provider
     monkeypatch.setattr(anime, "_moegirl_image", verified_moegirl)
     refreshed = await anime.resolve_anime_character_image(character, settings)
     assert refreshed.provider == "萌娘百科"
-    assert calls == ["moegirl", "bangumi", "moegirl"]
+    # Preferred mode compares all first-group candidates before selecting art.
+    assert calls.count("moegirl") == 2
+    assert calls.count("bangumi") == 2
 
 
 @pytest.mark.asyncio
-async def test_moegirl_only_profile_does_not_include_other_site_sources(monkeypatch):
+@pytest.mark.parametrize("preferred_with_fallback", [False, True])
+async def test_moegirl_only_profile_does_not_include_other_site_sources(
+    monkeypatch, preferred_with_fallback
+):
     character = anime.ANIME_CHARACTER_BY_NAME["丛雨"]
 
     async def verified(*args, **kwargs):
@@ -1012,7 +1027,12 @@ async def test_moegirl_only_profile_does_not_include_other_site_sources(monkeypa
     anime._ANIME_PROFILE_CACHE.clear()
     result = await anime.resolve_anime_character_profile(
         character,
-        Settings(_env_file=None, moegirl_image_provider_enabled=True, anime_moegirl_only=True),
+        Settings(
+            _env_file=None,
+            moegirl_image_provider_enabled=True,
+            anime_moegirl_only=True,
+            anime_moegirl_preferred_with_fallback=preferred_with_fallback,
+        ),
     )
     assert "https://zh.moegirl.org.cn/丛雨" in result
     assert "bgm.tv" not in result

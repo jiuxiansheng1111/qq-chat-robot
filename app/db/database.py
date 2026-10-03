@@ -217,6 +217,21 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_daily_anime_character_user
                     ON daily_anime_character(user_id, draw_date);
+                CREATE TABLE IF NOT EXISTS daily_news_items (
+                    news_date TEXT NOT NULL,
+                    item_index INTEGER NOT NULL,
+                    canonical_url TEXT NOT NULL,
+                    title_key TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    snippet TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (news_date, item_index),
+                    UNIQUE (news_date, canonical_url),
+                    UNIQUE (news_date, title_key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_daily_news_items_history
+                    ON daily_news_items(news_date, canonical_url, title_key);
                 """
             )
             columns = await db.execute_fetchall("PRAGMA table_info(daily_possession)")
@@ -318,6 +333,67 @@ class Database:
         async with aiosqlite.connect(self.path) as db:
             cursor = await db.execute(sql, params)
             return await cursor.fetchall()
+
+    async def daily_news_items(self, news_date: str) -> list[tuple[str, str, str]]:
+        rows = await self.fetchall(
+            "SELECT title, url, snippet FROM daily_news_items "
+            "WHERE news_date = ? ORDER BY item_index",
+            (news_date,),
+        )
+        return [(str(title), str(url), str(snippet)) for title, url, snippet in rows]
+
+    async def daily_news_history(
+        self, *, exclude_date: str = ""
+    ) -> list[tuple[str, str]]:
+        if exclude_date:
+            rows = await self.fetchall(
+                "SELECT canonical_url, title_key FROM daily_news_items "
+                "WHERE news_date <> ?",
+                (exclude_date,),
+            )
+        else:
+            rows = await self.fetchall(
+                "SELECT canonical_url, title_key FROM daily_news_items"
+            )
+        return [(str(url), str(title_key)) for url, title_key in rows]
+
+    async def save_daily_news_items(
+        self,
+        news_date: str,
+        items: list[tuple[str, str, str, str, str]],
+    ) -> list[tuple[str, str, str]]:
+        """Persist one immutable daily edition and return the winning edition.
+
+        A transaction makes simultaneous manual/scheduled requests converge on
+        the same list instead of creating two different editions for one day.
+        Each item is ``(canonical_url, title_key, title, url, snippet)``.
+        """
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            cursor = await db.execute(
+                "SELECT title, url, snippet FROM daily_news_items "
+                "WHERE news_date = ? ORDER BY item_index",
+                (news_date,),
+            )
+            existing = await cursor.fetchall()
+            if existing:
+                await db.commit()
+                return [
+                    (str(title), str(url), str(snippet))
+                    for title, url, snippet in existing
+                ]
+            await db.executemany(
+                "INSERT INTO daily_news_items("
+                "news_date, item_index, canonical_url, title_key, title, url, snippet"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    (news_date, index, canonical_url, title_key, title, url, snippet)
+                    for index, (canonical_url, title_key, title, url, snippet)
+                    in enumerate(items, 1)
+                ),
+            )
+            await db.commit()
+        return [(title, url, snippet) for _, _, title, url, snippet in items]
 
     async def group_enabled(self, group_id: str) -> bool:
         row = await self.fetchone("SELECT enabled FROM group_settings WHERE group_id = ?", (group_id,))

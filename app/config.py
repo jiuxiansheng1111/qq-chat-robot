@@ -85,13 +85,14 @@ class Settings(BaseSettings):
     # Moegirl restricts automated/off-site image use. Keep disabled until the
     # deployer has obtained the permissions required for their bot/use case.
     moegirl_image_provider_enabled: bool = False
-    # When enabled, character profiles and (unless the explicit image fallback
-    # option below is set) images never borrow another website's content.
+    # Image policy only: when enabled, character pictures stay on Moegirl
+    # unless the explicit image fallback option below is also enabled.
+    # Text profiles may still search other sources and cite them, so a missing
+    # Moegirl page does not silently turn into unrelated persona lore.
     anime_moegirl_only: bool = False
     # Keep Moegirl as the first image source but, when its image CDN or a
     # verified page image is unavailable, allow the bounded catalog fallback
-    # chain.  This intentionally affects images only: profile attribution
-    # remains governed by ``anime_moegirl_only``.
+    # chain.  This setting intentionally affects images only.
     anime_moegirl_preferred_with_fallback: bool = False
     # Optional image-generation provider. The endpoint follows the OpenAI
     # /v1/images/generations response shape (data[].b64_json or data[].url).
@@ -145,6 +146,9 @@ class Settings(BaseSettings):
     # Optional nested profile -> language -> SoVITS weight map. This keeps
     # distinct character checkpoints from being used across profiles.
     voice_sovits_weights_by_profile_json: str = ""
+    # Optional profile -> GPT checkpoint map. Once enabled, every selected
+    # profile requires an explicit route, including the default profile.
+    voice_gpt_weights_by_profile_json: str = ""
     daily_news_enabled: bool = True
     daily_news_hour: int = 12
     daily_news_minute: int = 0
@@ -158,6 +162,28 @@ class Settings(BaseSettings):
     music_timeout_seconds: float = 10
     music_search_limit: int = 8
     netease_music_api_url: str = "https://music.163.com/api/search/get"
+    # Singing runs in an isolated CUDA subprocess; conversational TTS stays
+    # on its configured backend. Never send a QQ record longer than 55s.
+    singing_enabled: bool = False
+    singing_hf_offline: bool = False
+    singing_python: str = "./data/singing/runtime/.venv/Scripts/python.exe"
+    singing_seed_root: str = "./data/singing/runtime/seed-vc"
+    singing_ffmpeg_path: str = "./data/singing/runtime/bin/ffmpeg.exe"
+    singing_ffprobe_path: str = "./data/singing/runtime/bin/ffprobe.exe"
+    singing_use_trained_tts_reference: bool = True
+    singing_chunk_seconds: float = Field(default=55, gt=0, le=55)
+    singing_max_song_seconds: float = Field(default=600, gt=0, le=1800)
+    singing_max_source_bytes: int = Field(default=104857600, gt=0, le=524288000)
+    singing_model_timeout_seconds: float = Field(default=900, ge=30, le=3600)
+    singing_job_timeout_seconds: float = Field(default=2400, ge=60, le=7200)
+    singing_queue_size: int = Field(default=3, ge=1, le=10)
+    singing_cooldown_seconds: float = Field(default=120, ge=0)
+    singing_segment_pause_seconds: float = Field(default=1.5, ge=0.5, le=30)
+    singing_diffusion_steps: int = Field(default=35, ge=10, le=80)
+    singing_inference_cfg_rate: float = Field(default=0.7, ge=0, le=2)
+    singing_separation_model: str = Field(default="htdemucs_ft", pattern=r"^htdemucs(_ft)?$")
+    singing_max_pitch_error_cents: float = Field(default=100, gt=0, le=200)
+    singing_min_voice_similarity: float = Field(default=0.35, ge=0, le=1)
     bilibili_search_url: str = "https://api.bilibili.com/x/web-interface/search/type"
     bilibili_timeout_seconds: float = 10
     bilibili_search_result_limit: int = 20

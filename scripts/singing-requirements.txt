@@ -1,0 +1,14 @@
+# Install into data/singing/runtime/.venv only. PyTorch stays in its existing
+# GPT-SoVITS CUDA environment and is exposed read-only through a .pth bridge.
+munch==4.0.0
+einops==0.8.0
+descript-audio-codec==1.0.0
+transformers==4.46.3
+huggingface-hub>=0.28.1,<1.0
+demucs==4.0.1
+scipy==1.13.1
+librosa==0.10.2
+soundfile==0.12.1
+numpy==1.26.4
+pyyaml
+tqdm
