@@ -79,8 +79,8 @@ def test_group_history_context_excludes_bot_self_messages():
         "data": {
             "messages": [
                 {
-                    "user_id": "3503565007",
-                    "sender": {"user_id": "3503565007", "card": "穗织幼刀姬"},
+                    "user_id": "1234567890",
+                    "sender": {"user_id": "1234567890", "card": "穗织幼刀姬"},
                     "message": "错误旧回复：调教某个无关功能",
                 },
                 {
@@ -93,7 +93,7 @@ def test_group_history_context_excludes_bot_self_messages():
     }
     context = group_history_context(
         payload,
-        exclude_user_ids={"3503565007"},
+        exclude_user_ids={"1234567890"},
     )
     assert "错误旧回复" not in context
     assert "有地将臣认识吗" in context

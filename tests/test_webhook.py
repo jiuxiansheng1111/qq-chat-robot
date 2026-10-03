@@ -96,9 +96,9 @@ def test_event_self_id_overrides_configured_bot_id():
     settings.onebot_self_id = "old-bot"
     try:
         payload = event("你好")
-        payload["self_id"] = 3503565007
+        payload["self_id"] = 1234567890
         payload["message"] = [
-            {"type": "at", "data": {"qq": "3503565007"}},
+            {"type": "at", "data": {"qq": "1234567890"}},
             {"type": "text", "data": {"text": "你好"}},
         ]
         assert bot_mentioned(payload)

@@ -1,0 +1,8 @@
+{
+  "name": "qq-chatrobot-netease-member",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local account login and song URL bridge for QQ ChatRobot",
+  "engines": { "node": ">=22" },
+  "dependencies": { "@neteasecloudmusicapienhanced/api": "4.41.0" }
+}

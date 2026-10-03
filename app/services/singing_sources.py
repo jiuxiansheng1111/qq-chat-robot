@@ -3,7 +3,8 @@
 Local originals belong in ``data/singing/songs.json`` as
 ``{"12345": "songs/example.mp3"}`` (or ``{"12345": {"path": "..."}}``).
 All manifest paths are confined to ``data/singing``. Remote audio is accepted
-only when NetEase's anonymous player API returns a full, public CDN source.
+only when NetEase's account or anonymous player API returns a complete NetEase
+CDN source.
 """
 
 import json
@@ -27,6 +28,7 @@ from app.services.music import (
     parse_netease_tracks,
     search_netease_music,
 )
+from app.services.netease_member import NeteaseMemberError, get_member_song_payload
 
 SINGING_DATA_ROOT = Path(__file__).resolve().parents[2] / "data" / "singing"
 _LYRIC_URL = "https://music.163.com/api/song/lyric"
@@ -298,17 +300,45 @@ async def _public_source(
         headers=_HEADERS,
     )
     response.raise_for_status()
-    payload = response.json()
-    if not isinstance(payload, dict) or payload.get("code") != 200:
+    return _validated_source_payload(response.json(), track, settings)
+
+
+def _validated_source_payload(
+    payload: object,
+    track: NeteaseTrack,
+    settings: Settings,
+    *,
+    member: bool = False,
+) -> tuple[str, int]:
+    """Validate a complete official NetEase player response for the selected track."""
+    if member:
+        if not isinstance(payload, dict) or payload.get("provider") != "netease_account":
+            raise SingingSourceError("本机会员桥未返回网易云账号音源")
+        if str(payload.get("song_id") or "") != track.song_id:
+            raise SingingSourceError("本机会员桥返回的歌曲与所选曲目不一致")
+        if payload.get("code") != 200:
+            raise SingingSourceError("网易云账号未返回可用音源；请检查登录状态或歌曲播放权限")
+    elif not isinstance(payload, dict) or payload.get("code") != 200:
         raise SingingSourceError("网易云未提供公开可播放的原曲")
+
     entries = payload.get("data")
     if not isinstance(entries, list):
+        if member:
+            raise SingingSourceError("网易云账号未返回可用音源；请检查登录状态或歌曲播放权限")
         raise SingingSourceError("网易云未提供公开可播放的原曲")
     entry = next(
         (item for item in entries if isinstance(item, dict) and str(item.get("id")) == track.song_id),
         None,
     )
+    if member and entry is not None and entry.get("code") not in (None, 200):
+        raise SingingSourceError(
+            "网易云账号无法播放这首歌；请检查登录状态、会员权限或单曲购买状态"
+        )
     if not entry or _is_trial(entry):
+        if member:
+            raise SingingSourceError(
+                "网易云账号当前只获得试听片段或无完整音源；请重新登录，并确认账号有权播放整首歌曲（部分歌曲可能需单独购买）"
+            )
         raise SingingSourceError("原曲仅提供试听片段或需要授权")
     url = _cdn_url(entry.get("url"), upgrade_http=True)
     try:
@@ -316,6 +346,10 @@ async def _public_source(
     except (TypeError, ValueError):
         size = 0
     if not url or not 0 < size <= _max_source_bytes(settings):
+        if member:
+            raise SingingSourceError(
+                "网易云账号未返回安全且完整的音源；请重新登录，并确认账号有权播放整首歌曲（部分歌曲可能需单独购买）"
+            )
         raise SingingSourceError("网易云未提供安全且完整的公开音源")
     if track.duration_seconds <= 0 or size < track.duration_seconds * 5000:
         raise SingingSourceError("音源大小不足以覆盖整首歌曲")
@@ -323,7 +357,7 @@ async def _public_source(
 
 
 async def resolve_singing_song(query: str, settings: Settings) -> SingingSong:
-    """Find a song, optional lyrics, and a local or public full audio source."""
+    """Find a song, optional lyrics, and a local or official full audio source."""
     query = " ".join(query.split()).strip()[:120]
     if not query:
         raise SingingSourceError("请提供歌名，建议同时提供歌手名")
@@ -356,7 +390,16 @@ async def resolve_singing_song(query: str, settings: Settings) -> SingingSong:
                     lyric_lines = ()
             if source_path is not None:
                 return SingingSong(track, lyrics_text, lyric_lines, source_path, None)
-            source_url, source_size = await _public_source(client, track, settings)
+            if getattr(settings, "netease_member_enabled", False):
+                try:
+                    payload = await get_member_song_payload(client, settings, track.song_id)
+                except NeteaseMemberError as exc:
+                    raise SingingSourceError(str(exc)) from exc
+                source_url, source_size = _validated_source_payload(
+                    payload, track, settings, member=True
+                )
+            else:
+                source_url, source_size = await _public_source(client, track, settings)
             return SingingSong(track, lyrics_text, lyric_lines, None, source_url, source_size)
     except (httpx.HTTPError, ValueError, json.JSONDecodeError) as exc:
         raise SingingSourceError("歌曲信息或音源暂时无法读取") from exc
@@ -393,6 +436,11 @@ async def download_singing_source(song: SingingSong, job_dir: Path, settings: Se
                             raise SingingSourceError("音源跳转到了未获准的地址")
                         url = redirected
                         continue
+                    if response.status_code == 206 or "content-range" in response.headers:
+                        raise SingingSourceError("音源服务器返回了分段内容，无法确认整首歌曲")
+                    if response.status_code != 200:
+                        response.raise_for_status()
+                        raise SingingSourceError("音源服务器未返回完整歌曲")
                     response.raise_for_status()
                     content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
                     if not (

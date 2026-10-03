@@ -162,6 +162,9 @@ class Settings(BaseSettings):
     music_timeout_seconds: float = 10
     music_search_limit: int = 8
     netease_music_api_url: str = "https://music.163.com/api/search/get"
+    netease_member_enabled: bool = False
+    netease_member_bridge_url: str = "http://127.0.0.1:3010"
+    netease_member_token_path: str = "./data/netease/bridge-token.txt"
     # Singing runs in an isolated CUDA subprocess; conversational TTS stays
     # on its configured backend. Never send a QQ record longer than 55s.
     singing_enabled: bool = False

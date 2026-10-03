@@ -1,0 +1,29 @@
+:root { font-family: "Microsoft YaHei", system-ui, sans-serif; color: #1e293b; background: #f5f7fb; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; padding: 36px 20px; }
+main { max-width: 640px; margin: 0 auto; }
+.tag { color: #2563eb; font-size: 13px; font-weight: 600; }
+h1 { margin: 14px 0 12px; font-size: 30px; letter-spacing: -.5px; }
+h2 { font-size: 17px; margin-top: 0; }
+p { font-size: 14px; line-height: 1.8; }
+.intro { color: #475569; margin-bottom: 24px; }
+.card { padding: 24px; background: white; border: 1px solid #e2e8f0; border-radius: 16px; }
+#status { margin-top: 0; font-weight: 600; }
+#qr { display: block; margin: 10px auto 24px; max-width: 100%; height: auto; border-radius: 8px; }
+#qr[hidden], [hidden] { display: none; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; }
+button { padding: 11px 16px; font: inherit; font-size: 14px; border: 0; border-radius: 8px; background: #2563eb; color: white; cursor: pointer; }
+button:hover { background: #1d4ed8; }
+button:disabled { opacity: .6; cursor: wait; }
+button.secondary { background: #f1f5f9; color: #334155; }
+button.secondary:hover { background: #e2e8f0; }
+button:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
+.usage { margin: 24px 0; }
+code { display: block; border-radius: 8px; padding: 14px; background: #eaf0fc; font-family: inherit; font-size: 14px; overflow-wrap: anywhere; }
+.usage p { color: #64748b; }
+details { border-top: 1px solid #dce3ee; padding: 18px 0; font-size: 14px; }
+summary { cursor: pointer; color: #475569; }
+label { display: block; margin-bottom: 8px; }
+textarea { width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; resize: vertical; font: inherit; font-size: 13px; margin-bottom: 12px; }
+.footnote { font-size: 12px; color: #64748b; }
+@media (max-width: 420px) { body { padding: 24px 16px; } .card { padding: 18px; } h1 { font-size: 26px; } }

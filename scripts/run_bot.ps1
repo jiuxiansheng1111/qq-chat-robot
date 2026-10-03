@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param()
 
 # Long-running lifecycle supervisor for the FastAPI bot.
@@ -92,6 +92,38 @@ function Get-UvicornProcesses {
         })
 }
 
+function Ensure-NeteaseMemberBridge {
+    if (-not (Test-Path -LiteralPath $envPath -PathType Leaf)) {
+        return
+    }
+    $memberSettings = @{}
+    foreach ($line in Get-Content -LiteralPath $envPath) {
+        if ($line -match '^\s*(NETEASE_MEMBER_ENABLED|NETEASE_MEMBER_BRIDGE_URL)\s*=\s*(.*)\s*$') {
+            $memberSettings[$matches[1]] = $matches[2].Trim().Trim('"').Trim("'")
+        }
+    }
+    if (([string]$memberSettings["NETEASE_MEMBER_ENABLED"]).ToLowerInvariant() -notin @("1", "true", "yes", "on")) {
+        return
+    }
+    $memberUrl = ([string]$memberSettings["NETEASE_MEMBER_BRIDGE_URL"]).Trim()
+    if (-not $memberUrl) {
+        $memberUrl = "http://127.0.0.1:3010"
+    }
+    try {
+        $memberUri = [Uri]$memberUrl
+        if ($memberUri.Scheme -ne "http" -or $memberUri.Host -notin @("127.0.0.1", "localhost") -or
+            $memberUri.Port -lt 1024 -or $memberUri.UserInfo -or
+            $memberUri.AbsolutePath -ne "/" -or $memberUri.Query -or $memberUri.Fragment) {
+            throw "会员桥需要本机 HTTP 地址和明确端口。"
+        }
+        # 已启动时直接复用；进程退出后，下次检查会重新拉起。
+        & (Join-Path $PSScriptRoot "start_netease_member.ps1") -Port $memberUri.Port *>> $watchdogLog
+    }
+    catch {
+        Write-LifecycleLog "NetEase member bridge unavailable; ordinary chat remains available."
+    }
+}
+
 function Stop-Uvicorn {
     $processes = @(Get-UvicornProcesses)
     if ($processes.Count -eq 0) {
@@ -108,6 +140,7 @@ function Start-Uvicorn {
     if (-not (Test-Path -LiteralPath $pythonPath)) {
         throw "Python environment not found: $pythonPath"
     }
+    Ensure-NeteaseMemberBridge
     $mutexAcquired = $false
     try {
         $mutexAcquired = $uvicornStartMutex.WaitOne(0)
@@ -151,6 +184,8 @@ try {
         throw "Python environment setup returned exit code $LASTEXITCODE"
     }
 
+    Ensure-NeteaseMemberBridge
+    $lastMemberBridgeCheck = Get-Date
     Write-LifecycleLog "Lifecycle supervisor watching OneBot $oneBotHost`:$oneBotPort."
 
     while ($true) {
@@ -179,6 +214,11 @@ try {
         $unhealthySince = $null
         while ($true) {
             Start-Sleep -Seconds 10
+
+            if (((Get-Date) - $lastMemberBridgeCheck).TotalSeconds -ge 60) {
+                Ensure-NeteaseMemberBridge
+                $lastMemberBridgeCheck = Get-Date
+            }
 
             if (-not (Test-TcpEndpoint -TargetHost $oneBotHost -Port $oneBotPort)) {
                 Write-LifecycleLog "NapCat/OneBot stopped; stopping Uvicorn."

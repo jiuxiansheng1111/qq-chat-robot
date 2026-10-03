@@ -13,26 +13,30 @@ flowchart TD
     C --> D[resolve_singing_song 查曲目与 LRC]
     D --> E{本地 songs.json 有完整音源?}
     E -- 是 --> F[读取 data/singing 内的原曲]
-    E -- 否 --> G[HTTP: 网易云搜索、歌词、公开播放地址]
-    F --> H[download_singing_source]
-    G --> H
-    C --> I[prepare_voice_reference]
-    I --> J[HTTP: GPT-SoVITS TTS 或本地参考录音]
-    H --> K[本地子进程: Demucs 分离人声和伴奏]
-    J --> L[本地子进程: Seed-VC 转换人声音色]
-    K --> Q[RMVPE 分析全曲音区: 按角色选择八度]
-    Q --> L
-    L --> M[本地子进程: F0 与音色检查、FFmpeg 混音]
-    M --> N[split_audio_for_qq 按歌词或停顿切为最多 55 秒]
-    N --> O[HTTP: OneBot send_group_record]
-    O --> P[QQ 群按顺序收到完整歌曲]
+    E -- 否 --> G{NETEASE_MEMBER_ENABLED?}
+    G -- 是 --> H[HTTP: 本机会员桥返回官方账号音源]
+    G -- 否 --> I[HTTP: 网易云公开播放地址]
+    F --> J[download_singing_source]
+    H --> J
+    I --> J
+    C --> K[prepare_voice_reference]
+    K --> L[HTTP: GPT-SoVITS TTS 或本地参考录音]
+    J --> M[本地子进程: Demucs 分离人声和伴奏]
+    L --> N[本地子进程: Seed-VC 转换人声音色]
+    M --> Q[RMVPE 分析全曲音区: 按角色选择八度]
+    Q --> N
+    N --> O[本地子进程: F0 与音色检查、FFmpeg 混音]
+    O --> P[split_audio_for_qq 按歌词或停顿切为最多 55 秒]
+    P --> R[HTTP: OneBot send_group_record]
+    R --> S[QQ 群按顺序收到完整歌曲]
 ```
 
 | 代码中的名字 | 中文含义 | 通信边界 |
 | --- | --- | --- |
 | `onebot_webhook` | 收到 QQ 群事件的入口 | NapCat 向本地 FastAPI 发 HTTP 请求 |
 | `SingingJobManager` | 控制翻唱排队、冷却与取消 | 机器人进程内管理；同一时间只放行一个 GPU 任务 |
-| `resolve_singing_song` / `download_singing_source` | 确认歌曲、时间轴歌词和完整原曲；取得原曲文件 | 访问网易云公开 HTTP 接口或读取 `data/singing/` 本地文件 |
+| `resolve_singing_song` / `download_singing_source` | 确认歌曲、时间轴歌词和完整原曲；取得原曲文件 | 优先读取 `data/singing/` 本地文件；否则按设置访问网易云公开接口，或本机会员桥获取官方账号音源 |
+| `get_member_song_payload` / `bridge.cjs` | 读取会员歌曲地址 / 本机账号桥接服务 | Python 通过带本机令牌的 HTTP 请求访问 Node；Node 用本机保存的登录信息请求网易云 |
 | `prepare_voice_reference` | 准备角色音色参考录音 | 调用 GPT-SoVITS HTTP TTS，或读取角色已配置的本地录音 |
 | `choose_octave_shift` / `plan_singing_pitch` | 选择八度偏移 / 分析歌曲音区 | 纯 NumPy 规则与独立 RMVPE 子进程，在 −12、0、+12 半音中选择 |
 | `convert_vocals` | 根据原唱人声的旋律转换音色 | 启动本地 Seed-VC 子进程；已验收微调权重作为可选输入 |
@@ -51,9 +55,10 @@ flowchart TD
 | 主要 `.env` 项 | 默认值 | 作用 |
 | --- | --- | --- |
 | `SINGING_HF_OFFLINE` | `false` | 首次下载模型后可设为 `true`，避免每次转换重新向 Hugging Face 检查缓存；仅影响歌声模型加载 |
+| `NETEASE_MEMBER_ENABLED` | `false` | `true` 时对未登记本地原曲的歌曲使用本机网易云会员桥；桥接登录或完整播放权限不可用时会报错，不改用第三方音源 |
 | `SINGING_CHUNK_SECONDS` | `55` | QQ 单段上限，配置也不能超过 55 秒 |
 | `SINGING_MAX_SONG_SECONDS` | `600` | 原曲实际时长上限，超出时停止 |
-| `SINGING_MAX_SOURCE_BYTES` | `104857600` | 本地或公开原曲大小上限（100 MiB） |
+| `SINGING_MAX_SOURCE_BYTES` | `104857600` | 本地或网易云原曲大小上限（100 MiB） |
 | `SINGING_QUEUE_SIZE` / `SINGING_COOLDOWN_SECONDS` | `3` / `120` | 待处理队列和同一用户再次提交的冷却秒数 |
 | `SINGING_DIFFUSION_STEPS` / `SINGING_INFERENCE_CFG_RATE` | `35` / `0.7` | Seed-VC 初次转换参数 |
 | `SINGING_SEMITONE_SHIFT_BY_PROFILE_JSON` | `{}` | 角色到人声移调半音数的映射，整数 −12 到 +12；未配置且无自动目标时使用原调 |
@@ -71,11 +76,35 @@ flowchart TD
 @机器人 取消唱歌
 ```
 
-`唱歌` 使用当前选中的角色；`翻唱 角色名` 临时指定角色。也接受 `/唱歌`、`/翻唱`、`/sing`、`/cover`。歌名与歌手名用 `/` 分开可避免同名歌曲选错。DJ 版等特殊版本要在歌名中明确写出；普通歌名不会自动选 DJ 版。歌曲无公开完整音源、只提供试听或超过 `SINGING_MAX_SONG_SECONDS`（默认 600 秒）时会停止，并说明原因。有时间轴歌词时按歌词辅助分段；歌词不可用或仅有普通文本时，仍可按人声停顿连续分段。
+`唱歌` 使用当前选中的角色；`翻唱 角色名` 临时指定角色。也接受 `/唱歌`、`/翻唱`、`/sing`、`/cover`。歌名与歌手名用 `/` 分开可避免同名歌曲选错。DJ 版等特殊版本要在歌名中明确写出；普通歌名不会自动选 DJ 版。当前音源接口未提供完整原曲、只提供试听或超过 `SINGING_MAX_SONG_SECONDS`（默认 600 秒）时会停止，并说明原因。有时间轴歌词时按歌词辅助分段；歌词不可用或仅有普通文本时，仍可按人声停顿连续分段。
 
-上述日文和英文命令是输入格式示例，不保证音乐平台当前提供可用的免费完整音源；若只返回试听片段，机器人不会生成该曲的“整首翻唱”。
+上述日文和英文命令是输入格式示例，不保证音乐平台当前提供可用的完整音源；在会员模式下，能否获取原曲取决于已登录账号的实际播放权限。
 
 本地已有完整原曲时，可在 `data/singing/songs.json` 用网易云歌曲 ID 登记它。例如 `{"1939837729": {"path": "acceptance/friends-dj/original.mp3", "lyrics_path": "acceptance/friends-dj/lyrics.lrc"}}`。路径相对 `data/singing/`，也允许该目录内的绝对路径；文件和软链接都不能越出该目录。`lyrics_path` 可省略，省略时仍向网易云读取 LRC。此映射只在找到同一歌曲 ID 后使用。
+
+## 使用本人网易云会员音源
+
+可选启用本机网易云会员桥，为账号有权完整播放的曲目取得官方账号音源。默认 `NETEASE_MEMBER_ENABLED=false`，不影响已有用法；本地 `data/singing/songs.json` 映射始终优先。桥接登录后只有网易云账号实际允许播放整首歌曲时才会返回音源；试听、会员权限不足、单曲需另行购买或登录过期时会停止并提示检查登录和播放权限，不会使用第三方解锁源。
+
+启动本机桥并扫码登录：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start_netease_member.ps1
+```
+
+在本机打开 [http://127.0.0.1:3010/login](http://127.0.0.1:3010/login) 完成网易云扫码。登录信息只保存在被 Git 忽略的 `data/netease/auth.json`，不要提交或分享该目录。然后在机器人 `.env` 中设置 `NETEASE_MEMBER_ENABLED=true`（桥地址默认 `http://127.0.0.1:3010`），并重启机器人。后续仍使用相同唱歌命令，例如 `@机器人 唱歌 歌名 / 歌手`；会员音源只用于未命中本地清单的曲目。
+
+桥接依赖固定为 `@neteasecloudmusicapienhanced/api` 4.41.0，要求 Node.js 22 或以上。代码和依赖锁文件位于 `integrations/netease/`，安装器把依赖放到被忽略的 `data/netease/runtime/`。每个部署者需登录自己的账号，当前每个机器人部署保存一个账号。桥只监听本机 `127.0.0.1`，机器人用本机令牌访问它；账号 Cookie 不传入 QQ 或机器人 Settings。
+
+`auth.json` 在登录成功后写入，重启桥会自动读取；`device.json` 保存稳定的本机设备标识。关闭进程或重启电脑不会主动清除登录。网易云登录失效时需重新扫码；页面“断开本机连接”会删除本机保存的登录信息。扫码不成功时，也可在本机页面粘贴自己的网页版 Cookie 或 MUSIC_U，界面不会将它返回给聊天工具。
+
+```dotenv
+NETEASE_MEMBER_ENABLED=true
+NETEASE_MEMBER_BRIDGE_URL=http://127.0.0.1:3010
+NETEASE_MEMBER_TOKEN_PATH=./data/netease/bridge-token.txt
+```
+
+会员启用后，一键启动与 `scripts/run_bot.ps1` 守护进程都会自动启动本机桥，守护进程每分钟检查一次并恢复已退出的桥。调试时可单独运行上述启动脚本，重复运行会复用已启动的桥。实际取音源仅调用 [维护者的账号播放接口](https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced/blob/main/module/song_url_v1.js)，固定关闭替代音源功能，并验证歌曲 ID、完整音源、官方 CDN 和实际媒体时长。
 
 ## 安装
 

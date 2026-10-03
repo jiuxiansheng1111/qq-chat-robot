@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="bridge-csrf" content="__CSRF_TOKEN__">
+  <title>网易云会员连接 · QQ 机器人</title>
+  <link rel="stylesheet" href="/login.css">
+  <script src="/login.js" defer></script>
+</head>
+<body>
+  <main>
+    <span class="tag">QQ 机器人 · 本机连接</span>
+    <h1>连接网易云会员</h1>
+    <p class="intro">用网易云音乐 App 扫码并确认登录，机器人就能读取你账号可播放的完整歌曲。</p>
+    <section class="card" aria-label="账号登录">
+      <p id="status" role="status" aria-live="polite">正在检查登录状态…</p>
+      <img id="qr" width="260" height="260" alt="网易云登录二维码" hidden>
+      <div class="actions">
+        <button id="generate">生成登录二维码</button>
+        <button id="refresh" class="secondary">刷新状态</button>
+        <button id="logout" class="secondary" hidden>断开本机连接</button>
+      </div>
+    </section>
+    <section class="usage">
+      <h2>登录后在 QQ 中使用</h2>
+      <code>@机器人 翻唱 丛雨 歌名 / 歌手</code>
+      <p>沿用你选定的 B 歌唱风格，自动处理音区、混音和 55 秒分段。歌曲能否取得整曲，由账号实际权限决定。</p>
+    </section>
+    <details>
+      <summary>扫码无法登录？使用已有登录信息</summary>
+      <p>在这里粘贴你自己的网易云网页版 Cookie 或 MUSIC_U。直接保存在本机，不需要发到聊天中。</p>
+      <label for="cookie">已有登录信息</label>
+      <textarea id="cookie" rows="3" autocomplete="off" spellcheck="false"></textarea>
+      <button id="import">保存并连接</button>
+    </details>
+    <p class="footnote">登录信息保存在当前电脑，GitHub 提交不包含它。断开连接会删除本机保存的登录信息。</p>
+  </main>
+</body>
+</html>

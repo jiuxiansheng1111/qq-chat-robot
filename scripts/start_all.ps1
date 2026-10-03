@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param()
 
 $ErrorActionPreference = "Stop"
@@ -341,6 +341,43 @@ try {
     }
 
     $settings = Get-DotEnvValues -Path $envPath
+    $neteaseMemberEnabled = ([string]$settings["NETEASE_MEMBER_ENABLED"]).Trim().ToLowerInvariant() -in @("1", "true", "yes", "on")
+    if ($neteaseMemberEnabled) {
+        $neteasePort = 3010
+        $neteaseBridgeUrl = ([string]$settings["NETEASE_MEMBER_BRIDGE_URL"]).Trim()
+        $neteaseUrlValid = $true
+        if ($neteaseBridgeUrl) {
+            $parsedNeteaseUrl = $null
+            $neteaseUrlValid = [Uri]::TryCreate($neteaseBridgeUrl, [UriKind]::Absolute, [ref]$parsedNeteaseUrl) -and
+                $parsedNeteaseUrl.Scheme -eq "http" -and
+                $parsedNeteaseUrl.Host.ToLowerInvariant() -in @("127.0.0.1", "localhost") -and
+                -not $parsedNeteaseUrl.UserInfo -and
+                $parsedNeteaseUrl.AbsolutePath -eq "/" -and
+                -not $parsedNeteaseUrl.Query -and
+                -not $parsedNeteaseUrl.Fragment -and
+                $parsedNeteaseUrl.Port -ge 1024
+            if ($neteaseUrlValid) {
+                $neteasePort = $parsedNeteaseUrl.Port
+            }
+        }
+
+        if (-not $neteaseUrlValid) {
+            Write-Host "[NETEASE] NETEASE_MEMBER_ENABLED is true, but NETEASE_MEMBER_BRIDGE_URL must use http://localhost or http://127.0.0.1. The member bridge was not started." -ForegroundColor Yellow
+        }
+        else {
+            $neteaseStartScript = Join-Path $PSScriptRoot "start_netease_member.ps1"
+            try {
+                if (-not (Test-Path -LiteralPath $neteaseStartScript -PathType Leaf)) {
+                    throw "网易云会员启动脚本缺失。"
+                }
+                & $neteaseStartScript -Port $neteasePort
+            }
+            catch {
+                Write-Host "[NETEASE] 会员桥接服务启动失败：$($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+    }
+
     $qqId = [string]$settings["ONEBOT_SELF_ID"]
     if ($qqId -notmatch '^\d{5,12}$') {
         throw "ONEBOT_SELF_ID is invalid in .env."
