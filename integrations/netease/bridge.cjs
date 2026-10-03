@@ -48,13 +48,21 @@ const sdkRequire = createRequire(path.join(dataRoot, 'runtime', 'package.json'))
 let sdkRoot;
 let request;
 let cookieToJson;
+let getXeapiPublicKey;
+const xeapiKeyPath = path.join(os.tmpdir(), 'xeapi_public_key');
+let xeapiKeyReady = false;
+let xeapiKeyPending = null;
 const api = {};
 try {
   sdkRoot = path.dirname(sdkRequire.resolve('@neteasecloudmusicapienhanced/api/package.json'));
+  const requireFromSdk = createRequire(path.join(sdkRoot, 'package.json'));
+  // 注册请求密钥的接口没设置超时，这里补上。
+  requireFromSdk('axios').defaults.timeout = 12000;
   const anonymousPath = path.join(os.tmpdir(), 'anonymous_token');
   if (!fs.existsSync(anonymousPath)) fs.writeFileSync(anonymousPath, '', { mode: 0o600 });
   request = sdkRequire(path.join(sdkRoot, 'util', 'request.js'));
   ({ cookieToJson } = sdkRequire(path.join(sdkRoot, 'util', 'index.js')));
+  ({ getXeapiPublicKey } = sdkRequire(path.join(sdkRoot, 'util', 'xeapiKey.js')));
   for (const name of ['login_qr_key', 'login_qr_create', 'login_qr_check', 'login_status', 'song_url_v1']) {
     api[name] = sdkRequire(path.join(sdkRoot, 'module', name + '.js'));
   }
@@ -89,7 +97,36 @@ let statusAt = 0;
 let qr = null;
 let qrBusy = false;
 
+async function ensureXeapiKey() {
+  if (xeapiKeyReady) return;
+  // 同时收到多个取歌请求时，只初始化一次。
+  if (!xeapiKeyPending) {
+    xeapiKeyPending = (async () => {
+      let previous = {};
+      try {
+        if (fs.statSync(xeapiKeyPath).size <= 65536) {
+          const saved = JSON.parse(fs.readFileSync(xeapiKeyPath, 'utf8'));
+          if (saved && saved.deviceId === device.id) previous = saved;
+        }
+      } catch { /* 没有缓存时，直接向网易云获取。 */ }
+      const key = await getXeapiPublicKey(previous, device.id);
+      if (!key || typeof key.sk !== 'string' || !key.sk ||
+        typeof key.publicKey !== 'string' || Buffer.from(key.publicKey, 'base64').length !== 32 ||
+        !key.version || key.deviceId !== device.id) throw new Error('Invalid request key');
+      const temporary = xeapiKeyPath + '.' + crypto.randomBytes(6).toString('hex') + '.tmp';
+      try {
+        fs.writeFileSync(temporary, JSON.stringify(key), { mode: 0o600 });
+        fs.renameSync(temporary, xeapiKeyPath);
+      } finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
+      xeapiKeyReady = true;
+    })();
+  }
+  try { await xeapiKeyPending; }
+  finally { xeapiKeyPending = null; }
+}
+
 async function call(name, args = {}, useCookie = cookie) {
+  if (name === 'song_url_v1') await ensureXeapiKey();
   const result = await api[name]({
     ...args, cookie: {
       ...cookieToJson(useCookie), deviceId: device.id,
