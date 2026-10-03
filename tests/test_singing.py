@@ -4,18 +4,22 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import ClassVar
 from unittest.mock import AsyncMock
 
 import numpy as np
 import pytest
 from pydantic import ValidationError
 
-from app.config import Settings
+from app.config import Settings as AppSettings
 from app.services.singing import (
     SingingCover,
     SingingPipelineError,
     _accompaniment_pitch_shift,
+    _automatic_pitch_target,
+    _plan_automatic_pitch,
     _validate_model_audio,
+    _vocal_mix_gain,
     _voice_pitch_shift_for_profile,
     archive_singing_job,
     check_cover_quality,
@@ -30,6 +34,11 @@ from app.services.singing_jobs import SingingError, SingingJob, SingingJobManage
 from scripts.transpose_singing_audio import transpose_audio_file
 
 PROFILES = {"murasame": {"label": "小丛雨"}, "yoshino": {"label": "芳乃"}}
+
+
+class Settings(AppSettings):
+    # Local selected voices and presets must not change these mock scenarios.
+    model_config: ClassVar[dict] = {**AppSettings.model_config, "env_file": None}
 
 
 def test_singing_requires_explicit_request_and_preserves_song_title():
@@ -88,6 +97,51 @@ def test_invalid_profile_pitch_shift_config_raises_safe_error(value):
 def test_singing_cover_pitch_shift_defaults_to_original_pitch():
     cover = SingingCover(None, "murasame", "丛雨", Path("cover.wav"), (), {})
     assert cover.pitch_shift_semitones == 0
+
+
+def test_automatic_pitch_targets_are_per_role_and_manual_zero_has_priority():
+    settings = Settings(singing_target_median_f0_by_profile_json='{"murasame":400}')
+    assert _automatic_pitch_target(settings, "murasame") == 400
+    assert _automatic_pitch_target(settings, "yoshino") is None
+    settings.singing_semitone_shift_by_profile_json = '{"murasame":0}'
+    assert _automatic_pitch_target(settings, "murasame") is None
+
+
+@pytest.mark.parametrize("value", ["null", "invalid", '{"murasame":true}', '{"murasame":79}', '{"murasame":1001}', '{"murasame":"400"}', '{"murasame":NaN}'])
+def test_automatic_pitch_rejects_bad_targets(value):
+    settings = Settings(singing_target_median_f0_by_profile_json=value)
+    with pytest.raises(SingingPipelineError, match="自动音区配置无效"):
+        _automatic_pitch_target(settings, "murasame")
+
+
+def test_b_style_vocal_mix_restores_level_with_bounded_constant_gain():
+    settings = Settings()
+    assert _vocal_mix_gain({"converted_rms": 0.0716252832}, settings) == pytest.approx(1.382193488)
+    assert _vocal_mix_gain({"converted_rms": 0.001}, settings) == 4
+    assert _vocal_mix_gain({"converted_rms": 2}, settings) == 0.1
+    for rms in (None, 0, float("nan"), True):
+        with pytest.raises(SingingPipelineError, match="歌声音量"):
+            _vocal_mix_gain({"converted_rms": rms}, settings)
+
+
+@pytest.mark.asyncio
+async def test_automatic_pitch_cli_passes_target_and_offline_then_rejects_bad_plan(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.singing.runtime_paths", lambda _: (Path("python"), tmp_path, Path("ffmpeg"), Path("ffprobe")))
+    output = tmp_path / "pitch_plan.json"
+    calls = []
+    async def run(args, **kwargs):
+        calls.append([str(item) for item in args])
+        output.write_text('{"expected_semitone_shift":12,"source_median_f0_hz":200}', encoding="utf-8")
+    monkeypatch.setattr("app.services.singing.run_audio_command", run)
+    plan = await _plan_automatic_pitch(tmp_path / "vocals.wav", 400, output, Settings(singing_hf_offline=True))
+    assert plan["mode"] == "automatic_octave"
+    assert plan["expected_semitone_shift"] == 12
+    assert calls[0][calls[0].index("--target-hz") + 1] == "400"
+    assert "--offline" in calls[0]
+    monkeypatch.setattr("app.services.singing.run_audio_command", AsyncMock())
+    output.write_text('{"expected_semitone_shift":3}', encoding="utf-8")
+    with pytest.raises(SingingPipelineError, match="可用的八度"):
+        await _plan_automatic_pitch(tmp_path / "vocals.wav", 400, output, Settings())
 
 
 @pytest.mark.asyncio
@@ -342,8 +396,9 @@ def test_cpu_accompaniment_transposer_uses_uniform_peak_guard(tmp_path, monkeypa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("automatic", [False, True])
 async def test_generation_retries_with_same_shift_and_mixes_equivalent_accompaniment(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, automatic,
 ):
     data_root = tmp_path / "singing-data"
     monkeypatch.setattr("app.services.singing.SINGING_DATA_ROOT", data_root)
@@ -388,12 +443,13 @@ async def test_generation_retries_with_same_shift_and_mixes_equivalent_accompani
         quality_shifts.append((output.name, expected_semitone_shift))
         if len(quality_shifts) == 1:
             raise SingingPipelineError("first quality attempt requests retry")
-        return {"accepted": True, "failures": [], "pitch_median_cents": 0}
+        return {"accepted": True, "failures": [], "pitch_median_cents": 0, "converted_rms": 0.05}
 
     monkeypatch.setattr("app.services.singing.convert_vocals", convert)
     monkeypatch.setattr("app.services.singing.check_cover_quality", check)
     transposer_args = []
     mix_accompaniments = []
+    mix_filters = []
 
     async def run_command(args, **kwargs):
         values = [str(value) for value in args]
@@ -413,29 +469,45 @@ async def test_generation_retries_with_same_shift_and_mixes_equivalent_accompani
         elif Path(values[0]).name == "ffmpeg":
             input_indices = [index for index, value in enumerate(values) if value == "-i"]
             mix_accompaniments.append(Path(values[input_indices[1] + 1]))
+            mix_filters.append(values[values.index("-filter_complex") + 1])
             Path(values[-1]).write_bytes(b"cover" * 500)
         else:
             raise AssertionError(f"Unexpected audio command: {values}")
         return ""
 
     monkeypatch.setattr("app.services.singing.run_audio_command", run_command)
-    settings = Settings(singing_semitone_shift_by_profile_json='{"murasame":9}')
+    planner = AsyncMock(return_value={"mode": "automatic_octave", "expected_semitone_shift": 12, "source_median_f0_hz": 200})
+    monkeypatch.setattr("app.services.singing._plan_automatic_pitch", planner)
+    settings = Settings(
+        singing_semitone_shift_by_profile_json='{}' if automatic else '{"murasame":9}',
+        singing_target_median_f0_by_profile_json='{"murasame":400}',
+    )
     cover = await generate_singing_cover(
         "song", "murasame", "a" * 32, settings, AsyncMock(), bot_self_id="bot"
     )
 
-    assert model_shifts == [(None, 9), (50, 9)]
-    assert quality_shifts == [("quality.json", 9), ("quality_retry.json", 9)]
-    assert transposer_args[transposer_args.index("--semitones") + 1] == "-3"
-    assert mix_accompaniments == [data_root / "jobs" / ("a" * 32) / "accompaniment_pitch_shifted.wav"]
-    assert cover.pitch_shift_semitones == 9
-    assert cover.quality["voice_pitch_shift_semitones"] == 9
-    assert cover.quality["accompaniment_pitch_shift_semitones"] == -3
+    selected_shift = 12 if automatic else 9
+    assert model_shifts == [(None, selected_shift), (50, selected_shift)]
+    assert quality_shifts == [("quality.json", selected_shift), ("quality_retry.json", selected_shift)]
+    if automatic:
+        assert planner.await_count == 1
+        assert not transposer_args
+        assert mix_accompaniments[0].name == "no_vocals.wav"
+    else:
+        assert not planner.await_count
+        assert transposer_args[transposer_args.index("--semitones") + 1] == "-3"
+        assert mix_accompaniments == [data_root / "jobs" / ("a" * 32) / "accompaniment_pitch_shifted.wav"]
+    assert "volume=1.9800000000[v]" in mix_filters[0]
+    assert "level=false,volume=0.93" in mix_filters[0]
+    assert cover.pitch_shift_semitones == selected_shift
+    assert cover.quality["voice_pitch_shift_semitones"] == selected_shift
+    assert cover.quality["accompaniment_pitch_shift_semitones"] == (0 if automatic else -3)
     saved_report = json.loads(
         (data_root / "jobs" / ("a" * 32) / "quality_retry.json").read_text(encoding="utf-8")
     )
-    assert saved_report["voice_pitch_shift_semitones"] == 9
-    assert saved_report["accompaniment_pitch_shift_semitones"] == -3
+    assert saved_report["voice_pitch_shift_semitones"] == selected_shift
+    assert saved_report["accompaniment_pitch_shift_semitones"] == (0 if automatic else -3)
+    assert saved_report["pitch_plan"]["mode"] == ("automatic_octave" if automatic else "fixed")
 
 
 @pytest.mark.asyncio

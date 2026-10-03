@@ -1,4 +1,4 @@
-"""Resolve songs, timed lyrics, and explicitly available audio for AI singing.
+"""Resolve songs, optional timed lyrics, and explicitly available audio for AI singing.
 
 Local originals belong in ``data/singing/songs.json`` as
 ``{"12345": "songs/example.mp3"}`` (or ``{"12345": {"path": "..."}}``).
@@ -7,6 +7,7 @@ only when NetEase's anonymous player API returns a full, public CDN source.
 """
 
 import json
+import logging
 import os
 import re
 import uuid
@@ -38,6 +39,7 @@ _AUDIO_EXTENSIONS = frozenset({".mp3", ".m4a", ".flac", ".wav", ".ogg"})
 _MAX_LYRICS_BYTES = 256 * 1024
 _MAX_MANIFEST_BYTES = 1024 * 1024
 _DEFAULT_MAX_SOURCE_BYTES = 100 * 1024 * 1024
+logger = logging.getLogger(__name__)
 
 
 class SingingSourceError(RuntimeError):
@@ -321,7 +323,7 @@ async def _public_source(
 
 
 async def resolve_singing_song(query: str, settings: Settings) -> SingingSong:
-    """Find a song and its timed lyrics, then a local or public full audio source."""
+    """Find a song, optional lyrics, and a local or public full audio source."""
     query = " ".join(query.split()).strip()[:120]
     if not query:
         raise SingingSourceError("请提供歌名，建议同时提供歌手名")
@@ -332,10 +334,26 @@ async def resolve_singing_song(query: str, settings: Settings) -> SingingSong:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
             if source_path is None:
                 track = await _detail_track(client, track)
-            lyrics_text = await _lyrics(client, track.song_id, local_lyrics)
-            lyric_lines = parse_lrc(lyrics_text)
-            if not lyric_lines:
-                raise SingingSourceError("这首歌没有可用于分段的时间轴歌词")
+            if local_lyrics is not None:
+                # Explicit local lyric mappings are configuration: bad paths,
+                # oversized files, and unreadable files must remain actionable errors.
+                lyrics_text = await _lyrics(client, track.song_id, local_lyrics)
+                lyric_lines = parse_lrc(lyrics_text)
+            else:
+                try:
+                    lyrics_text = await _lyrics(client, track.song_id, None)
+                    lyric_lines = parse_lrc(lyrics_text)
+                except (httpx.HTTPError, ValueError, SingingSourceError) as exc:
+                    # Audio conversion needs a complete source, not lyrics. Keep
+                    # the failure visible in logs but continue with pause-based splitting.
+                    logger.info(
+                        "Timed lyrics unavailable for NetEase song "
+                        "id=%s (%s); continuing with audio source check",
+                        track.song_id,
+                        type(exc).__name__,
+                    )
+                    lyrics_text = ""
+                    lyric_lines = ()
             if source_path is not None:
                 return SingingSong(track, lyrics_text, lyric_lines, source_path, None)
             source_url, source_size = await _public_source(client, track, settings)

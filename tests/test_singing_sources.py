@@ -155,15 +155,94 @@ async def test_resolve_rejects_unsafe_and_trial_urls(monkeypatch, tmp_path, url,
         await sources.resolve_singing_song("春泥棒", SETTINGS)
 
 
-async def test_resolve_reports_unauthorized_lyrics(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "lyric_payload,expected_text",
+    [
+        ({"code": 200}, ""),
+        ({"code": 200, "lrc": {"lyric": "plain text without timestamps"}}, "plain text without timestamps"),
+    ],
+)
+async def test_resolve_accepts_full_audio_without_timed_lyrics(
+    monkeypatch, tmp_path, lyric_payload, expected_text
+):
     monkeypatch.setattr(sources, "SINGING_DATA_ROOT", tmp_path)
 
     async def search(query, settings):
         return [TRACK]
 
     monkeypatch.setattr(sources, "search_netease_music", search)
-    _mock_client(monkeypatch, lambda request: httpx.Response(401))
-    with pytest.raises(sources.SingingSourceError, match="暂时无法读取"):
+
+    def handler(request):
+        if request.url.path.endswith("/lyric"):
+            return httpx.Response(200, json=lyric_payload)
+        return httpx.Response(
+            200,
+            json={"code": 200, "data": [{"id": 123, "url": CDN_URL, "size": 1_100_000}]},
+        )
+
+    _mock_client(monkeypatch, handler)
+    song = await sources.resolve_singing_song("春泥棒", SETTINGS)
+    assert song.lyrics_text == expected_text
+    assert song.lyric_lines == ()
+    assert song.source_url == CDN_URL
+
+
+@pytest.mark.parametrize("failure", ["timeout", "parse", "business"])
+async def test_resolve_continues_after_remote_lyrics_failure(monkeypatch, tmp_path, caplog, failure):
+    monkeypatch.setattr(sources, "SINGING_DATA_ROOT", tmp_path)
+
+    async def search(query, settings):
+        return [TRACK]
+
+    monkeypatch.setattr(sources, "search_netease_music", search)
+
+    def handler(request):
+        if request.url.path.endswith("/lyric"):
+            if failure == "timeout":
+                raise httpx.ReadTimeout("lyrics timeout", request=request)
+            if failure == "parse":
+                return httpx.Response(200, content=b"not json")
+            return httpx.Response(200, json={"code": 403})
+        return httpx.Response(
+            200,
+            json={"code": 200, "data": [{"id": 123, "url": CDN_URL, "size": 1_100_000}]},
+        )
+
+    _mock_client(monkeypatch, handler)
+    with caplog.at_level("INFO", logger=sources.__name__):
+        song = await sources.resolve_singing_song("春泥棒", SETTINGS)
+    assert song.lyrics_text == ""
+    assert song.lyric_lines == ()
+    assert song.source_url == CDN_URL
+    assert "Timed lyrics unavailable" in caplog.text
+
+
+async def test_resolve_still_rejects_preview_when_lyrics_are_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(sources, "SINGING_DATA_ROOT", tmp_path)
+
+    async def search(query, settings):
+        return [TRACK]
+
+    monkeypatch.setattr(sources, "search_netease_music", search)
+
+    def handler(request):
+        if request.url.path.endswith("/lyric"):
+            return httpx.Response(200, json={"code": 200})
+        return httpx.Response(
+            200,
+            json={
+                "code": 200,
+                "data": [{
+                    "id": 123,
+                    "url": CDN_URL,
+                    "size": 1_100_000,
+                    "freeTrialInfo": {"start": 0, "end": 30},
+                }],
+            },
+        )
+
+    _mock_client(monkeypatch, handler)
+    with pytest.raises(sources.SingingSourceError, match="试听片段或需要授权"):
         await sources.resolve_singing_song("春泥棒", SETTINGS)
 
 
@@ -206,3 +285,48 @@ def test_local_manifest_rejects_path_traversal(monkeypatch, tmp_path):
     (root / "songs.json").write_text(json.dumps({"123": "../other.mp3"}), encoding="utf-8")
     with pytest.raises(sources.SingingSourceError, match="data/singing"):
         sources._local_source("123", SETTINGS)
+
+
+@pytest.mark.parametrize("failure", ["traversal", "oversized", "unreadable"])
+async def test_explicit_local_lyrics_errors_are_not_swallowed(monkeypatch, tmp_path, failure):
+    root = tmp_path / "singing"
+    root.mkdir()
+    monkeypatch.setattr(sources, "SINGING_DATA_ROOT", root)
+    (root / "song.mp3").write_bytes(b"music")
+    lyric_path = root / "song.lrc"
+    lyric_value = "song.lrc"
+    if failure == "traversal":
+        outside = tmp_path / "outside.lrc"
+        outside.write_text("[00:01]outside", encoding="utf-8")
+        lyric_value = "../outside.lrc"
+    elif failure == "oversized":
+        lyric_path.write_text("x" * (sources._MAX_LYRICS_BYTES + 1), encoding="utf-8")
+    else:
+        lyric_path.write_text("[00:01]unreadable", encoding="utf-8")
+
+    (root / "songs.json").write_text(
+        json.dumps({"123": {"path": "song.mp3", "lyrics_path": lyric_value}}),
+        encoding="utf-8",
+    )
+
+    async def search(query, settings):
+        return [TRACK]
+
+    monkeypatch.setattr(sources, "search_netease_music", search)
+    if failure == "unreadable":
+        read_text = sources.Path.read_text
+
+        def fail_lyric_read(path, *args, **kwargs):
+            if path == lyric_path:
+                raise PermissionError("test unreadable local lyric")
+            return read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(sources.Path, "read_text", fail_lyric_read)
+
+    expected = {
+        "traversal": "data/singing",
+        "oversized": "歌词文件过大",
+        "unreadable": "本地歌词文件无法读取",
+    }[failure]
+    with pytest.raises(sources.SingingSourceError, match=expected):
+        await sources.resolve_singing_song("春泥棒", SETTINGS)
