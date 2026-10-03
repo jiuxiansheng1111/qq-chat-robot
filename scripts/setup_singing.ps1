@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$GpuPython = "..\qq-chatrobot-voice\GPT-SoVITS\.venv\Scripts\python.exe",
     [switch]$SkipPythonDependencies,
@@ -61,8 +61,8 @@ if (-not (Test-Path -LiteralPath $runtimePython)) {
     if ($LASTEXITCODE -ne 0) { throw "Failed to create the isolated singing runtime venv." }
 }
 
-# Add the existing CUDA environment's packages to the new runtime's import
-# path without writing to that environment. Package installs remain local.
+# 把现有 CUDA 环境的包加入新运行时的导入路径，
+# 不改写该环境。安装仍只写入本地。
 $sharedSiteJson = & $GpuPython -c "import json,sysconfig; print(json.dumps(sysconfig.get_paths()['purelib'], ensure_ascii=True))"
 if ($LASTEXITCODE -ne 0 -or -not $sharedSiteJson) { throw "Could not locate CUDA environment site-packages." }
 $runtimeSiteJson = & $runtimePython -c "import json,sysconfig; print(json.dumps(sysconfig.get_paths()['purelib'], ensure_ascii=True))"

@@ -1,14 +1,20 @@
 ﻿[CmdletBinding()]
 param()
 
-# Long-running lifecycle supervisor for the FastAPI bot.
-# It follows NapCat's OneBot HTTP Server instead of keeping Uvicorn alive
-# while QQ/NapCat is closed:
-#   OneBot 3000 available   -> start/adopt Uvicorn
-#   OneBot 3000 unavailable -> stop Uvicorn and wait
+# FastAPI 机器人的常驻生命周期监控。
+# 根据 NapCat 的 OneBot HTTP Server 状态管理 Uvicorn：
+# QQ/NapCat 关闭时停止 Uvicorn。
+#   OneBot 3000 可用   -> 启动或接管 Uvicorn
+#   OneBot 3000 不可用 -> 停止 Uvicorn 并等待
 
 $ErrorActionPreference = "Continue"
 $projectRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'bot_runtime_mode.ps1')
+if ((Get-QQChatRobotRuntime -ProjectRoot $projectRoot) -eq 'astrbot') {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'run_astrbot.ps1')
+    exit $LASTEXITCODE
+}
+
 $pythonPath = Join-Path $projectRoot ".venv\Scripts\python.exe"
 $bootstrapScript = Join-Path $PSScriptRoot "bootstrap_windows.ps1"
 $envPath = Join-Path $projectRoot ".env"
@@ -260,7 +266,7 @@ catch {
     throw
 }
 finally {
-    # If this supervisor is deliberately stopped, do not leave an orphaned
-    # Uvicorn process behind.
+    # 主动停止此监控脚本时，不要留下孤立的
+    # Uvicorn 进程。
     Stop-Uvicorn
 }

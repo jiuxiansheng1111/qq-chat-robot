@@ -1,6 +1,6 @@
-"""Offline Seed-VC singing quality check; run with the singing runtime Python.
+"""离线检查 Seed-VC 翻唱音质；使用翻唱运行时的 Python。
 
-Example:
+示例：
     data/singing/runtime/.venv/Scripts/python.exe scripts/check_singing_quality.py \
       --seed-root data/singing/runtime/seed-vc --source source_vocals.wav \
       --converted converted_vocals.wav --reference target_voice.wav \
@@ -34,7 +34,9 @@ def _parse_args() -> argparse.Namespace:
         help="Expected source-to-converted pitch shift for controlled transposition checks",
     )
     parser.add_argument("--min-within-semitone", type=float, default=0.70)
-    parser.add_argument("--min-voiced-recall", type=float, default=0.70)
+    parser.add_argument("--min-voiced-recall", type=float, default=0.88)
+    parser.add_argument("--min-energy-recall", type=float, default=0.90)
+    parser.add_argument("--max-missing-vocal-seconds", type=float, default=1.2)
     parser.add_argument("--max-duration-error", type=float, default=0.03)
     parser.add_argument("--min-rms", type=float, default=1e-4)
     parser.add_argument("--max-clipping", type=float, default=0.01)
@@ -48,7 +50,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _audio_windows(audio, sample_rate: int, seconds: int = 8, limit: int = 12):
-    """Use distributed 8 s windows and skip silence for speaker comparison."""
+    """均匀取 8 秒窗口，并跳过静音段后再比较说话人。"""
     import numpy as np
 
     window_size = seconds * sample_rate
@@ -62,7 +64,7 @@ def _audio_windows(audio, sample_rate: int, seconds: int = 8, limit: int = 12):
 
 
 def _infer_f0(model, audio, sample_rate: int = 16000, chunk_seconds: int = 20):
-    """Chunk long songs to keep RMVPE memory bounded; frames are 10 ms."""
+    """长歌按段处理以限制 RMVPE 内存；帧长为 10 毫秒。"""
     import numpy as np
 
     chunk_size = sample_rate * chunk_seconds
@@ -96,8 +98,8 @@ def _speaker_embedding(model, audio, device: str):
 
 
 def _evaluate(args: argparse.Namespace) -> dict:
-    # Seed's older checkpoints use torch.load without weights_only. This is
-    # restricted to the official model files loaded by its own modules.
+    # Seed 的旧检查点会在 torch.load 时不传 weights_only。
+    # 此处仅对 Seed 自己模块加载的官方模型文件放开限制。
     os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
     os.environ["HF_ENDPOINT"] = os.environ.get("SINGING_HF_ENDPOINT", "https://huggingface.co")
     os.environ["HF_HUB_DISABLE_XET"] = "1"
@@ -122,9 +124,9 @@ def _evaluate(args: argparse.Namespace) -> dict:
     )
     if not all(path.is_file() for path in input_paths):
         raise ValueError("All input paths must be audio files")
-    # Keep this project's ``app`` package ahead of Seed-VC's ``app.py``.
+    # 把本项目的 ``app`` 包放在 Seed-VC 的 ``app.py`` 前面。
     sys.path.insert(1, str(seed_root))
-    os.chdir(seed_root)  # hf_utils caches under ./checkpoints, matching Seed-VC.
+    os.chdir(seed_root)  # hf_utils 会使用 Seed-VC 相同的 ./checkpoints 缓存目录。
 
     import librosa
     import numpy as np
@@ -133,7 +135,11 @@ def _evaluate(args: argparse.Namespace) -> dict:
     from modules.campplus.DTDNN import CAMPPlus
     from modules.rmvpe import RMVPE
 
-    from app.services.singing_quality import compute_quality_report, quality_failures
+    from app.services.singing_quality import (
+        compute_energy_coverage,
+        compute_quality_report,
+        quality_failures,
+    )
 
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     rmvpe_path = load_custom_model_from_hf("lj1995/VoiceConversionWebUI", "rmvpe.pt", None)
@@ -176,6 +182,14 @@ def _evaluate(args: argparse.Namespace) -> dict:
         identity_reference_embedding=identity_reference_embedding,
         expected_semitone_shift=args.expected_semitone_shift,
     )
+    report.update(
+        compute_energy_coverage(
+            source_16k,
+            converted_16k,
+            sample_rate=16000,
+            alignment_delay_ms=report["alignment_delay_ms"],
+        )
+    )
     failures = quality_failures(
         report,
         max_pitch_median_cents=args.max_pitch_cents,
@@ -186,11 +200,18 @@ def _evaluate(args: argparse.Namespace) -> dict:
         max_clipping_ratio=args.max_clipping,
         min_voice_similarity=args.min_voice_similarity,
         min_source_voiced_frames=args.min_source_voiced_frames,
+        min_energy_recall=args.min_energy_recall,
+        max_missing_vocal_seconds=args.max_missing_vocal_seconds,
     )
     return {
         "accepted": not failures,
         "failures": failures,
         "voice_similarity_basis": "conversion_prompt",
+        "pitch_diagnostics_basis": (
+            "源音高变化单独作基线（包含振音与旋律跳进）；残差为转换音高减去"
+            "预期移调后的源音高；只比较相邻对齐有声帧，不跨静音，不参与通过判定"
+        ),
+        "pitch_diagnostics_are_gating": False,
         **report,
     }
 

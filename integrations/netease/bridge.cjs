@@ -1,6 +1,6 @@
 'use strict';
 
-// Call only the account API modules we use; never start the SDK's public server.
+// 只调用所需的账号接口，不启动 SDK 的公共服务。
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -23,8 +23,7 @@ const authPath = path.join(dataRoot, 'auth.json');
 const tokenPath = path.join(dataRoot, 'bridge-token.txt');
 const cookieKeys = new Set(['MUSIC_U', '__csrf', 'NMTID', 'MUSIC_A_T', 'MUSIC_R_T', 'MUSIC_SNS']);
 
-// Some upstream error objects include HTTP request headers. They must never
-// reach our logs, which contain only the bridge's own fixed messages.
+// 上游异常可能带请求头，日志只写固定提示，避免泄露账号。
 for (const method of ['log', 'info', 'warn', 'error', 'debug', 'trace']) {
   console[method] = () => {};
 }
@@ -33,12 +32,12 @@ process.env.ENABLE_RANDOM_CN_IP = 'false';
 process.env.ENABLE_PROXY = 'false';
 process.env.DEBUG_COOKIE = '0';
 process.env.DEBUG_URL = '0';
-// Keep the SDK's client identity stable across restarts as well as the login.
+// 重启后沿用设备标识和登录状态。
 const devicePath = path.join(dataRoot, 'device.json');
 let device;
 try {
   if (fs.statSync(devicePath).size <= 1024) device = JSON.parse(fs.readFileSync(devicePath, 'utf8'));
-} catch { /* A new installation creates its own client identity. */ }
+} catch { /* 首次安装会创建设备标识。 */ }
 if (!device || !/^[0-9A-F]{52}$/.test(device.id) || !/^[0-9a-f]{64}$/.test(device.nuid)) {
   device = { id: crypto.randomBytes(26).toString('hex').toUpperCase(), nuid: crypto.randomBytes(32).toString('hex'), created: Date.now() };
   fs.writeFileSync(devicePath, JSON.stringify(device), { mode: 0o600 });
@@ -73,7 +72,7 @@ try {
 
 function normalizedCookie(value) {
   if (typeof value !== 'string' || value.length > 32768 || /[\r\n\0]/.test(value)) return '';
-  // Permit either an exported Cookie header or the MUSIC_U value alone.
+  // 可填写导出的 Cookie，也可只填 MUSIC_U。
   if (!value.includes('=')) value = 'MUSIC_U=' + value.trim();
   const cookies = {};
   for (const item of value.split(';')) {
@@ -91,7 +90,7 @@ try {
   if (fs.statSync(authPath).size <= 65536) {
     cookie = normalizedCookie(JSON.parse(fs.readFileSync(authPath, 'utf8')).cookie);
   }
-} catch { /* A new installation starts logged out. */ }
+} catch { /* 首次安装还没有登录。 */ }
 let cachedStatus = null;
 let statusAt = 0;
 let qr = null;
@@ -277,7 +276,7 @@ const server = http.createServer(async (req, res) => {
       const status = await accountStatus();
       if (!status.logged_in) return reply(res, 401, { error: '请在本机页面登录网易云账号。' });
       const result = await call('song_url_v1', { id: songId, level: 'exhigh' });
-      // Account cookies and unrelated upstream fields stay inside this process.
+      // 账号 cookie 和无关字段留在桥接进程里。
       const data = Array.isArray(result.data) ? result.data.filter(item => item && String(item.id) === songId).map(item => ({
         id: item.id, code: item.code, url: item.url, size: item.size, type: item.type,
         br: item.br, time: item.time, freeTrialInfo: item.freeTrialInfo,
@@ -294,8 +293,7 @@ server.requestTimeout = 20000;
 server.headersTimeout = 10000;
 server.on('error', () => { process.stderr.write('NetEase bridge failed to start; check its local port.\n'); process.exit(1); });
 server.listen(port, '127.0.0.1', () => {
-  // Publish the token only after owning the port, so a duplicate start cannot
-  // replace the running bridge's token.
+  // 监听成功后再写 token，避免重复启动覆盖正在使用的凭据。
   try { fs.writeFileSync(tokenPath, token + '\n', { mode: 0o600 }); }
   catch { process.stderr.write('Unable to write the local bridge token.\n'); process.exit(1); }
   process.stdout.write('NetEase member bridge ready: http://127.0.0.1:' + port + '/login\n');

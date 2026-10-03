@@ -64,11 +64,11 @@ BAIDU_DIRECT_PAGES = {
     "令迦奥特曼": "https://bkso.baidu.com/item/令迦奥特曼/24350007",
 }
 
-# Some form pages are represented as tabs inside a general Moegirl character
-# page, so a normal pageimage lookup only returns Geed's base artwork. Prefer
-# an official single-subject product image for Royal Mega-Master: the older
-# Moegirl banner contains two poses side by side and becomes misleading when a
-# portrait collection card crops its centre.
+# 有些形态页面做成了综合萌娘百科角色页里的标签，因此普通 pageimage 查询
+# 只会返回捷德的基础形态图片。优先使用
+# 皇家至尊形态的官方单人商品图：旧横幅把两个姿势并排放在一起，
+# 用作单人图片会造成误导。
+# 再裁剪到图鉴卡片中心时会造成误导。
 DIRECT_FORM_IMAGE_URLS = {
     "捷德奥特曼·尊皇形态": (
         (
@@ -223,9 +223,9 @@ _GENERIC_IMAGE_TERMS = {
 }
 
 
-# Some forms live only inside the parent hero's Baidu/Wikipedia article.
-# These terms are for page discovery only; image validation still requires the
-# requested form's strong aliases, so a parent page cannot silently supply a base image.
+# 有些形态只出现在所属英雄的百度/维基百科页面里。
+# 这些词只用于找到页面；图片仍须通过该形态的强别名校验，
+# 避免误把基础形态图片当成指定形态。
 _PARENT_DISCOVERY_TERMS = {
     "闪耀迪迦": ("迪迦奥特曼",),
     "盖亚奥特曼V2": ("盖亚奥特曼",),
@@ -255,9 +255,9 @@ def _normalize(value: str) -> str:
 
 
 def _specific_terms(name: str, aliases: tuple[str, ...]) -> tuple[str, ...]:
-    # Keep the character identity + form identity together. We accept both
-    # "Ultraman Tiga Power Type" and "Tiga Power Type", but never a bare
-    # generic suffix such as only "Power Type" / "强力型".
+    # 把角色身份和形态身份一起匹配。以下两种写法都接受：
+    # “Ultraman Tiga Power Type”和“Tiga Power Type”，但不接受只有形态名。
+    # 例如不能只用 “Power Type” / “强力型” 这样的通用后缀。
     candidates = [name, *aliases]
     terms: list[str] = []
     generic = {_normalize(value) for value in _GENERIC_IMAGE_TERMS}
@@ -302,7 +302,7 @@ def _parent_page_form_terms(
     aliases: tuple[str, ...],
     page_title: str,
 ) -> tuple[str, ...]:
-    """Allow short form labels only after the page title proves the parent hero."""
+    """只有页面标题已确认所属英雄后，才接受简短的形态名称。"""
     parent_values: list[str] = []
     if "·" in name:
         parent_values.append(name.split("·", 1)[0])
@@ -372,7 +372,7 @@ def _clean_image_url(value: str, page_url: str) -> str:
 
 
 class _BingImageResultParser(HTMLParser):
-    """Collect Bing image-tile metadata from <a class="iusc" m="...">."""
+    """收集 Bing 图片结果中的 <a class="iusc" m="..."> 元数据。"""
 
     def __init__(self) -> None:
         super().__init__()
@@ -504,14 +504,14 @@ def baidu_page_image_candidates(
         if score:
             candidates.append((score, image_url, label))
 
-    # Baidu/Wikipedia parent pages often contain a form gallery whose image URL
-    # itself is generic. The local HTML/JSON context can still prove the exact
-    # form as long as it contains a strong "character + form" term.
+    # 百度/维基百科的英雄主页面常带有形态图集，但图片 URL
+    # 本身可能很笼统。只要本地 HTML/JSON 上下文含有
+    # 强“角色 + 形态”词组，仍可确认具体形态。
     candidates.extend(_raw_image_candidates(payload, page_url, image_terms))
 
-    # Baidu's no-ID /item/<name> route can return a generic 350x350 placeholder
-    # while still echoing the requested title. Only trust an og:image when the
-    # resolved page has a canonical numeric lemma id.
+    # 百度无 ID 的 /item/<name> 路径可能返回通用 350x350 占位图，
+    # 同时页面仍回显请求标题。只有目标页面有规范数字词条 ID 时，
+    # 才信任 og:image。
     parsed_page = urlparse(page_url)
     has_numeric_lemma_id = bool(
         re.search(r"/item/[^/?]+/\d+(?:$|/)", parsed_page.path)
@@ -537,8 +537,8 @@ async def _download_verified_image(
 ) -> str:
     urls = [image_url]
     if (urlparse(image_url).hostname or "").casefold() == "storage.moegirl.org.cn":
-        # The storage CDN can fail TLS from some domestic hosts. wsrv.nl is
-        # used only as a transport mirror; attribution remains the Moegirl page.
+        # 部分国内主机访问存储 CDN 时会遇到 TLS 故障。wsrv.nl
+        # 只作传输镜像，图片来源仍注明萌娘百科页面。
         urls.append("https://wsrv.nl/?url=" + quote(image_url, safe=""))
     response = None
     last_error: Exception | None = None
@@ -602,7 +602,7 @@ async def direct_ultraman_form_image(
     name: str,
     settings: Settings,
 ) -> EncyclopediaImage | None:
-    """Fetch a manually verified form image before broad search fallbacks."""
+    """在通用搜索回退之前，先查找人工核实过的形态图片。"""
     candidates = DIRECT_FORM_IMAGE_URLS.get(name, ())
     if not candidates:
         return None
@@ -640,7 +640,7 @@ async def moegirl_ultraman_image(
     aliases: tuple[str, ...],
     settings: Settings,
 ) -> EncyclopediaImage | None:
-    """Resolve Ultraman/form art from Moegirlpedia with page-search fallback."""
+    """从萌娘百科查找奥特曼/形态图片，并回退到页面搜索。"""
     terms = _specific_terms(name, aliases)
     if not terms:
         return None
@@ -664,7 +664,7 @@ async def moegirl_ultraman_image(
         for domain in domains:
             page_titles: list[str] = []
 
-            # Exact title/redirect lookup.
+            # 精确标题/重定向查询。
             for query in queries[:8]:
                 try:
                     response = await client.get(
@@ -691,9 +691,9 @@ async def moegirl_ultraman_image(
                     if not isinstance(page, dict) or page.get("missing") is not None:
                         continue
                     page_title = str(page.get("title") or query).strip()
-                    # The exact-title endpoint must prove the requested form
-                    # from the returned page title itself; the query string is
-                    # user input and cannot be identity evidence.
+                    # 精确标题接口必须通过返回页面标题证明指定形态；
+                    # 搜索词是用户输入，
+                    # 不能用作身份依据。
                     if not _matches_specific(page_title, terms):
                         continue
                     if _matches_specific(page_title, terms):
@@ -731,7 +731,7 @@ async def moegirl_ultraman_image(
                             label=page_title or query,
                         )
 
-            # Moegirl internal search catches disambiguated titles and aliases.
+            # 萌娘百科内部搜索可找到有歧义的标题和别名。
             search_values = list(queries[:8])
             search_values.extend(f"{query} 奥特曼" for query in queries[:6])
             for query in tuple(dict.fromkeys(search_values))[:14]:
@@ -763,8 +763,8 @@ async def moegirl_ultraman_image(
                     page_title = str(page.get("title") or "").strip()
                     if not page_title:
                         continue
-                    # Prefer a direct search-result lead image when the result
-                    # itself clearly names the requested hero/form.
+                    # 如果搜索结果本身明确写出英雄/形态名，
+                    # 优先使用该结果的主图。
                     if _matches_specific(page_title, terms):
                         page_titles.append(page_title)
                         image_urls = []
@@ -799,8 +799,8 @@ async def moegirl_ultraman_image(
                                 label=page_title,
                             )
 
-            # If the form has no standalone page, inspect the found character /
-            # series pages and require the image metadata itself to name the form.
+            # 如果形态没有独立页面，就检查找到的角色页或
+            # 系列页，并要求图片元数据明确写出形态名。
             for page_title in tuple(dict.fromkeys(page_titles))[:24]:
                 page_url = f"{domain}/{quote(page_title)}"
                 try:
@@ -871,9 +871,9 @@ async def baidu_baike_ultraman_image(
             seen_pages.add(parent_url)
             direct_results.append(SearchResult(name, parent_url, "parent-gallery"))
 
-    # Try direct lemma URLs first. Parent-character terms are included by
-    # _encyclopedia_search_terms, so forms hosted only in a parent gallery can
-    # still be found without waiting for a general web search.
+    # 先尝试直接词条 URL。_encyclopedia_search_terms 会加入所属角色词，
+    # 因此即使形态只出现在所属英雄的图集里，
+    # 也能先找到它，不必等通用网页搜索。
     baidu_lemma_terms = [
         query for query in searches if re.search(r"[\u3400-\u9fff]", query)
     ][:4]
@@ -931,7 +931,7 @@ async def baidu_baike_ultraman_image(
         if direct_match is not None:
             return direct_match
 
-        # Only pay the search-engine cost when direct Baidu lemmas did not work.
+        # 直接百度词条找不到结果时，再调用搜索引擎。
         discovered: list[SearchResult] = []
         for query in searches[:3]:
             try:
@@ -957,7 +957,7 @@ def _wikipedia_wikitext_image_candidates(
     aliases: tuple[str, ...],
     page_title: str,
 ) -> list[str]:
-    """Return File:/Image: titles whose local wikitext context names the exact form."""
+    """返回本地 wikitext 能证明是指定形态的 File:/Image: 标题。"""
     strong_terms = _specific_terms(name, aliases)
     parent_terms = _parent_page_form_terms(name, aliases, page_title)
     match_terms = tuple(dict.fromkeys((*strong_terms, *parent_terms)))
@@ -970,9 +970,9 @@ def _wikipedia_wikitext_image_candidates(
         re.IGNORECASE,
     )
     for match in pattern.finditer(wikitext or ""):
-        # Validate only this File/Image link (filename + its own caption/options).
-        # Looking hundreds of characters around the link can accidentally borrow
-        # the caption of the next form in a gallery (e.g. Tiga Power vs Sky).
+        # 只校验这个 File/Image 链接（文件名及它自己的说明/选项）。
+        # 查看链接周围很长一段文本，可能会误取
+        # 图集中下一个形态的说明（例如迪迦强力型和空中型）。
         link_text = html.unescape(match.group(0))
         file_title = match.group(1).strip()
         descriptor = f"{file_title} {link_text}"
@@ -1044,8 +1044,8 @@ async def _wikipedia_file_image(
 
 def _wikipedia_result_matches(page: dict, terms: tuple[str, ...]) -> bool:
     title = str(page.get("title") or "")
-    # For a form, accepting a base-character page image is unsafe. Only use the
-    # page image when the page title itself identifies the requested form.
+    # 对形态来说，使用基础角色页面图片不安全。只有页面标题
+    # 明确指出目标形态时，才能使用页面图片。
     return _matches_specific(title, terms)
 
 
@@ -1119,9 +1119,9 @@ async def wikipedia_ultraman_image(
                             if resolved is not None:
                                 return resolved
 
-                    # A form can live as a subsection/gallery on the parent
-                    # Wikipedia article. First inspect wikitext because captions
-                    # often name the form even when the uploaded file name is generic.
+                    # 形态可能以章节或图集形式出现在所属角色的
+                    # 维基百科页面里。先检查 wikitext，因为图片标题
+                    # 即使很笼统，说明文字也常会写出具体形态。
                     page_id = page.get("pageid")
                     if page_id:
                         try:
@@ -1273,7 +1273,7 @@ def encyclopedia_reference_matches(
     aliases: tuple[str, ...],
     label: str,
 ) -> bool:
-    """Return whether a selected encyclopedia image explicitly names the target."""
+    """返回选中的百科图片是否明确写出目标名称。"""
     terms = _specific_terms(name, aliases)
     return bool(terms) and _matches_specific(label, terms)
 
@@ -1283,7 +1283,7 @@ async def baidu_image_search_ultraman_image(
     aliases: tuple[str, ...],
     settings: Settings,
 ) -> EncyclopediaImage | None:
-    """Use Baidu Images only for exact-form results backed by trusted source sites."""
+    """只接受来自可信来源站点、且精确对应形态的百度图片结果。"""
     terms = _specific_terms(name, aliases)
     if not terms:
         return None
@@ -1393,7 +1393,7 @@ async def bing_image_search_ultraman_image(
     aliases: tuple[str, ...],
     settings: Settings,
 ) -> EncyclopediaImage | None:
-    """Fallback to Bing Images, but only accept metadata that names the exact form."""
+    """回退到 Bing 图片搜索，但只接受元数据明确写出指定形态的结果。"""
     terms = _specific_terms(name, aliases)
     if not terms:
         return None
@@ -1492,10 +1492,9 @@ async def official_merch_ultraman_image(
     aliases: tuple[str, ...],
     settings: Settings,
 ) -> EncyclopediaImage | None:
-    """Use official Bandai/TAMASHII product pages as a trusted form-image source.
+    """从万代/TAMASHII 官方商品页查找可信的形态图片。
 
-    Older or alternate Ultra forms often lack a dedicated Tsuburaya character
-    page but do have exact Bandai/TAMASHII product pages with official images.
+    部分旧形态或其他形态没有圆谷专门的角色页，但万代/TAMASHII 商品页会提供对应的官方图片。
     """
     terms = _specific_terms(name, aliases)
     if not terms:
@@ -1630,10 +1629,9 @@ async def web_page_ultraman_image(
     aliases: tuple[str, ...],
     settings: Settings,
 ) -> EncyclopediaImage | None:
-    """Search normal web pages and extract a page-specific image.
+    """搜索普通网页并提取页面专属图片。
 
-    This bypasses image-search throttling. A result page must itself identify
-    the requested hero/form before its OG image can be accepted.
+    这能绕开图片搜索限流。只有页面本身确认目标英雄/形态，才接受它的 OG 图片。
     """
     terms = _specific_terms(name, aliases)
     if not terms:
@@ -1756,12 +1754,9 @@ async def search_engine_first_ultraman_image(
     *,
     require_metadata_match: bool = True,
 ) -> EncyclopediaImage | None:
-    """Last-resort exact-name image search.
+    """最后回退到精确名称图片搜索。
 
-    Source sites are unrestricted here (Tencent Video, iQIYI, Bilibili,
-    ordinary articles, etc.), but a candidate is accepted only when its own
-    title/page/image metadata names the requested character or independent form.
-    The search query itself never counts as identity evidence.
+    这里不限制来源站点（腾讯视频、爱奇艺、哔哩哔哩、普通文章等），但候选图自身的标题、页面或图片元数据必须写出角色或独立形态。搜索词本身不算身份依据。
     """
     query_values = [query.strip() for query in extra_queries if query.strip()]
     query_values.append(name)
@@ -1789,8 +1784,8 @@ async def search_engine_first_ultraman_image(
         follow_redirects=True,
         headers=headers,
     ) as client:
-        # Baidu Images first: its ordered result list is usually strong for
-        # Chinese Ultra form names, and middle/thumb URLs are QQ-friendly.
+        # 先查百度图片：有序结果通常更适合中文奥特曼形态名，
+        # 中图/缩略图 URL 也更容易通过 QQ 发送。
         for query in queries:
             try:
                 response = await client.get(
@@ -1881,7 +1876,7 @@ async def search_engine_first_ultraman_image(
                         label=title or name,
                     )
 
-        # Bing Images is the second unrestricted first-result source.
+        # Bing 图片作为第二个不限制来源的首个结果来源。
         for query in queries:
             try:
                 response = await client.get(
@@ -1965,12 +1960,9 @@ async def bing_image_relaxed_ultraman_image(
     aliases: tuple[str, ...],
     settings: Settings,
 ) -> EncyclopediaImage | None:
-    """Final exact-query fallback when strict metadata is too sparse.
+    """严格元数据不足时，最后回退到精确查询。
 
-    The search query contains the exact hero/form name. For form variants we
-    still require Bing metadata to mention the parent hero, which avoids using
-    a totally unrelated Ultra image while preventing sparse titles from causing
-    a false "no image" result.
+    查询词包含准确的英雄/形态名称。形态仍要求 Bing 元数据提及所属英雄，避免使用完全无关的奥特曼图片，同时减少因标题太短而误判“无图片”。
     """
     strict_terms = _specific_terms(name, aliases)
     if not strict_terms:
@@ -2049,8 +2041,8 @@ async def bing_image_relaxed_ultraman_image(
                         else "https://www.bing.com/images/"
                     )
                     referer = quote(referer, safe=":/?&=%#")
-                    # Prefer Bing's thumbnail on the relaxed fallback because
-                    # original hosts often block hotlink downloads.
+                    # 宽松回退时优先用 Bing 缩略图，
+                    # 因为原图主机常会拦截外链下载。
                     image_urls = tuple(
                         dict.fromkeys(
                             url
@@ -2089,9 +2081,9 @@ async def encyclopedia_ultraman_image(
     baidu = await baidu_baike_ultraman_image(name, aliases, settings)
     if baidu is not None:
         return baidu
-    # Moegirlpedia: exact character page -> internal search ->
-    # character/series page image metadata. Use it after Baidu so existing
-    # encyclopedia callers keep their established source order.
+    # 萌娘百科：精确角色页 -> 内部搜索 ->
+    # 萌娘百科：精确角色页 -> 内部搜索 ->
+    # 角色/系列页图片元数据。放在百度之后，保留旧调用方的来源顺序。
     moegirl = await moegirl_ultraman_image(name, aliases, settings)
     if moegirl is not None:
         return moegirl

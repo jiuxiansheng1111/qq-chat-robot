@@ -173,21 +173,21 @@ function Start-GptSovitsSidecar {
         return $true
     }
     if (-not $voiceUrl) {
-        # The Python app inherits this value when start_all launches its lifecycle supervisor.
+        # start_all 启动生命周期监控时，Python 应用会继承此值。
         $env:VOICE_API_URL = "http://127.0.0.1:$voicePort"
     }
-    # Routed mode owns the selected model inside the bot's per-request lock.
-    # Never overwrite it with the legacy single startup weight, regardless of
-    # whether this sidecar is already listening or is started below.
+    # 路由模式下，机器人会在每个请求的锁内选择模型。
+    # 无论旁路服务是否已在运行，都不要用旧的
+    # 单一启动权重覆盖路由模式的选择。
     $routedWeightsConfigured =
         ([string]$Settings["VOICE_SOVITS_WEIGHTS_BY_LANGUAGE_JSON"]).Trim() -or
         ([string]$Settings["VOICE_SOVITS_WEIGHTS_BY_PROFILE_JSON"]).Trim()
 
     if (Test-LocalPort -Port $voicePort) {
         Write-Host "[VOICE] GPT-SoVITS already listening on $voicePort." -ForegroundColor Green
-        # In routed mode the bot owns model changes and serializes them with
-        # synthesis. A profile map is routed too; applying the legacy startup
-        # weight here could overwrite a Yoshino/Mako request in flight.
+        # 路由模式下由机器人切换模型，并与语音合成串行执行。
+        # 配置了角色映射时也会走路由；此处应用旧启动权重，
+        # 可能覆盖正在处理的 Yoshino/Mako 请求。
         if (-not $routedWeightsConfigured) {
             Apply-GptSovitsWeights -Settings $Settings -VoiceHost $voiceHost -Port $voicePort
         }
@@ -234,7 +234,7 @@ function Start-GptSovitsSidecar {
             [System.IO.Path]::GetFullPath($pythonValue)
         }
         else {
-            # GPT_SOVITS_PYTHON is relative to the bot project root, like GPT_SOVITS_ROOT.
+            # GPT_SOVITS_PYTHON 与 GPT_SOVITS_ROOT 一样，相对机器人项目根目录。
             [System.IO.Path]::GetFullPath((Join-Path $projectRoot $pythonValue))
         }
     }
@@ -259,7 +259,7 @@ function Start-GptSovitsSidecar {
             $_.CommandLine -match '(?i)api_v2\.py' -and
             (
                 $_.CommandLine -match $targetPortPattern -or
-                # api_v2 defaults to 9880 when no -p argument is supplied.
+                # 未提供 -p 参数时，api_v2 默认使用 9880。
                 $_.CommandLine -notmatch $explicitPortPattern
             )
         })
@@ -270,9 +270,9 @@ function Start-GptSovitsSidecar {
         New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
         $voiceOutLog = Join-Path $logRoot "gpt_sovits.out.log"
         $voiceErrorLog = Join-Path $logRoot "gpt_sovits.error.log"
-        # fast-langdetect's Windows model loader cannot reopen temporary files
-        # when the user profile path contains non-ASCII characters.  Give only
-        # the sidecar an ASCII temp path; do not alter the machine-wide setting.
+        # fast-langdetect 在 Windows 上的模型加载器无法重新打开临时文件，
+        # 如果用户目录包含非 ASCII 字符。只给旁路服务
+        # 设置 ASCII 临时目录，不改系统级设置。
         $voiceTempRoot = Join-Path $env:PUBLIC "GPTSoVITS_temp"
         if ($voiceTempRoot -match '[^\x00-\x7F]') {
             throw "GPT-SoVITS requires an ASCII temporary directory: $voiceTempRoot"
@@ -436,13 +436,21 @@ try {
         Write-Host "[SETUP REQUIRED] OneBot 3000 is not ready. Add/login QQ $qqId in NapCatQQ Desktop and enable HTTP Server port 3000." -ForegroundColor Yellow
     }
 
+    . (Join-Path $PSScriptRoot 'bot_runtime_mode.ps1')
+    if ((Get-QQChatRobotRuntime -ProjectRoot $projectRoot) -eq 'astrbot') {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'run_astrbot.ps1')
+        if ($LASTEXITCODE -ne 0) { throw 'AstrBot 启动失败，请检查 data/astrbot/logs。' }
+        Write-Host '聊天机器人已通过 AstrBot 启动。面板：http://127.0.0.1:6185'
+        exit 0
+    }
+
     if (-not (Test-Path -LiteralPath $lifecycleScript)) {
         throw "Bot lifecycle supervisor was not found: $lifecycleScript"
     }
 
-    # Always keep one lifecycle supervisor alive. It adopts an already-running
-    # Uvicorn process, or starts one when OneBot is ready, and stops it when
-    # NapCat/OneBot is closed.
+    # 始终保留一个生命周期监控进程。它会接管已有的 Uvicorn，
+    # 或在 OneBot 就绪时启动 Uvicorn，并在
+    # NapCat/OneBot 关闭时停止它。
     $lifecycleRunning = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         Where-Object {
             $_.Name -in @("powershell.exe", "pwsh.exe") -and

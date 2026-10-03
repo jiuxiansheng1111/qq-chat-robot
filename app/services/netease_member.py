@@ -1,4 +1,4 @@
-"""Read an account-authorized song URL from the private, local NetEase bridge."""
+"""从本地网易云会员桥接读取当前账号有权限访问的歌曲 URL。"""
 
 import re
 from pathlib import Path
@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class NeteaseMemberError(RuntimeError):
-    """The local account connection is unavailable or needs login."""
+    """本地账号连接不可用，或需要重新登录。"""
 
 
 def _bridge_connection(settings: Settings) -> tuple[str, str]:
@@ -53,7 +53,7 @@ def _bridge_connection(settings: Settings) -> tuple[str, str]:
 async def get_member_song_payload(
     client: httpx.AsyncClient, settings: Settings, song_id: str
 ) -> dict:
-    """Keep account cookies out of the bot; only receive the selected song's URL."""
+    """账号 Cookie 留在本地桥接中；这里只接收所选歌曲的 URL。"""
     if not re.fullmatch(r"\d{1,20}", song_id):
         raise NeteaseMemberError("网易云歌曲 ID 无效。")
     url, token = _bridge_connection(settings)

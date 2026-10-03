@@ -69,8 +69,8 @@ Remove-Item -LiteralPath $markerPath -Force -ErrorAction SilentlyContinue
 Push-Location -LiteralPath $runtimeRoot
 $previousErrorPreference = $ErrorActionPreference
 try {
-    # Windows PowerShell 5 treats npm's ordinary stderr warnings as errors.
-    # Decide success from the native exit code rather than that output stream.
+    # Windows PowerShell 5 会把 npm 的普通 stderr 警告当作错误。
+    # 根据原生命令退出码判断是否成功，不看该输出流。
     $ErrorActionPreference = "Continue"
     $null = & $npmCommand.Source ci --omit=dev --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org 2>&1
     $npmExitCode = $LASTEXITCODE

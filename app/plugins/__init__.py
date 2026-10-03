@@ -1,1 +1,1 @@
-"""Built-in QQ group plugins."""
+"""内置 QQ 群插件。"""

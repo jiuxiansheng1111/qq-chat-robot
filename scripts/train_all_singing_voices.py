@@ -1,8 +1,6 @@
-"""Train sequential, review-only Seed-VC candidates for configured voices.
+"""为已配置音色按顺序训练仅供审核的 Seed-VC 候选模型。
 
-The batch reuses one run name per profile so an interrupted run can resume.
-It never activates checkpoints and skips profiles whose candidate registry
-already contains a different run or an accepted model.
+每个角色沿用相同的运行名称，便于中断后续跑。此脚本不会启用检查点；如果候选记录中已有其他运行或已验收模型，就跳过该角色。
 """
 
 from __future__ import annotations
@@ -15,6 +13,10 @@ from pathlib import Path
 from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from app.services.singing_gpu import gpu_lock
+
 SINGING_ROOT = PROJECT_ROOT / "data" / "singing"
 DEFAULT_PROFILES = (
     "murasame",
@@ -89,7 +91,7 @@ def _training_command(
     return command
 
 
-def run_training_batch(
+def _run_training_batch_unlocked(
     project_root: Path,
     *,
     profiles: tuple[str, ...] = DEFAULT_PROFILES,
@@ -98,7 +100,7 @@ def run_training_batch(
     python: Path = Path(sys.executable),
     runner: Any = subprocess.run,
 ) -> list[dict[str, str]]:
-    """Run all requested training rounds serially and collect per-profile results."""
+    """依次运行所有要求的训练轮次，并收集各角色结果。"""
     if rounds < 1:
         raise ValueError("rounds must be at least one")
     if max_steps not in {100, 300, 1000}:
@@ -189,6 +191,27 @@ def run_training_batch(
                 }
             )
     return results
+
+
+def run_training_batch(
+    project_root: Path,
+    *,
+    profiles: tuple[str, ...] = DEFAULT_PROFILES,
+    rounds: int = DEFAULT_ROUNDS,
+    max_steps: int = DEFAULT_MAX_STEPS,
+    python: Path = Path(sys.executable),
+    runner: Any = subprocess.run,
+) -> list[dict[str, str]]:
+    """整个串行训练批次期间持有共享 GPU 锁。"""
+    with gpu_lock():
+        return _run_training_batch_unlocked(
+            project_root,
+            profiles=profiles,
+            rounds=rounds,
+            max_steps=max_steps,
+            python=python,
+            runner=runner,
+        )
 
 
 def _positive_int(value: str) -> int:

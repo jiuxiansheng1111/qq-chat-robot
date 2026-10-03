@@ -50,14 +50,14 @@ async def resolve_exact_image(hero, settings: Settings) -> tuple[str, str, str, 
                 hero.name,
             )
         return data, "Tsuburaya exact page image", "", hero.name
-    # Try each independent source and preserve its diagnostic in the report.
+    # 尝试每个独立来源，并在报告中保留各自的诊断信息。
     except Exception as exc:  # noqa: BLE001
         first_error = f"official: {type(exc).__name__}: {exc}"
 
     try:
         data = await ultraman.official_ultraman_search_image(hero, settings)
         return data, "Tsuburaya exact labelled search", "", hero.name
-    # A single unavailable provider must not stop the audit fallback chain.
+    # 一个来源不可用时，审计仍要继续尝试其他回退来源。
     except Exception as exc:  # noqa: BLE001
         second_error = f"official-search: {type(exc).__name__}: {exc}"
 
@@ -65,7 +65,7 @@ async def resolve_exact_image(hero, settings: Settings) -> tuple[str, str, str, 
         aliases = ultraman.ultraman_image_aliases(hero)
         image = await encyclopedia_ultraman_image(hero.name, aliases, settings)
         return image.data, image.source, image.page_url, image.label
-    # The audit needs a combined diagnostic if every source is unavailable.
+    # 所有来源都不可用时，合并记录诊断信息。
     except Exception as exc:  # noqa: BLE001
         third_error = f"encyclopedia: {type(exc).__name__}: {exc}"
 
@@ -134,8 +134,8 @@ async def audit_one(hero, settings: Settings, semaphore: asyncio.Semaphore) -> A
                 width=width,
                 height=height,
             )
-        # Keep auditing remaining heroes even if this candidate is corrupt or
-        # a provider fails unexpectedly; the row records the exact exception.
+        # 即使当前图片损坏或来源意外报错，也继续审计其他英雄；
+        # 这一项会记下具体异常。
         except Exception as exc:  # noqa: BLE001
             return AuditRow(
                 name=hero.name,
@@ -155,7 +155,7 @@ async def run(
     settings.media_timeout_seconds = min(float(settings.media_timeout_seconds), 12.0)
     settings.media_max_bytes = max(int(settings.media_max_bytes), 8 * 1024 * 1024)
 
-    # Audit the complete roster, not only independent forms. A green report must
+    # 检查完整角色名单，不只检查独立形态。绿色报告必须
     # mean every drawable entry used by 今日奥特曼/图鉴 has a decodable image.
     heroes = list(ultraman.ULTRAMAN_ROSTER)
     if forms_only:

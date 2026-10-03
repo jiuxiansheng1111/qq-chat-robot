@@ -1,4 +1,4 @@
-"""Character dialogue personas paired with configured voice profiles."""
+"""把角色对话人格与已配置的音色配对。"""
 
 import re
 from collections.abc import Mapping
@@ -9,9 +9,9 @@ from app.config import Settings
 
 _PROMPT_ROOT = Path(__file__).resolve().parents[2] / "prompts" / "voice_personas"
 
-# Voice profile IDs with generated dialogue personalities.  The additional
-# Senren*Banka roles are prepared here but stay out of the selectable voice
-# menu until their own verified voice profiles are configured.
+# 为音色配置补充对话人格。Senren*Banka 的角色也先放在这里，
+# 在对应音色完成核实和配置前，
+# 不会出现在可选音色菜单中。
 _PERSONA_FILES = {
     "yoshino": "yoshino.txt",
     "mako": "mako.txt",
@@ -80,13 +80,13 @@ def _persona_aliases(
 def resolve_voice_persona_alias(
     selection: str, profiles: Mapping[str, Mapping[str, object]]
 ) -> str | None:
-    """Resolve a role's full or short name using the same aliases as summons."""
+    """使用和召唤命令相同的别名，解析角色全名或简称。"""
     requested = _normalized_alias(selection)
     if not requested:
         return None
     aliases = _persona_aliases(profiles)
-    # Prefer an exact configured profile ID when a legacy alias is shared by
-    # both IDs, such as ``rena`` when both lena and rena are configured.
+    # 如果旧别名同时被两个角色使用（例如 lena 和 rena），
+    # 优先精确匹配已配置的 profile ID。
     for profile_id in profiles:
         if _normalized_alias(profile_id) == requested and has_voice_persona(
             _canonical_profile_id(profile_id)
@@ -99,10 +99,9 @@ def resolve_voice_persona_alias(
 def character_invocation(
     text: str, profiles: Mapping[str, Mapping[str, object]]
 ) -> Invocation | None:
-    """Recognize an explicit summons, never a substring in third-person prose.
+    """识别明确的角色召唤，不匹配第三人称叙述。
 
-    The caller supplies only authorized, available profiles. Return the selected
-    ID and dialogue payload; an empty payload is a simple greeting request.
+    调用方只提供已授权且可用的角色。返回选中的 ID 和对话内容；内容为空时表示用户只要求简单问候。
     """
     candidate = str(text or "").strip()
     aliases = _persona_aliases(profiles)
@@ -130,8 +129,8 @@ def character_invocation(
     if any(re.fullmatch(pattern, candidate, re.IGNORECASE) for pattern in patterns):
         return Invocation(profile_id, "")
 
-    # A comma/colon is a clear vocative marker. Without punctuation, accept
-    # only familiar second-person requests so mentions in prose stay inert.
+    # 逗号或冒号表示明确称呼；没有标点时，
+    # 只接受常见的第二人称请求，避免误处理叙述中提到的名字。
     match = re.fullmatch(
         rf"{name_pattern}\s*(?P<separator>[,，:：]\s*)?(?P<prompt>.+)",
         candidate,
@@ -160,7 +159,7 @@ def has_voice_persona(profile_id: str) -> bool:
 
 
 def voice_persona_prompt(settings: Settings, profile_id: str) -> str | None:
-    """Return a complete system persona, or None for an unconfigured role."""
+    """返回完整的人格设定；未配置的角色返回 None。"""
     profile_id = "lena" if profile_id == "rena" else profile_id
     if profile_id == "murasame":
         return settings.persona_prompt()
@@ -181,7 +180,7 @@ def voice_persona_prompt(settings: Settings, profile_id: str) -> str | None:
 
 
 def voice_persona_romance_prompt(profile_label: str, conversation_turn_count: int = 0) -> str:
-    """Role-neutral romance-mode pacing for non-Murasame character voices."""
+    """为丛雨以外的角色提供通用恋爱模式节奏。"""
     turns = max(0, min(int(conversation_turn_count), 12))
     if turns <= 2:
         pace = "刚开始熟悉：像自然、温柔的聊天对象，最多只有一点含蓄，不主动撒娇或强行暧昧。"

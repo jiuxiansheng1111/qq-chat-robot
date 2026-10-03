@@ -1,0 +1,12 @@
+name: astrbot_plugin_qqchat
+display_name: 聊天机器人
+desc: 角色聊天、图鉴、点歌和翻唱，支持 QQ 与微信接入。
+version: v0.2.0
+author: jiuxiansheng1111
+repo: https://github.com/jiuxiansheng1111/qq-chat-robot
+astrbot_version: ">=4.28.2"
+support_platforms:
+  - aiocqhttp
+  - weixin_oc
+  - wecom
+  - wecom_ai_bot

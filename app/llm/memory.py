@@ -2,7 +2,7 @@ from collections import defaultdict, deque
 
 
 class ConversationMemory:
-    """Opt-in, process-local short context; it is intentionally not persisted."""
+    """可选的进程内短上下文，只在内存中使用，不会持久化。"""
 
     def __init__(self, max_messages: int = 10):
         self.max_messages = max(2, max_messages)

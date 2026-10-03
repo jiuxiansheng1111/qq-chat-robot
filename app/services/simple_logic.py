@@ -19,7 +19,7 @@ _RPS_BEATS = {
 
 
 def rps_winner(left: str, right: str) -> str:
-    """Return the winning normalized choice, or 平局."""
+    """返回规范化后的获胜选项；平局时返回“平局”。"""
     if left == right:
         return "平局"
     return _RPS_BEATS.get((left, right)) or _RPS_BEATS.get((right, left)) or ""
@@ -50,14 +50,14 @@ def _extract_rps_choices(text: str) -> list[str]:
 
 
 def resolve_rps_logic(text: str) -> str | None:
-    """Answer deterministic rock-paper-scissors comparison questions."""
+    """回答石头剪刀布这类确定性的胜负比较问题。"""
     compact = "".join(str(text or "").casefold().split())
     if not compact:
         return None
 
     choices = _extract_rps_choices(compact)
-    # The bare game name naturally contains all three choices; it is not a
-    # comparison unless the user explicitly asks which pair wins.
+    # 单独的游戏名自然会同时包含三种选项；
+    # 除非用户明确比较哪两种，否则不算比较请求。
     if len(set(choices)) != 2:
         return None
     if not any(

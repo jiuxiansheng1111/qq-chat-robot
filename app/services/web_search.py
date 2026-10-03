@@ -43,7 +43,7 @@ def parse_google_news_rss(
     now: datetime | None = None,
     max_age_hours: int = 48,
 ) -> list[SearchResult]:
-    """Parse only recent Google News items, using RSS publication timestamps."""
+    """解析 Google News RSS 中较新的条目，并使用 RSS 发布时间。"""
     root = ET.fromstring(payload)
     current = (now or datetime.now(UTC)).astimezone(UTC)
     oldest = current - timedelta(hours=max(1, max_age_hours))
@@ -60,8 +60,8 @@ def parse_google_news_rss(
             published = published.astimezone(UTC)
         except (TypeError, ValueError, OverflowError):
             continue
-        # Ignore future-dated entries as well as stale search pages. A small
-        # clock-skew allowance keeps legitimate just-published items usable.
+        # 过滤未来时间和过期的搜索页；允许一点
+        # 允许小幅时钟偏差，确保刚刚发布的有效新闻仍可使用。
         if published < oldest or published > current + timedelta(minutes=15):
             continue
         if not title or urlparse(url).scheme not in {"http", "https"}:
@@ -208,7 +208,7 @@ async def search_news_feed(
     timeout: float = 12,
     max_age_hours: int = 48,
 ) -> list[SearchResult]:
-    """Fetch a live, timestamped Chinese Google News RSS section."""
+    """获取带实时发布时间的中文 Google News RSS 新闻版块。"""
     topic = re.sub(r"[^A-Z]", "", str(topic or "TOP").upper()) or "TOP"
     allowed_topics = {
         "TOP",

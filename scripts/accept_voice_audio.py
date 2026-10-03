@@ -1,13 +1,8 @@
-"""Blindly score generated voice samples with a local FunASR SenseVoice model.
+"""用本地 FunASR SenseVoice 模型盲测生成的语音样本。
 
-This is an opt-in acceptance helper. It reads WAV files and a small manifest,
-loads an already-downloaded ASR model, and writes its report to stdout. It does
-not contact a service, generate audio, or modify the project data. Generate
-the WAVs with an isolated config prepared by
-``scripts/prepare_voice_acceptance_config.py``; this scorer cannot make an
-already-running sidecar safe after the fact.
+这是可选的验收工具。它读取 WAV 文件和小型清单，加载已下载的 ASR 模型，并将报告写到标准输出。它不会连接服务、生成音频或修改项目数据。请先用 ``scripts/prepare_voice_acceptance_config.py`` 生成隔离配置，再据此制作 WAV；此评分工具无法事后保护已经运行的 sidecar。
 
-Manifest format (UTF-8 JSON):
+清单格式为 UTF-8 JSON：
 
     [
       {"file": "acceptance_zh.wav", "language": "zh", "text": "你好呀，今天过得怎么样？"},
@@ -19,15 +14,11 @@ Manifest format (UTF-8 JSON):
       }
     ]
 
-``accepted_transcriptions`` is optional and permitted only for Japanese cases.
-Each item is a manually reviewed, equivalent orthographic rendering of the
-same utterance; it is never inferred from the ASR output.  The report always
-retains the original reference and CER, and separately identifies the chosen
-gate reference and gate CER.
+``accepted_transcriptions`` 是可选项，只允许日语条目配置。每项都须经人工审核，并且是同一句话的等价正字法写法；不得根据 ASR 结果推断。报告始终保留原参考文本和 CER，并单独列出实际门槛参考文本和门槛 CER。
 
-Run it with the GPT-SoVITS Python environment, which already contains FunASR:
+使用已包含 FunASR 的 GPT-SoVITS Python 环境运行：
 
-    .venv_cpu\\Scripts\\python.exe scripts/accept_voice_audio.py \\
+    .venv_cpu\\Scripts\\python.exe scripts/accept_voice_audio.py \\\\
       --model-path C:\\Users\\...\\.cache\\modelscope\\hub\\iic\\SenseVoiceSmall
 """
 
@@ -91,7 +82,7 @@ def normalize_words(text: str) -> list[str]:
 
 
 def accepted_transcriptions(case: dict[str, Any]) -> list[str]:
-    """Return explicit Japanese spelling alternatives, rejecting hidden relaxations."""
+    """返回明确列出的日语写法候选，不放宽验收要求。"""
     alternatives = case.get("accepted_transcriptions", [])
     if alternatives is None:
         return []
@@ -113,7 +104,7 @@ def gate_character_score(
     recognized: str,
     alternatives: list[str],
 ) -> tuple[str, int, int, float]:
-    """Select the best score from an explicit reference plus its listed alternatives."""
+    """从明确指定的参考音频和替代项中选出最高分。"""
     candidates = [reference, *alternatives]
     scores = []
     hypothesis_chars = normalize_characters(recognized)
@@ -241,7 +232,7 @@ def word_distance(reference: list[str], hypothesis: list[str]) -> int:
 
 
 def overall_gate(summary: dict[str, Any], *, require_yue: bool = False) -> dict[str, Any]:
-    """Require the core languages and optionally Cantonese for acceptance."""
+    """要求核心语言通过验收，粤语可选。"""
     gates = dict(LANGUAGE_GATES)
     if require_yue:
         gates["yue"] = "yue_asr_gate"
@@ -262,7 +253,7 @@ def overall_gate(summary: dict[str, Any], *, require_yue: bool = False) -> dict[
 def apply_language_gates(
     summary: dict[str, Any], report: list[dict[str, Any]], thresholds: dict[str, float]
 ) -> None:
-    """Populate language gates; only Japanese may use explicit gate CER alternatives."""
+    """填充语言门槛；只有日语可使用明确列出的 CER 替代值。"""
     zh_rows = [row for row in report if row["expected_language"] == "zh"]
     if zh_rows:
         zh_ref_chars = sum(row["reference_characters"] for row in zh_rows)
@@ -358,8 +349,8 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    # Keep caller-provided drive aliases intact. ModelScope's Windows path
-    # handling can break when a checkpoint lives below a CJK username.
+    # 保留调用方提供的盘符别名。ModelScope 的 Windows 路径处理在
+    # 检查点位于包含中日韩文字的用户名目录下时可能出错。
     model_path = Path(args.model_path).expanduser()
     if not model_path.is_dir():
         parser.error(f"Local ASR model directory does not exist: {model_path}")
@@ -405,8 +396,8 @@ def main() -> int:
             json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-    # ASCII-only output keeps transcript characters lossless in legacy
-    # Windows consoles; readers can still decode the JSON escapes.
+    # 只用 ASCII 输出，避免旧版 Windows 控制台破坏转写字符；
+    # 阅读器仍可解析 JSON 转义序列。
     print(json.dumps(summary, ensure_ascii=True, indent=2))
     return 1 if args.fail_on_gate and not summary["overall_asr_gate"] else 0
 

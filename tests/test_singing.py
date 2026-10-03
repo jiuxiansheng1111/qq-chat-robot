@@ -31,6 +31,8 @@ from app.services.singing import (
     singing_job_directory,
 )
 from app.services.singing_jobs import SingingError, SingingJob, SingingJobManager
+from scripts.run_singing_model import _parse_args as _parse_singing_model_args
+from scripts.run_singing_model import _repair_isolated_f0_spikes
 from scripts.transpose_singing_audio import transpose_audio_file
 
 PROFILES = {"murasame": {"label": "小丛雨"}, "yoshino": {"label": "芳乃"}}
@@ -54,10 +56,40 @@ def test_singing_requires_explicit_request_and_preserves_song_title():
 
 
 def test_qq_chunk_limit_is_validated_even_when_config_is_wrong():
+    assert Settings().singing_chunk_seconds == 115
+    assert Settings(singing_chunk_seconds=115).singing_chunk_seconds == 115
     with pytest.raises(ValidationError):
-        Settings(singing_chunk_seconds=60)
+        Settings(singing_chunk_seconds=116)
     with pytest.raises(ValidationError):
         Settings(singing_separation_model="../escape")
+
+
+def test_singing_inference_seed_and_f0_repair_are_reproducible_and_opt_in(monkeypatch):
+    monkeypatch.delenv("SINGING_SEED", raising=False)
+    monkeypatch.delenv("SINGING_REPAIR_F0_SPIKES", raising=False)
+    args = _parse_singing_model_args([
+        "--seed-root", "seed", "--ffmpeg", "ffmpeg", "--source", "source.wav",
+        "--target", "target.wav", "--output", "out",
+    ])
+    assert args.seed == 20261004
+    assert args.repair_f0_spikes is False
+
+    monkeypatch.setenv("SINGING_SEED", "42")
+    monkeypatch.setenv("SINGING_REPAIR_F0_SPIKES", "true")
+    args = _parse_singing_model_args([
+        "--seed-root", "seed", "--ffmpeg", "ffmpeg", "--source", "source.wav",
+        "--target", "target.wav", "--output", "out",
+    ])
+    assert args.seed == 42
+    assert args.repair_f0_spikes is True
+
+    f0 = np.array([220.0, 222.0, 440.0, 221.0, 0.0, 220.0, 0.0, 221.0])
+    repaired = _repair_isolated_f0_spikes(f0)
+    assert repaired[2] == pytest.approx(np.sqrt(222 * 221))
+    assert repaired[5] == 220.0 and repaired[7] == 221.0  # 不跨静音修复
+
+    vibrato = 220 * 2 ** (0.3 * np.sin(np.arange(9) * 2 * np.pi / 8) / 12)
+    assert np.array_equal(_repair_isolated_f0_spikes(vibrato), vibrato)
 
 
 @pytest.mark.parametrize(
@@ -116,9 +148,9 @@ def test_automatic_pitch_rejects_bad_targets(value):
 
 def test_b_style_vocal_mix_restores_level_with_bounded_constant_gain():
     settings = Settings()
-    assert _vocal_mix_gain({"converted_rms": 0.0716252832}, settings) == pytest.approx(1.382193488)
+    assert _vocal_mix_gain({"converted_rms": 0.0716252832}, settings) == pytest.approx(2.792310076)
     assert _vocal_mix_gain({"converted_rms": 0.001}, settings) == 4
-    assert _vocal_mix_gain({"converted_rms": 2}, settings) == 0.1
+    assert _vocal_mix_gain({"converted_rms": 2}, settings) == 1.0
     for rms in (None, 0, float("nan"), True):
         with pytest.raises(SingingPipelineError, match="歌声音量"):
             _vocal_mix_gain({"converted_rms": rms}, settings)
@@ -149,6 +181,7 @@ async def test_trained_tts_reference_remains_available_for_other_profiles(tmp_pa
     settings = Settings(
         voice_profiles_json='{"yoshino":{"label":"芳乃","supported_languages":["zh"]}}',
         voice_primary_account_profile_ids="",
+        singing_prefer_recorded_reference=False,
     )
     synth = AsyncMock(return_value="base64://" + base64.b64encode(b"test-wave").decode())
     monkeypatch.setattr("app.services.singing.synthesize_voice", synth)
@@ -167,7 +200,8 @@ async def test_murasame_uses_original_game_recording_as_singing_reference(tmp_pa
     settings = Settings(
         voice_profiles_json=json.dumps(
             {"murasame": {"label": "小丛雨", "supported_languages": ["zh"], "ref_audio_path": str(original)}}
-        )
+        ),
+        singing_prefer_recorded_reference=True,
     )
     synth = AsyncMock()
     monkeypatch.setattr("app.services.singing.synthesize_voice", synth)
@@ -309,6 +343,8 @@ async def test_convert_and_quality_commands_pass_profile_pitch_shift(tmp_path, m
                 "source_voiced_frames": 200,
                 "converted_rms": 0.1,
                 "clipping_ratio": 0,
+                "vocal_energy_recall": 1,
+                "max_missing_vocal_seconds": 0,
             }
             Path(calls[-1][calls[-1].index("--output") + 1]).write_text(
                 json.dumps(report), encoding="utf-8"
@@ -409,7 +445,7 @@ async def test_generation_retries_with_same_shift_and_mixes_equivalent_accompani
         lambda _: (Path("python"), seed_root, Path("ffmpeg"), Path("ffprobe")),
     )
     song = SimpleNamespace(
-        track=SimpleNamespace(title="song", duration_seconds=1),
+        track=SimpleNamespace(song_id="song-id", title="song", duration_seconds=1),
         lyrics_text="[00:00.00]lyric",
         lyric_lines=(),
     )
@@ -426,7 +462,15 @@ async def test_generation_retries_with_same_shift_and_mixes_equivalent_accompani
         "app.services.singing.prepare_voice_reference", AsyncMock(return_value=reference)
     )
     monkeypatch.setattr("app.services.singing.voice_profiles", lambda _: {"murasame": {"label": "丛雨"}})
-    monkeypatch.setattr("app.services.singing.split_audio_for_qq", AsyncMock(return_value=()))
+    monkeypatch.setattr(
+        "app.services.singing.wav_rms", lambda _: 0.1,
+    )
+    monkeypatch.setattr(
+        "app.services.singing.plan_paused_sections",
+        lambda *args: (SimpleNamespace(
+            start_seconds=0.0, end_seconds=1.0, duration_seconds=1.0, reason="test",
+        ),),
+    )
 
     model_shifts = []
 
@@ -443,7 +487,16 @@ async def test_generation_retries_with_same_shift_and_mixes_equivalent_accompani
         quality_shifts.append((output.name, expected_semitone_shift))
         if len(quality_shifts) == 1:
             raise SingingPipelineError("first quality attempt requests retry")
-        return {"accepted": True, "failures": [], "pitch_median_cents": 0, "converted_rms": 0.05}
+        report = {
+            "accepted": True,
+            "failures": [],
+            "pitch_median_cents": 0,
+            "converted_rms": 0.05,
+            "vocal_energy_recall": 1,
+            "max_missing_vocal_seconds": 0,
+        }
+        output.write_text(json.dumps(report), encoding="utf-8")
+        return report
 
     monkeypatch.setattr("app.services.singing.convert_vocals", convert)
     monkeypatch.setattr("app.services.singing.check_cover_quality", check)
@@ -467,9 +520,10 @@ async def test_generation_retries_with_same_shift_and_mixes_equivalent_accompani
             output = Path(values[values.index("--output") + 1])
             output.write_bytes(b"shifted" * 300)
         elif Path(values[0]).name == "ffmpeg":
-            input_indices = [index for index, value in enumerate(values) if value == "-i"]
-            mix_accompaniments.append(Path(values[input_indices[1] + 1]))
-            mix_filters.append(values[values.index("-filter_complex") + 1])
+            if "-filter_complex" in values:
+                input_indices = [index for index, value in enumerate(values) if value == "-i"]
+                mix_accompaniments.append(Path(values[input_indices[1] + 1]))
+                mix_filters.append(values[values.index("-filter_complex") + 1])
             Path(values[-1]).write_bytes(b"cover" * 500)
         else:
             raise AssertionError(f"Unexpected audio command: {values}")
@@ -492,21 +546,40 @@ async def test_generation_retries_with_same_shift_and_mixes_equivalent_accompani
     if automatic:
         assert planner.await_count == 1
         assert not transposer_args
-        assert mix_accompaniments[0].name == "no_vocals.wav"
+        assert mix_accompaniments[0] == (
+            data_root / "jobs" / ("a" * 32) / "parts" / "001" / "background.wav"
+        )
     else:
         assert not planner.await_count
         assert transposer_args[transposer_args.index("--semitones") + 1] == "-3"
-        assert mix_accompaniments == [data_root / "jobs" / ("a" * 32) / "accompaniment_pitch_shifted.wav"]
-    assert "volume=1.9800000000[v]" in mix_filters[0]
-    assert "level=false,volume=0.93" in mix_filters[0]
+        assert mix_accompaniments == [
+            data_root / "jobs" / ("a" * 32) / "parts" / "001" / "accompaniment_shifted.wav"
+        ]
+    assert "[0:a]aformat=channel_layouts=stereo,highpass=f=60" in mix_filters[0]
+    assert "volume=4.0000000000,acompressor=threshold=0.32" in mix_filters[0]
+    assert "[1:a]aformat=channel_layouts=stereo,volume=0.8500000000[background]" in mix_filters[0]
+    assert "amix=inputs=2:duration=longest:normalize=0" in mix_filters[0]
+    assert "volume=0.9300000000,alimiter=limit=0.95" in mix_filters[0]
     assert cover.pitch_shift_semitones == selected_shift
     assert cover.quality["voice_pitch_shift_semitones"] == selected_shift
     assert cover.quality["accompaniment_pitch_shift_semitones"] == (0 if automatic else -3)
-    saved_report = json.loads(
-        (data_root / "jobs" / ("a" * 32) / "quality_retry.json").read_text(encoding="utf-8")
+    assert "pitch_median_cents" not in cover.quality
+    assert len(cover.quality["segments"]) == 1
+    job_dir = data_root / "jobs" / ("a" * 32)
+    segment_dir = job_dir / "parts" / "001"
+    saved_retry_report = json.loads(
+        (segment_dir / "quality_retry.json").read_text(encoding="utf-8")
     )
+    assert saved_retry_report["vocal_energy_recall"] == 1
+    saved_part_report = json.loads(
+        (segment_dir / "report.json").read_text(encoding="utf-8")
+    )
+    assert saved_part_report["voice_pitch_shift_semitones"] == selected_shift
+    assert saved_part_report["accompaniment_pitch_shift_semitones"] == (0 if automatic else -3)
+    saved_report = json.loads((job_dir / "quality.json").read_text(encoding="utf-8"))
     assert saved_report["voice_pitch_shift_semitones"] == selected_shift
-    assert saved_report["accompaniment_pitch_shift_semitones"] == (0 if automatic else -3)
+    assert len(saved_report["segments"]) == 1
+    assert saved_report["segments"][0]["pitch_median_cents"] == 0
     assert saved_report["pitch_plan"]["mode"] == ("automatic_octave" if automatic else "fixed")
 
 

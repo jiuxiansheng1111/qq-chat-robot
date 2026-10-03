@@ -21,14 +21,18 @@ flowchart TD
     I --> J
     C --> K[prepare_voice_reference]
     K --> L[HTTP: GPT-SoVITS TTS 或本地参考录音]
-    J --> M[本地子进程: Demucs 分离人声和伴奏]
+    J --> X{完整还是片段?}
+    X -- 片段 --> Y[按歌词选约20秒，再截取原曲]
+    X -- 完整 --> M[本地子进程: Demucs 分离人声和伴奏]
+    Y --> M
     L --> N[本地子进程: Seed-VC 转换人声音色]
     M --> Q[RMVPE 分析全曲音区: 按角色选择八度]
-    Q --> N
+    Q --> T[按歌词及人声停顿划分最多115秒的段落]
+    T --> N
     N --> O[本地子进程: F0 与音色检查、FFmpeg 混音]
-    O --> P[split_audio_for_qq 按歌词或停顿切为最多 55 秒]
+    O --> P[当前段转为32kHz QQ语音]
     P --> R[HTTP: OneBot send_group_record]
-    R --> S[QQ 群按顺序收到完整歌曲]
+    R --> S[QQ先收到当前段，再生成下一段]
 ```
 
 | 代码中的名字 | 中文含义 | 通信边界 |
@@ -41,12 +45,13 @@ flowchart TD
 | `choose_octave_shift` / `plan_singing_pitch` | 选择八度偏移 / 分析歌曲音区 | 纯 NumPy 规则与独立 RMVPE 子进程，在 −12、0、+12 半音中选择 |
 | `convert_vocals` | 根据原唱人声的旋律转换音色 | 启动本地 Seed-VC 子进程；已验收微调权重作为可选输入 |
 | `check_cover_quality` | 检查音高、音色、时长与音量，失败时可重试一次 | 启动本地 RMVPE/CAMPPlus 检查脚本，读取 JSON 报告 |
-| `split_audio_for_qq` | 按歌词位置或低能量停顿连续切段 | 本地 FFmpeg 与 WAV 文件操作，单段最多 55 秒 |
+| `select_singing_excerpt` / `plan_paused_sections` | 选几句歌词 / 在人声停顿处分段 | 在本机分析时间轴和低能量停顿；连续覆盖选定范围，单段最多 115 秒 |
+| `vocal_forward_mix_filter` | 人声优先混音 | 伴奏按人声音量调低，有人声时进一步压低；不用噪声门删弱音 |
 | `send_group_record` | 按顺序发送各段语音 | 机器人向 NapCat OneBot HTTP Server 发请求 |
 
 ## 启用与群聊用法
 
-安装完成后，在 `.env` 设置 `SINGING_ENABLED=true`。默认运行路径由 `SINGING_PYTHON`、`SINGING_SEED_ROOT`、`SINGING_FFMPEG_PATH`、`SINGING_FFPROBE_PATH` 指定；默认值均已列在 `.env.example`。使用已有 GPT-SoVITS 训练音色合成短参考句时，保持 `SINGING_USE_TRAINED_TTS_REFERENCE=true`，并确保 `VOICE_ENABLED=true`、`VOICE_PROVIDER=gpt_sovits` 及原有语音服务可用。如果只用角色的 `ref_audio_path` 本地录音，设 `SINGING_USE_TRAINED_TTS_REFERENCE=false`。
+安装完成后，在 `.env` 设置 `SINGING_ENABLED=true`。默认运行路径由 `SINGING_PYTHON`、`SINGING_SEED_ROOT`、`SINGING_FFMPEG_PATH`、`SINGING_FFPROBE_PATH` 指定；默认值见 `.env.example`。翻唱参考优先级为已配置的翻唱专用参考 → 角色原始本地录音 → GPT-SoVITS 训练音色合成短句。原始录音优先由 `SINGING_PREFER_RECORDED_REFERENCE=true` 控制；需要强制使用训练 TTS 的角色参考时设为 `false`，保持 `SINGING_USE_TRAINED_TTS_REFERENCE=true` 并确保原有语音服务可用。
 
 丛雨默认以真实游戏录音作为翻唱参考，由 `SINGING_REAL_REFERENCE_PROFILE_IDS=murasame` 指定。其它角色仍遵循上述 TTS 参考设置。为翻唱单独选择录音时，可设置 `SINGING_REFERENCE_AUDIO_BY_PROFILE_JSON`，例如 `{"murasame":"data/singing/acceptance/cute-references/murasame_soft_affection_0055_mono44k.wav"}`；路径相对项目根目录，此设置仅供翻唱使用。
 
@@ -56,14 +61,18 @@ flowchart TD
 | --- | --- | --- |
 | `SINGING_HF_OFFLINE` | `false` | 首次下载模型后可设为 `true`，避免每次转换重新向 Hugging Face 检查缓存；仅影响歌声模型加载 |
 | `NETEASE_MEMBER_ENABLED` | `false` | `true` 时对未登记本地原曲的歌曲使用本机网易云会员桥；桥接登录或完整播放权限不可用时会报错，不改用第三方音源 |
-| `SINGING_CHUNK_SECONDS` | `55` | QQ 单段上限，配置也不能超过 55 秒 |
+| `SINGING_CHUNK_SECONDS` | `115` | 优先在原唱停顿处分段；没有停顿时用上限前最后一个歌词换句位置，段尾补短停顿 |
+| `SINGING_CLIP_SECONDS` | `20` | 片段目标时长，优先取开头几句有效歌词，通常约 15–25 秒 |
+| `SINGING_PREFER_RECORDED_REFERENCE` | `true` | 优先角色原始录音，减少聊天 TTS 失真传入翻唱；已配置的翻唱专用参考仍优先 |
+| `SINGING_ACCOMPANIMENT_GAIN` / `SINGING_VOCAL_BACKGROUND_GAP_DB` | `0.85` / `3` | 伴奏保持正常音量，人声目标根据伴奏电平提高；没有侧链压低乐器 |
+| `SINGING_MIN_VOICED_RECALL` / `SINGING_MIN_ENERGY_RECALL` / `SINGING_MAX_MISSING_VOCAL_SECONDS` | `0.88` / `0.90` / `1.2` | 有声帧、活跃能量覆盖与局部近静音缺失检查；失败仅重试当前段 |
 | `SINGING_MAX_SONG_SECONDS` | `600` | 原曲实际时长上限，超出时停止 |
 | `SINGING_MAX_SOURCE_BYTES` | `104857600` | 本地或网易云原曲大小上限（100 MiB） |
 | `SINGING_QUEUE_SIZE` / `SINGING_COOLDOWN_SECONDS` | `3` / `120` | 待处理队列和同一用户再次提交的冷却秒数 |
 | `SINGING_DIFFUSION_STEPS` / `SINGING_INFERENCE_CFG_RATE` | `35` / `0.7` | Seed-VC 初次转换参数 |
 | `SINGING_SEMITONE_SHIFT_BY_PROFILE_JSON` | `{}` | 角色到人声移调半音数的映射，整数 −12 到 +12；未配置且无自动目标时使用原调 |
 | `SINGING_TARGET_MEDIAN_F0_BY_PROFILE_JSON` | `{}` | 自动音区目标，例如 `{"murasame":400}`；依据全曲原唱有声音高中位数选 −12/0/+12 半音，手动设置优先 |
-| `SINGING_VOCAL_TARGET_RMS` / `SINGING_MASTER_GAIN` | `0.099` / `0.93` | 沿用 B 版混音：恒定增益调整人声电平，主音量留余量；人声增益最多 4 倍 |
+| `SINGING_VOCAL_TARGET_RMS` / `SINGING_MASTER_GAIN` | `0.20` / `0.93` | 弱人声补到目标电平，强人声不压低；人声最多放大 4 倍，混音峰值限幅 |
 | `SINGING_MODEL_TIMEOUT_SECONDS` / `SINGING_JOB_TIMEOUT_SECONDS` | `900` / `2400` | 单个模型子进程与整项任务的超时秒数 |
 | `SINGING_SEGMENT_PAUSE_SECONDS` | `1.5` | 相邻 QQ 语音段的发送间隔秒数 |
 
@@ -71,12 +80,18 @@ flowchart TD
 @机器人 唱歌 朋友的酒DJ版 / 泽亦轩
 @机器人 翻唱 芳乃 春泥棒 / ヨルシカ
 @机器人 翻唱 芳乃 Shape of You / Ed Sheeran
+@机器人 翻唱片段 茉子 朋友的酒DJ版 / 泽亦轩
+@机器人 翻唱完整 茉子 朋友的酒DJ版 / 泽亦轩
 @机器人 唱歌音色
 @机器人 唱歌状态
 @机器人 取消唱歌
 ```
 
-`唱歌` 使用当前选中的角色；`翻唱 角色名` 临时指定角色。也接受 `/唱歌`、`/翻唱`、`/sing`、`/cover`。歌名与歌手名用 `/` 分开可避免同名歌曲选错。DJ 版等特殊版本要在歌名中明确写出；普通歌名不会自动选 DJ 版。当前音源接口未提供完整原曲、只提供试听或超过 `SINGING_MAX_SONG_SECONDS`（默认 600 秒）时会停止，并说明原因。有时间轴歌词时按歌词辅助分段；歌词不可用或仅有普通文本时，仍可按人声停顿连续分段。
+`唱歌` 使用当前选中的角色；`翻唱 角色名` 临时指定角色，默认唱整首。`翻唱片段` 只生成约 20 秒的几句歌词，`翻唱完整` 生成整首。也支持 `翻唱 片段 角色名 歌名`、`翻唱 角色名 片段 歌名`、`唱几句` 和 `唱一段`。歌名与歌手名用 `/` 分开可避免同名歌曲选错；DJ 版等版本需明确写出。只有试听或超过原曲时长上限时仍停止，片段模式不会拿平台试听片段冒充完整源。
+
+完整模式先分离原唱，再找句间停顿，逐段转换、检查、混音、发送；当前段通过检查并被 QQ 接受，才生成下一段。找不到自然停顿时，用上限前最后一个 LRC 换句时间点收尾，QQ 段尾补 0.18 秒停顿，整段仍不超过 115 秒。LRC 只有句首时间，换句兜底的准确性依赖歌词时间轴；没有逐句歌词也找不到停顿时会提示使用片段版。源时间区间连续覆盖原曲，追加停顿不删除原音频。片段模式优先对齐歌词行，没有歌词时取约 30 秒处，不能保证是副歌。
+
+QQ 语音为单声道 32 kHz，本地回听文件为立体声 44.1 kHz。人声能量检查能发现较明显的局部静音，不能证明每个字、辅音或发音都正确；声音自然度仍需实际试听。最近完成的结果和实际使用的参考保存在被忽略的 `data/singing/results/`，方便对照问题音频。
 
 上述日文和英文命令是输入格式示例，不保证音乐平台当前提供可用的完整音源；在会员模式下，能否获取原曲取决于已登录账号的实际播放权限。
 
@@ -152,13 +167,15 @@ data\singing\runtime\.venv\Scripts\python.exe .\scripts\train_singing_voices.py 
 
 自动适配多首歌曲时，在手动映射中省略该角色，并设置 `SINGING_TARGET_MEDIAN_F0_BY_PROFILE_JSON={"murasame":400}`。分离后，RMVPE 分析全曲原唱 F0；在 −12、0、+12 中选择使有声音高中位数最接近目标的八度偏移，全曲统一使用它。低音人声约 200 Hz 会升到约 400 Hz，高音人声约 400 Hz 保留原调，约 800 Hz 可降一个八度。平局优先原调。400 Hz 是本机 B 版的音区预设，不是每个音都固定为 400 Hz，也不代表所有角色的标准音区。手动映射中的显式 `0` 也会关闭该角色自动适配。
 
-转换后，`check_singing_quality.py` 用 RMVPE 比较原唱人声与转换人声的逐帧 F0（最多校正 100 毫秒固定延迟），用 CAMPPlus 比较多个 5–10 秒窗口的音色向量，并检查时长、音量和削波。默认验收阈值为音高中位偏差 **小于 100 cents**、一半音内比例至少 **0.70**、有声帧召回至少 **0.70**、时长误差不超过 **3%**、RMS 大于 **1e-4**、削波比例小于 **0.01**、目标音色余弦相似度至少 **0.35**。未通过时会增加 15 个 diffusion steps 重试一次；报告写入当前任务目录的 `quality.json` 或 `quality_retry.json`。`SINGING_MAX_PITCH_ERROR_CENTS` 与 `SINGING_MIN_VOICE_SIMILARITY` 可调整对应门槛，但不应靠调阈值掩盖走调。指标只能筛出明显问题，实际歌曲的自然度、咬字和音色仍需听辨。
+转换后，`check_singing_quality.py` 用 RMVPE 对照原唱与转换后的逐帧 F0（最多校正 100 毫秒固定延迟），用 CAMPPlus 比较音色向量，并检查时长、音量、削波和人声覆盖。机器人默认音高中位偏差小于 **100 cents**、一半音内比例至少 **0.70**、有声帧召回至少 **0.88**、时长误差不超过 **1%**、能量覆盖至少 **0.90**、连续缺失不超过 **1.2 秒**、削波小于 **0.01**、音色余弦相似度至少 **0.35**。失败时提高 15 个 diffusion steps 重试当前段。相邻音高残差和孤立尖跳是额外诊断，不算歌词或自然度的通过证明。
+
+推理固定种子便于同片段对照；`SINGING_REPAIR_F0_SPIKES=true` 可试修有声段内孤立单帧尖点，默认关闭。`scripts/check_singing_lyrics.py` 可用本机 Whisper 对照原人声、转换人声和 LRC；唱歌识别与日语表记会影响 CER，这些分数只辅助查咬字，仍需回听。全角色三语复验见 [SINGING_RECHECK.md](SINGING_RECHECK.md)。
 
 比较角色身份时，听审 CLI 可传 `--identity-reference` 指定另一条真实角色录音；报告的 `voice_similarity` 仍指生成时的参考，而 `identity_reference_similarity` 指这条独立录音。不同版本应使用相同的独立录音才能比较；独立于转换参考不等于训练未见，需另行核对训练清单。报告同时提供有声帧 precision、原唱及转换后的有声音高中位数，辅助检查额外出现的有声帧和音区差异；这些诊断指标不能证明声音像原角色。
 
 试听对照时，`run_singing_model.py --semitone-shift 3` 可显式升 3 个半音，允许范围为 −12 到 +12，默认 0。质量检查需同步传 `check_singing_quality.py --expected-semitone-shift 3`。正式生成链会自动把同一角色设置传给转换、检查和伴奏处理，重试也保留该设置；报告分别记录人声和伴奏的半音偏移。旋律检查比较预期移调后的原唱 F0，不会把正常的角色音区调整误判为走调。
 
-一首完整歌曲会在本地混音后，按歌词时间点或低能量停顿连续切成最长 `SINGING_CHUNK_SECONDS`（默认且最高 55）秒的语音，按顺序发送，不截掉结尾。已发送任务最近 5 份 `cover.wav`、`lyrics.lrc` 和质量报告保存在 `data/singing/results/` 供本地听审；中间人声、伴奏和原曲下载文件会清理。
+完整歌按停顿或歌词换句位置分段，`SINGING_CHUNK_SECONDS` 默认且最高 115 秒，生成一段就发一段。本地完整混音供回听。最近 5 份结果、实际参考音频、短人声对照和质量报告保存在 `data/singing/results/`；其它中间文件会清理。
 
 本地训练需要 RTX 4060 笔记本的 CUDA 环境，实际耗时随模型缓存、批次和音频时长变化。Seed-VC 仓库的 T4 100 步速度仅是上游参考，不能视为本机训练时间保证。
 

@@ -54,8 +54,8 @@ async def audit_character(character, settings: Settings, semaphore: asyncio.Sema
                     "cache_hit": result.cache_hit,
                 }
             )
-        # Audits must report a failure for this character and continue through
-        # the complete catalog, regardless of which provider/decoder failed.
+        # 某个角色失败时仍要继续检查完整图鉴，
+        # 不受图片来源或解码器错误影响。
         except Exception as exc:  # noqa: BLE001
             row.update(
                 {

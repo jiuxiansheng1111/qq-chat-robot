@@ -1,7 +1,7 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
-    # Two epochs was only a smoke test and produced a near-silent checkpoint.
-    # Ten epochs is the minimum useful CPU fine-tune for this six-minute set.
+    # 两轮训练仅是冒烟测试，生成的检查点几乎没有声音。
+    # 这组 6 分钟音频至少需要在 CPU 上微调 10 轮才有实际效果。
     [int]$Epochs = 10,
     [int]$BatchSize = 1,
     [ValidatePattern('^[A-Za-z0-9_-]+$')]
@@ -10,15 +10,15 @@ param(
     [string]$ManifestStem = "murasame",
     [ValidatePattern('^[A-Za-z0-9_-]*$')]
     [string]$ExperimentName = "",
-    # "mixed" accepts only per-row ja/zh labels and requires both languages.
-    # It must use a new dataset root so the single-language cache is untouched.
+    # mixed 模式每行只能标记 ja 或 zh，且两种语言都必须出现。
+    # 必须使用新的数据集目录，避免改动单语缓存。
     [ValidateSet("ja", "zh", "en", "mixed")]
     [string]$ExpectedLanguage = "ja",
-    # A new character has no previous e10 checkpoint. Explicitly opt into a
-    # base-model mixed run; the legacy Murasame mixed-resume preflight stays on.
+    # 新角色没有旧的 e10 检查点。显式从基础模型开始 mixed 训练；
+    # 旧村雨的 mixed 恢复检查仍保留。
     [switch]$TrainMixedFromBase,
-    # Leave empty to select a free ASCII SUBST drive without disturbing an
-    # existing user mapping.  A value such as T: can be supplied explicitly.
+    # 留空时会选择一个空闲的 ASCII SUBST 盘符，
+    # 不会占用已有映射。也可以显式指定，例如 T:。
     [string]$ProjectDrive = "",
     [string]$VoiceDrive = ""
 )
@@ -79,8 +79,8 @@ function Get-SubstTarget {
     $written = [VoiceSubst.NativeMethods]::QueryDosDevice($deviceName, $buffer, $buffer.Capacity)
     if ($written -eq 0) { return $null }
     $target = $buffer.ToString()
-    # A SUBST drive has a \??\C:\... target. Physical and network drives use
-    # device names such as \Device\HarddiskVolume... and are never repurposed.
+    # SUBST 盘符的目标格式为 \??\C:\...。物理盘和网络盘使用
+    # \Device\HarddiskVolume... 等设备名，不会被重新映射。
     if ($target.StartsWith("\??\")) { return $target.Substring(4).TrimEnd("\") }
     return $null
 }
@@ -115,9 +115,9 @@ function Ensure-SubstAlias {
 
     $Drive = Normalize-DriveName $Drive
     $targetFull = [System.IO.Path]::GetFullPath($Target).TrimEnd("\")
-    # `subst` is the one API that reveals the physical target of an existing
-    # drive alias.  Merely finding a familiar subdirectory is unsafe: an old
-    # checkout can have the same dataset name.
+    # 只有 subst 能显示现有盘符别名对应的物理目标。
+    # 仅凭熟悉的子目录名判断并不安全：旧版
+    # 检出目录也可能有同名数据集。
     $matchedTarget = Get-SubstTarget $Drive
     if ($matchedTarget) {
         $mappedFull = [System.IO.Path]::GetFullPath($matchedTarget).TrimEnd("\")
@@ -146,17 +146,17 @@ function Register-SubstPSDrive {
     $normalizedDrive = Normalize-DriveName $Drive
     $name = $normalizedDrive.Substring(0, 1)
     if (-not (Get-PSDrive -Name $name -ErrorAction SilentlyContinue)) {
-        # PowerShell 5.1 caches FileSystem drives at process start.  A SUBST
-        # created moments ago exists to native programs but may not yet be a
-        # PowerShell provider drive, which would make Join-Path fail.
+        # Windows PowerShell 5.1 会在进程启动时缓存文件系统盘符。刚创建的 SUBST
+        # 盘符对原生命令可见，但可能还不是 PowerShell
+        # Provider 盘符，导致 Join-Path 失败。
         New-PSDrive -Name $name -PSProvider FileSystem -Root ($normalizedDrive + "\") -Scope Script -ErrorAction Stop | Out-Null
     }
 }
 
-# Python's Windows/PowerShell path handling can corrupt this user's CJK
-# username when a long Unicode path is serialized into the training JSON.
-# SUBST gives the external trainer ASCII-only aliases, while the real files
-# remain in their normal locations.
+# Python 在 Windows/PowerShell 下处理路径时，可能会破坏此用户的中文
+# 用户名，尤其是把长 Unicode 路径写入训练 JSON 时。
+# SUBST 可让外部训练器使用纯 ASCII 路径别名，
+# 实际文件仍保留在原位置。
 if (-not (Test-Path -LiteralPath $datasetActual)) { throw "Dataset directory not found: $datasetActual" }
 $projectAlias = Select-SubstDrive -RequestedDrive $ProjectDrive -Target $projectRoot -Candidates @("R:", "T:", "U:", "W:", "X:", "Y:", "Z:")
 $voiceAlias = Select-SubstDrive -RequestedDrive $VoiceDrive -Target ([System.IO.Path]::GetFullPath((Join-Path $projectRoot "..\qq-chatrobot-voice"))) -Candidates @("V:", "S:", "Q:", "N:", "M:", "L:", "K:")
@@ -189,14 +189,14 @@ foreach ($requiredPath in @($bertDir, $hubertDir, $s2g, $s2d)) {
 function Assert-MixedResumeCheckpoint {
     param([string]$CheckpointDirectory)
 
-    # Upstream s2_train.py wraps both checkpoint loads in a bare `except`.
-    # Any missing, mismatched, or corrupt checkpoint then falls through to the
-    # base pretrained weights at epoch 1.  Mixed runs are explicitly a
-    # continuation of the e10 Japanese run, so fail before any expensive
-    # preprocessing or an accidental from-scratch train.
-    # Keep the validator in an ASCII source file. PowerShell 5.1 can split
-    # quote-heavy Python passed through `-c` (including f-strings), changing a
-    # fail-closed validation error into a misleading Python syntax error.
+    # 上游 s2_train.py 用裸 except 包住了两处检查点加载。
+    # 检查点缺失、不匹配或损坏时，流程会静默改用
+    # 第 1 轮的基础预训练权重。mixed 训练明确是
+    # 从日语 e10 训练继续，因此必须在耗时的
+    # 预处理前失败，避免意外从头训练。
+    # 校验器保存在 ASCII 源文件中。Windows PowerShell 5.1 可能拆坏
+    # 通过 -c 传入的含引号 Python 代码（包括 f-string），
+    # 把明确的校验失败误报成 Python 语法错误。
     $validatorPath = Join-Path $projectRoot "scripts\validate_mixed_resume_checkpoint.py"
     if (-not (Test-Path -LiteralPath $validatorPath -PathType Leaf)) {
         throw "Mixed resume checkpoint validator is missing: $validatorPath"
@@ -219,16 +219,16 @@ if ($ExpectedLanguage -eq "mixed" -and -not $TrainMixedFromBase) {
     }
 }
 
-# Validate the source manifest before canonicalizing its paths.  Checking only
-# basenames would let a stale manifest from an old dataset borrow same-named
-# files from the new one, destroying audio/transcript provenance.
+# 规范化路径前先校验源清单。只检查文件名会让
+# 旧数据集的清单可能借用新目录中的同名文件，
+# 进而破坏音频与文本的来源记录。
 & $python (Join-Path $projectRoot "scripts\validate_voice_manifest.py") $sourceListPath $datasetActual `
     --expected-language $ExpectedLanguage --minimum-items 10
 if ($LASTEXITCODE -ne 0) { throw "Source dataset manifest validation failed" }
 $sourceManifestHash = (Get-FileHash -LiteralPath $sourceListPath -Algorithm SHA256).Hash
 
-# The preparer writes ordinary absolute paths.  Convert only the training copy
-# to R: so GPT-SoVITS never receives the Windows user's CJK profile path.
+# 预处理工具会写入普通绝对路径。只把训练副本
+# 转成 R:，避免 GPT-SoVITS 收到 Windows 用户的中文目录路径。
 $audioFingerprintRows = [System.Collections.Generic.List[string]]::new()
 $aliasRows = foreach ($sourceLine in Get-Content -LiteralPath $sourceListPath -Encoding UTF8) {
     if (-not $sourceLine.Trim()) { continue }
@@ -240,9 +240,9 @@ $aliasRows = foreach ($sourceLine in Get-Content -LiteralPath $sourceListPath -E
     if (-not (Test-Path -LiteralPath $actualAudioPath -PathType Leaf)) {
         throw "Source manifest references audio outside this dataset: $($parts[0])"
     }
-    # The source list records paths and transcripts, but a curation pass can
-    # replace a re-cut WAV without changing either.  For mixed training, bind
-    # preprocessing caches to the actual bytes as well as the manifest.
+    # 源列表记录了路径和文本，但整理时可能替换重新剪辑的 WAV，
+    # 而路径和文本都不变。mixed 训练要把缓存同时
+    # 绑定到清单和文件实际内容。
     if ($ExpectedLanguage -eq "mixed") {
         $audioHash = (Get-FileHash -LiteralPath $actualAudioPath -Algorithm SHA256).Hash
         $audioFingerprintRows.Add("$audioName|$audioHash") | Out-Null
@@ -273,13 +273,13 @@ function Assert-GeneratedRowCount {
 
 $semanticHeader = [string]::Join([char]9, @("item_name", "semantic_audio"))
 
-# Preprocessing outputs are content-addressed only by convention in upstream
-# GPT-SoVITS.  Refuse to combine caches with a changed manifest: that creates a
-# superficially successful but acoustically invalid checkpoint.
+# 上游 GPT-SoVITS 只按约定管理预处理内容缓存。
+# 清单变化时拒绝混用缓存，否则可能生成
+# 表面成功、实际音质有误的检查点。
 $trainingManifestHash = (Get-FileHash -LiteralPath $listPath -Algorithm SHA256).Hash
-# The mixed cache additionally binds its language policy.  Keep the legacy
-# single-language stamp byte-for-byte compatible so this new entry point does
-# not invalidate the existing Japanese preprocessing cache.
+# mixed 缓存还会记录语言策略。保留旧的
+# 单语标记，确保字节内容完全不变，避免
+# 这个新入口让现有日语预处理缓存失效。
 $manifestHash = "source=$sourceManifestHash;training=$trainingManifestHash"
 if ($ExpectedLanguage -eq "mixed") {
     $sha256 = [System.Security.Cryptography.SHA256]::Create()
@@ -314,8 +314,8 @@ if (Test-Path -LiteralPath $manifestStamp) {
 
 $env:PYTHONPATH = "$voiceRoot;$voiceRoot\GPT_SoVITS"
 $env:is_half = "False"
-# The full G2PW package is downloaded separately.  Training preprocessing can
-# use the bundled pypinyin path and will resume without re-downloading it.
+# 完整版 G2PW 包会单独下载。训练预处理可先用
+# 附带的 pypinyin 路径，之后继续运行也无需重新下载。
 $env:is_g2pw = "false"
 
 function Invoke-Stage {
@@ -326,11 +326,11 @@ function Invoke-Stage {
     $previousErrorActionPreference = $ErrorActionPreference
     $stageExitCode = 0
     try {
-        # Some upstream Python dependencies print harmless deprecation notices
-        # to stderr. With Stop at script scope, PowerShell promotes those
-        # native stderr lines into terminating errors before the child process
-        # can finish. Keep this stage running and judge success by Python's
-        # actual exit code below.
+        # 部分上游 Python 依赖会把无害的弃用提示写到 stderr。
+        # 在脚本级设置 Stop 时，PowerShell 会把这些
+        # 原生 stderr 内容提升为终止错误，子进程
+        # 还没结束就中断流程。让此阶段继续运行，
+        # 最后根据 Python 的实际退出码判断是否成功。
         $ErrorActionPreference = "Continue"
         & $python $Script *>&1 | Tee-Object -FilePath $log
         $stageExitCode = $LASTEXITCODE
@@ -432,11 +432,11 @@ $base.train.save_every_epoch = 1
 $base.train.grad_ckpt = $true
 $base.model.version = "v2"
 $base.data.exp_dir = $dataset
-# GPT-SoVITS s2_train.py does not consistently honor s2_ckpt_dir: resume and
-# checkpoint saves are hard-coded to <exp_dir>/logs_s2_<model.version>.  Keep
-# the configured TensorBoard directory aligned with that upstream location and
-# create it before training, otherwise the first CPU checkpoint fails after a
-# full epoch when utils.my_save tries to move the temporary .pth file.
+# GPT-SoVITS 的 s2_train.py 不总是遵守 s2_ckpt_dir：恢复和
+# 保存检查点时会固定使用 <exp_dir>/logs_s2_<model.version>。
+# TensorBoard 目录必须与上游路径一致，并在训练前
+# 创建；否则 utils.my_save 移动临时 .pth 文件时，
+# 可能在完整训练一轮后才失败。
 $s2CheckpointDir = Join-Path $dataset ("logs_s2_" + $base.model.version)
 $base.s2_ckpt_dir = $s2CheckpointDir
 $base.save_weight_dir = Join-Path $dataset "SoVITS_weights_$qualityRunName"
@@ -459,11 +459,11 @@ if ($ExpectedLanguage -eq "mixed" -and -not $TrainMixedFromBase) {
 }
 Push-Location $voiceRoot
 try {
-    # Windows PowerShell 5.1 turns native stderr into error records. PyTorch
-    # can write harmless c10d warnings even after a successful checkpoint,
-    # so keep the warnings in the log and trust the native Python exit code.
-    # Direct invocation also preserves quoted paths without cmd.exe /s /c's
-    # command-string quote stripping.
+    # Windows PowerShell 5.1 会把原生 stderr 记录为错误。PyTorch
+    # 即使检查点已成功保存，也可能输出无害的 c10d 警告，
+    # 所以将警告留在日志中，并以 Python 原生命令退出码为准。
+    # 直接调用可保留带引号的路径，避免 cmd.exe /s /c
+    # 去掉命令字符串中的引号。
     $originalErrorActionPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"

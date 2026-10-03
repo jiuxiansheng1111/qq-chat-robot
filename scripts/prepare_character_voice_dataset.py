@@ -1,8 +1,6 @@
-"""Build an isolated character voice dataset from reviewed per-clip transcripts.
+"""从逐条审核过的转写中，构建隔离的角色音色数据集。
 
-The source audio and the JSONL transcript file are local, authorized inputs.
-Never infer text from a filename or silently merge speakers/languages. Keep the
-result below an ignored local directory; do not commit audio or transcripts.
+源音频和 JSONL 转写文件必须是本地且已获授权的输入。不要从文件名推断文本，也不要静默合并不同说话人/语言。结果写入被 Git 忽略的本地目录，不要提交音频或转写。
 """
 
 from __future__ import annotations
@@ -26,15 +24,15 @@ _PUBLISH_RETRIES = 5
 
 
 def _publish_staged_directory(staged: Path, output_root: Path) -> None:
-    """Atomically publish a staged directory, retrying transient Windows locks."""
+    """原子发布准备好的目录；遇到短暂的 Windows 文件锁时重试。"""
     for attempt in range(_PUBLISH_RETRIES):
         try:
             os.replace(staged, output_root)
             return
         except PermissionError as error:
-            # Windows antivirus/indexing services can briefly deny a directory
-            # rename after files have just been written. Retry only sharing and
-            # access violations; persistent ACL errors still fail promptly.
+            # Windows 防病毒/索引服务可能会在刚写完文件后短暂阻止目录
+            # 重命名。只重试共享冲突和权限占用错误。
+            # 共享冲突时重试；持续的 ACL 权限错误仍会及时报错。
             if getattr(error, "winerror", None) not in {5, 32}:
                 raise
             if attempt + 1 == _PUBLISH_RETRIES:
@@ -54,12 +52,9 @@ def read_reviewed_rows(
     *,
     allow_source_verified_pilot: bool = False,
 ) -> list[tuple[Path, str, str, bool, bool]]:
-    """Resolve each JSONL source under source_root; reject unsafe/incomplete rows.
+    """在 source_root 下解析 JSONL 中的每个音频源；拒绝不安全或信息不完整的行。
 
-    By default every line needs a human listening review.  The pilot opt-in is
-    deliberately narrower: it accepts only a source-text-verified line whose
-    transcript has not been human reviewed yet, and preserves that fact for
-    the emitted provenance record.
+    默认要求人工逐条听审。较窄的试验模式只接受“源文本已核实、但还未人工听审”的行，并在生成的来源记录中保留这一状态。
     """
     root = source_root.resolve(strict=True)
     rows: list[tuple[Path, str, str, bool, bool]] = []
@@ -122,10 +117,9 @@ def prepare_dataset(
     manifest_stem: str,
     allow_source_verified_pilot: bool = False,
 ) -> tuple[int, Path]:
-    """Copy reviewed clips into a new, atomically published local dataset.
+    """将审核通过的片段复制到新数据集，并原子发布。
 
-    ``allow_source_verified_pilot`` is only for local experiments.  It does
-    not promote source text or ASR cross-checks to a human listening review.
+    ``allow_source_verified_pilot`` 仅供本地试验使用。它不会把源文本核对或 ASR 交叉检查冒充成人工听审。
     """
     _safe_name(speaker, "speaker")
     _safe_name(manifest_stem, "manifest_stem")

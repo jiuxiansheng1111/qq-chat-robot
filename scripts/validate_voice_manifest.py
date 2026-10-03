@@ -1,4 +1,4 @@
-"""Validate a GPT-SoVITS manifest before expensive preprocessing or training."""
+"""在耗时的预处理或训练前，先校验 GPT-SoVITS 清单。"""
 
 from __future__ import annotations
 
@@ -67,8 +67,8 @@ def validate_manifest(
         if audio_path.suffix.lower() not in _SUPPORTED_AUDIO_SUFFIXES:
             raise ValueError(f"line {line_number}: unsupported audio suffix")
         try:
-            # Resolve symlinks before checking the parent so a link inside
-            # audio/ cannot silently point at an older dataset.
+            # 检查父目录前先解析符号链接，避免 audio/ 下的链接
+            # 悄悄指向旧数据集。
             same_audio_directory = audio_path.resolve().parent.samefile(audio_root.resolve())
         except OSError:
             same_audio_directory = False
@@ -80,10 +80,10 @@ def validate_manifest(
         if audio_key in seen_audio:
             raise ValueError(f"line {line_number}: duplicate audio path")
         seen_audio.add(audio_key)
-    # Japanese may contain kanji-only fragments, but a real multi-sentence
-    # Japanese corpus should not be overwhelmingly kana-free.  This catches
-    # the previous failure mode where Chinese filename descriptions were
-    # mislabeled as Japanese transcripts.
+    # 日语可能有只含汉字的片段，但真实的多句日语语料不应几乎
+    # 完全没有假名。这能发现
+    # 之前把中文文件名描述
+    # 误标成日语转写的问题。
     japanese_count = language_counts.get("ja", 0)
     japanese_with_kana = kana_transcripts.get("ja", 0)
     if japanese_count and japanese_with_kana * 2 < japanese_count:

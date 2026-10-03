@@ -1,4 +1,4 @@
-"""Small in-process queue for serialized AI singing work."""
+"""用于串行处理 AI 翻唱任务的轻量进程内队列。"""
 
 from __future__ import annotations
 
@@ -14,11 +14,11 @@ from typing import Literal
 
 
 class QueueError(RuntimeError):
-    """A job could not be admitted to the singing queue."""
+    """翻唱任务无法进入队列。"""
 
 
 class SingingError(RuntimeError):
-    """A business error whose message is safe to show to the requesting user."""
+    """可以安全展示给请求用户的业务错误。"""
 
 
 JobStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
@@ -45,10 +45,9 @@ class _Pending:
 
 
 class SingingJobManager:
-    """One active job at a time, with bounded waiting and recent status history.
+    """同一时间只运行一个任务，并限制等待数量和近期状态记录。
 
-    Public methods must be called from the same event loop. ``submit`` contains
-    no await, so admission checks and insertion are atomic on that loop.
+    公开方法必须在同一个事件循环中调用。``submit`` 不含 await，因此准入检查和入队在该循环内是原子操作。
     """
 
     def __init__(self, max_pending: int = 3, cooldown_seconds: float = 120) -> None:
@@ -67,7 +66,7 @@ class SingingJobManager:
         self._closed = False
 
     def submit(self, key: JobKey, query: str, operation: JobOperation) -> SingingJob:
-        """Admit a job immediately or raise QueueError with a safe Chinese reason."""
+        """立即接收任务；无法接收时抛出带安全提示的 QueueError。"""
         if self._closed:
             raise QueueError("翻唱队列已关闭")
         if len(key) != 3 or not all(isinstance(part, str) for part in key):
@@ -105,7 +104,7 @@ class SingingJobManager:
         return job
 
     def status(self, key: JobKey) -> SingingJob | None:
-        """Return the active job or the newest retained completion for this key."""
+        """返回该键对应的当前任务，或最近保留的已完成任务。"""
         current = self._active.get(key)
         if current is not None:
             return current
@@ -169,7 +168,7 @@ class SingingJobManager:
                     self._current_job = None
                     self._finish(job)
         finally:
-            # Also cover an external cancellation of the queue runner itself.
+            # 也处理队列运行任务自身被外部取消的情况。
             if self._current_task is not None and not self._current_task.done():
                 self._current_task.cancel()
                 with suppress(asyncio.CancelledError, Exception):
@@ -188,7 +187,7 @@ class SingingJobManager:
                     self._finish(job)
 
     async def cancel(self, key: JobKey) -> bool:
-        """Cancel a queued or running job and wait for running cleanup."""
+        """取消排队中或运行中的任务，并等待运行任务完成清理。"""
         job = self._active.get(key)
         if job is None:
             return False
@@ -207,7 +206,7 @@ class SingingJobManager:
         return True
 
     async def aclose(self) -> None:
-        """Reject new work, cancel pending/running work, and await cleanup."""
+        """拒绝新任务、取消排队/运行任务，并等待清理结束。"""
         if self._closed:
             if self._runner is not None:
                 await asyncio.shield(self._runner)

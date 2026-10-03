@@ -1,4 +1,4 @@
-"""Pitch-shift an accompaniment stem on CPU without changing its tempo or duration."""
+"""在 CPU 上调整伴奏音轨音高，不改变速度或时长。"""
 
 import argparse
 from pathlib import Path
@@ -51,7 +51,7 @@ def transpose_audio_file(source: Path, output: Path, semitones: int) -> None:
     peak = float(np.max(np.abs(result)))
     if peak > 0.99:
         result *= 0.99 / peak
-    # This is uniform mix-level restoration, not EQ or timbre processing.
+    # 这是对混音整体做等比例恢复，不是 EQ 或音色处理。
     output.parent.mkdir(parents=True, exist_ok=True)
     sf.write(output, result, sample_rate, subtype="PCM_16")
 

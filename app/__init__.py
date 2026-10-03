@@ -1,1 +1,1 @@
-"""qqchat robot application package."""
+"""QQ 聊天机器人应用包。"""

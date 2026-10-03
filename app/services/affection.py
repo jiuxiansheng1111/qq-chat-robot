@@ -95,10 +95,10 @@ _MILD_HOSTILITY = (
     "答错了",
 )
 
-# Direct cruelty does not always contain a conventional swear word. These
-# patterns cover threats and forced-choice harm aimed at the bot or its family,
-# so messages such as “你妈和你爸必须被杀一个，你选哪个” cannot be treated
-# as neutral engagement and accidentally earn streak points.
+# 直接的残酷言论不一定带常见脏话。这些模式也会识别威胁、
+# 以及针对机器人或其家人的强迫二选一伤害表达，
+# 避免把它们误当普通互动并意外加上连续互动分。
+
 _CRUEL_COERCION_PATTERNS = (
     re.compile(
         r"(?:你(?:妈|妈妈|母亲).{0,10}(?:你爸|爸爸|父亲)"
@@ -275,12 +275,9 @@ def affection_prompt(score: int) -> str:
 
 
 def romance_mode_prompt(conversation_turn_count: int = 0) -> str:
-    """Return the dedicated voice and emotional-support rules for romance mode.
+    """返回恋爱模式专用的语音和情绪支持规则。
 
-    Romance mode intentionally does not reuse the old score-based coldness
-    rules.  Affection values are still available for the separate memory
-    unlock, but they should not make the character curt or repeatedly use a
-    fixed tsundere catchphrase.
+    恋爱模式刻意不沿用旧的好感分冷淡规则。好感值仍可用于单独解锁记忆功能，但不应让角色变得冷淡，也不应反复说固定的傲娇台词。
     """
 
     turns = max(0, min(int(conversation_turn_count), 12))
@@ -478,12 +475,12 @@ async def assess_affection(
     if llm is None or not previous_bot_reply:
         return direct
 
-    # Use the LLM mainly to judge the user's answer to Murasame's own follow-up
-    # question. Ordinary new questions should not consume an extra model call.
+    # 主要用 LLM 判断用户是否回答了丛雨刚才的追问；
+    # 普通的新问题不应额外消耗一次模型调用。
     if "?" not in previous_bot_reply and "？" not in previous_bot_reply:
         return direct
 
-    # Commands should not accidentally farm affection merely because they are polite.
+    # 不要因为命令语气礼貌就意外刷好感分。
     compact = re.sub(r"\s+", "", str(text or ""))
     if any(hint in compact for hint in _AFFECTION_COMMAND_HINTS) or compact.startswith("/"):
         return direct

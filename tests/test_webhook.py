@@ -551,6 +551,14 @@ def test_repeat_echo_ignores_commands_and_links():
         assert repeat_echo_candidate(state, "g1", text) is None
 
 
+def test_repeat_echo_does_not_repeat_plain_cat_and_menu_requests():
+    state = {}
+    for text in ("随机猫图", "随机猫咪", "猫图", "给我看看菜单", "发个猫咪动图呗"):
+        for _ in range(4):
+            assert repeat_echo_candidate(state, "g1", text) is None
+        assert "g1" not in state
+
+
 def test_murasame_tsundere_is_low_frequency_and_disabled_for_serious_prompts():
     light_seed = next(
         str(index)

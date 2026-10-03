@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.config import Settings
+from app.services.giphy_cat import random_giphy_cat_gif
 
 WIKIMEDIA_COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 WIKIMEDIA_USER_AGENT = "qq-chatrobot/0.1 (https://github.com/jiuxiansheng1111/qq-chat-robot)"
@@ -197,7 +198,7 @@ async def warm_cat_gif_cache(settings: Settings) -> None:
 
 
 async def maintain_cat_gif_cache(settings: Settings) -> None:
-    """Keep refilling the cat cache after transient upstream failures."""
+    """上游临时失败后，继续补充猫图缓存。"""
     target = max(1, min(int(getattr(settings, "cat_cache_size", 6)), 10))
     while True:
         await warm_cat_gif_cache(settings)
@@ -207,6 +208,11 @@ async def maintain_cat_gif_cache(settings: Settings) -> None:
 
 
 async def random_cat_gif(settings: Settings) -> str:
+    if getattr(settings, "cat_giphy_enabled", False):
+        try:
+            return await random_giphy_cat_gif(settings)
+        except (RuntimeError, TimeoutError, httpx.HTTPError):
+            pass
     async with _cat_cache_lock:
         image = _cat_gif_cache.popleft() if _cat_gif_cache else None
         if image is not None:
@@ -215,12 +221,9 @@ async def random_cat_gif(settings: Settings) -> str:
             _remember_cat_digest(digest)
 
     if image is None:
-        # CATAAS can occasionally return the same GIF repeatedly even with a
-        # cache-busting query. Compare actual content and retry a few times.
-        last_image = ""
+        # 上游有时一直返回同一张，比较内容再换一张。
         for _ in range(8):
             candidate = await _download_cat_gif(settings)
-            last_image = candidate
             digest = _cat_digest(candidate)
             async with _cat_cache_lock:
                 if digest in _cat_recent_hashes:
@@ -229,14 +232,14 @@ async def random_cat_gif(settings: Settings) -> str:
             image = candidate
             break
         if image is None:
-            image = last_image or await _download_cat_gif(settings)
+            raise RuntimeError("猫图网站这次一直返回重复图片，稍后再试")
 
     asyncio.create_task(warm_cat_gif_cache(settings))
     return image
 
 
 async def random_nailong_image(settings: Settings) -> str:
-    """Download one non-repeating image from the curated open-source meme pool."""
+    """从精选的开源表情包中下载一张不重复图片。"""
     path = await _next_nailong_path()
     url = NAILONG_RAW_BASE_URL + path
     timeout = getattr(settings, "media_timeout_seconds", 60)
@@ -263,7 +266,7 @@ async def random_nailong_image(settings: Settings) -> str:
 
 
 async def random_real_pig_image(api_url: str, settings: Settings) -> RealPigImage:
-    """Return a non-repeating real pig photograph from a curated Commons pool."""
+    """从精选的 Commons 图片池中返回一张不重复的真实猪照片。"""
     endpoint = (
         api_url
         if (urlparse(api_url).hostname or "").endswith("wikimedia.org")

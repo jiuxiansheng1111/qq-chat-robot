@@ -83,6 +83,12 @@ from app.services.group_memory_logic import (
     rewrite_first_person_identity_question,
     rewrite_relation_pronouns,
 )
+from app.services.help_menu import (
+    concise_text_menu,
+    is_help_menu_request,
+    is_text_menu_request,
+    render_help_menu,
+)
 from app.services.http_routing import install_outbound_proxy_environment
 from app.services.image_generation import generate_image
 from app.services.image_resolution import (
@@ -90,6 +96,7 @@ from app.services.image_resolution import (
     append_image_attribution,
     coerce_image_resolution,
 )
+from app.services.menu_intent import normalize_menu_intent
 from app.services.murasame_media import asset_help, random_asset
 from app.services.music import (
     MusicIdentity,
@@ -103,6 +110,7 @@ from app.services.music import (
 )
 from app.services.onebot_routing import (
     current_onebot_self_id,
+    onebot_client,
     onebot_route,
     set_current_onebot_self_id,
 )
@@ -120,6 +128,7 @@ from app.services.possession_style import (
 from app.services.short_intent import canonicalize_short_command
 from app.services.simple_logic import resolve_rps_logic
 from app.services.singing import (
+    SingingDelivery,
     SingingPipelineError,
     archive_singing_job,
     cleanup_singing_job,
@@ -213,14 +222,14 @@ VOICE_STATUS_COMMANDS = frozenset({"/语音状态", "语音状态"})
 VOICE_CHARACTER_LIST_COMMANDS = frozenset(
     {
         "/可用角色", "可用角色", "/角色列表", "角色列表",
-        # Kept as quiet compatibility aliases for people who used the old menu.
+        # 兼容旧菜单用过的别名，但不再显示在菜单里。
         "/音色列表", "音色列表", "/切换音色", "切换音色", "/选择音色", "选择音色",
         "/选择角色", "选择角色", "/切换角色", "切换角色",
     }
 )
 VOICE_CHARACTER_SELECT_PREFIXES = (
     "选择角色 ", "/选择角色 ", "切换角色 ", "/切换角色 ",
-    # Old command wording remains accepted but is no longer displayed.
+    # 仍接受旧命令写法，但菜单中不再展示。
     "选择音色 ", "/选择音色 ", "切换音色 ", "/切换音色 ",
 )
 DAILY_ULTRAMAN_COMMANDS = frozenset({"/今日奥特曼", "今日奥特曼", "抽奥特曼"})
@@ -343,9 +352,9 @@ def _daily_news_timezone() -> tzinfo:
             "Unknown daily news timezone %s; falling back to fixed UTC+8",
             settings.daily_news_timezone,
         )
-        # Windows hosts may lack both the IANA zone database and optional
-        # tzdata. Shanghai has no daylight-saving transition, so a standard
-        # library UTC+8 instance is an accurate, dependency-free fallback.
+        # Windows 主机可能既没有 IANA 时区数据库，也没装可选的
+        # tzdata。上海没有夏令时，用标准库的 UTC+8 时区即可准确处理，
+        # 不需要额外依赖。
         return timezone(timedelta(hours=8), name="Asia/Shanghai")
 
 
@@ -480,8 +489,8 @@ async def build_daily_news_digest(database: Database | None = None) -> str:
             continue
         successful_batches.append(batch)
 
-    # Round-robin across news categories so one search result page cannot fill
-    # the whole digest before domestic/international/technology feeds are read.
+    # 轮流从不同新闻类别取内容，避免单个搜索结果页占满
+    # 摘要，导致国内、国际或科技新闻没机会加入。
     max_batch_size = max((len(batch) for batch in successful_batches), default=0)
     for rank in range(max_batch_size):
         for batch in successful_batches:
@@ -494,9 +503,9 @@ async def build_daily_news_digest(database: Database | None = None) -> str:
 
     if len(unique) < DAILY_NEWS_ITEM_COUNT:
         try:
-            # Retry the broad feed with a slightly wider freshness window. It
-            # remains timestamp-validated and never falls back to evergreen
-            # web pages such as encyclopedias or annual calendars.
+            # 扩大一点新鲜度时间窗，再试一次综合新闻源。
+            # 结果仍会校验时间戳，不会回退到百科或年度日历
+            # 这类常青网页。
             extra = await search_news_feed(
                 "TOP",
                 limit=50,
@@ -552,6 +561,9 @@ async def broadcast_daily_news(app: FastAPI) -> None:
         return
 
     for group_id in groups:
+        # 微信会话没有 QQ 群接口，私人对话也不接收每日群推送。
+        if group_id.startswith("wechat:"):
+            continue
         try:
             await send_group_long_message(group_id, digest)
         except (RuntimeError, httpx.HTTPError) as exc:
@@ -592,8 +604,8 @@ async def daily_news_loop(app: FastAPI) -> None:
             logger.exception("daily noon news loop failed")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+async def initialize_runtime(app: FastAPI):
+    app.state.runtime_resources = []
     settings.validate_security()
     try:
         proxy = await install_outbound_proxy_environment(settings)
@@ -609,9 +621,9 @@ async def lifespan(app: FastAPI):
     app.state.auth = auth
     app.state.llm = LLMManager(settings)
     app.state.memory = ConversationMemory(settings.max_context_messages)
-    # Voice mode is a conversational channel.  Keep a small, per-member
-    # session transcript so follow-ups remain coherent even when optional
-    # general memory is off.  It is never persisted or shared with the group.
+    # 语音模式是对话渠道。为每位成员保留少量会话内容，
+    # 这样即使关闭可选的通用记忆，追问也能接上上下文。
+    # 这些内容不持久化，也不与群内其他人共享。
     app.state.voice_conversation_history = OrderedDict()
     app.state.voice_persona_romance_turns = {}
     app.state.style_learning_tasks = {}
@@ -676,6 +688,7 @@ async def lifespan(app: FastAPI):
                 limit=settings.ingress_user_rate_limit_per_minute,
                 window_seconds=60,
             )
+            app.state.runtime_resources.append(redis_ingress_limiter)
             await redis_ingress_limiter.connect()
             app.state.ingress_limiter = redis_ingress_limiter
 
@@ -684,6 +697,7 @@ async def lifespan(app: FastAPI):
                 limit=settings.ingress_group_rate_limit_per_minute,
                 window_seconds=60,
             )
+            app.state.runtime_resources.append(redis_ingress_group_limiter)
             await redis_ingress_group_limiter.connect()
             app.state.ingress_group_limiter = redis_ingress_group_limiter
 
@@ -692,6 +706,7 @@ async def lifespan(app: FastAPI):
                 limit=settings.llm_user_rate_limit_per_minute,
                 window_seconds=60,
             )
+            app.state.runtime_resources.append(redis_llm_limiter)
             await redis_llm_limiter.connect()
             app.state.llm_limiter = redis_llm_limiter
 
@@ -700,6 +715,7 @@ async def lifespan(app: FastAPI):
                 limit=settings.llm_group_rate_limit_per_minute,
                 window_seconds=60,
             )
+            app.state.runtime_resources.append(redis_llm_group_limiter)
             await redis_llm_group_limiter.connect()
             app.state.llm_group_limiter = redis_llm_group_limiter
 
@@ -707,33 +723,46 @@ async def lifespan(app: FastAPI):
                 settings.redis_url,
                 settings.event_dedupe_ttl_seconds,
             )
+            app.state.runtime_resources.append(redis_deduplicator)
             await redis_deduplicator.connect()
             app.state.deduplicator = redis_deduplicator
             logger.info("Redis rate limiters enabled")
         except (ImportError, OSError, RuntimeError, RedisError) as exc:
             logger.warning("Redis unavailable, using local limiters: %s", exc)
+
+
+async def close_runtime(app: FastAPI):
+    manager = getattr(app.state, "singing_jobs", None)
+    if manager is not None:
+        await manager.aclose()
+    style_tasks = list(getattr(app.state, "style_learning_tasks", {}).values())
+    for task in style_tasks:
+        task.cancel()
+    for task in style_tasks:
+        with suppress(asyncio.CancelledError):
+            await task
+    for name in ("cat_cache_task", "daily_news_task"):
+        task = getattr(app.state, name, None)
+        if task is not None and not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+    llm = getattr(app.state, "llm", None)
+    if llm is not None:
+        await llm.aclose()
+    for resource in getattr(app.state, "runtime_resources", []):
+        with suppress(OSError, RuntimeError, RedisError):
+            await resource.aclose()
+    app.state.runtime_resources = []
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await initialize_runtime(app)
     try:
         yield
     finally:
-        await app.state.singing_jobs.aclose()
-        style_tasks = list(app.state.style_learning_tasks.values())
-        for task in style_tasks:
-            task.cancel()
-        for task in style_tasks:
-            with suppress(asyncio.CancelledError):
-                await task
-        if not app.state.cat_cache_task.done():
-            app.state.cat_cache_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await app.state.cat_cache_task
-        if (
-            app.state.daily_news_task is not None
-            and not app.state.daily_news_task.done()
-        ):
-            app.state.daily_news_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await app.state.daily_news_task
-        await app.state.llm.aclose()
+        await close_runtime(app)
 
 
 app = FastAPI(title="qqchat robot", version="0.1.0", lifespan=lifespan)
@@ -743,7 +772,7 @@ app.include_router(admin_router)
 
 @app.middleware("http")
 async def onebot_webhook_exception_guard(request: Request, call_next):
-    """Never make NapCat retry a delivered event because reply handling failed."""
+    """回调处理失败时，也不要让 NapCat 重试已经送达的事件。"""
     try:
         return await call_next(request)
     except Exception as exc:
@@ -783,9 +812,9 @@ async def llm_health(request: Request):
 def message_text(event: dict) -> str:
     message = event.get("message", "")
     if isinstance(message, str):
-        # OneBot may deliver either array segments or a CQ-code string. Remove
-        # @ segments from strings so command parsing is independent of where
-        # the user placed the mention.
+        # OneBot 可能传数组消息段，也可能传 CQ 码字符串。
+        # 解析 CQ 字符串时会移除 @ 消息段，避免命令解析受其位置影响。
+
         return re.sub(r"\[CQ:at,qq=[^\]]+\]", "", message).strip()
     parts = []
     for segment in message or []:
@@ -795,12 +824,12 @@ def message_text(event: dict) -> str:
 
 
 def event_bot_self_id(event: dict) -> str:
-    """Prefer the self_id carried by NapCat so changing QQ accounts is painless."""
+    """优先使用 NapCat 事件中的 self_id，切换 QQ 账号时更省事。"""
     return str(event.get("self_id") or settings.onebot_self_id or "").strip()
 
 
 def has_reply_segment(event: dict) -> bool:
-    """Return whether the incoming OneBot message explicitly quotes another message."""
+    """返回收到的 OneBot 消息是否明确引用了另一条消息。"""
     message = event.get("message", "")
     if isinstance(message, str):
         return bool(re.search(r"\[CQ:reply,[^\]]+\]", message))
@@ -811,7 +840,7 @@ def has_reply_segment(event: dict) -> bool:
 
 
 def reply_message_id(event: dict) -> str:
-    """Extract the quoted OneBot message id, if present."""
+    """提取被引用的 OneBot 消息 ID；没有则返回空值。"""
     message = event.get("message", "")
     if isinstance(message, str):
         match = re.search(r"\[CQ:reply,id=([^,\]]+)", message)
@@ -824,7 +853,7 @@ def reply_message_id(event: dict) -> str:
 
 
 async def reply_targets_bot(event: dict) -> bool:
-    """Resolve a quoted message and check whether it was sent by this bot."""
+    """解析引用消息，并检查它是否由本机器人发送。"""
     message_id = reply_message_id(event)
     self_id = event_bot_self_id(event)
     if not message_id or not self_id:
@@ -838,7 +867,7 @@ async def reply_targets_bot(event: dict) -> bool:
         else {}
     )
     try:
-        async with httpx.AsyncClient(timeout=8, trust_env=False) as client:
+        async with onebot_client(settings, timeout=8, trust_env=False) as client:
             response = await client.post(
                 f"{route.api_base.rstrip('/')}/get_msg",
                 headers=headers,
@@ -874,7 +903,7 @@ def bot_mentioned(event: dict) -> bool:
 
 
 def murasame_addressed(event: dict, text: str) -> bool:
-    """Treat Murasame calls as direct messages without matching third-person prose."""
+    """只把对丛雨的明确称呼当成直接消息，不匹配第三人称叙述。"""
     if bot_mentioned(event):
         return True
     profiles = {
@@ -885,9 +914,9 @@ def murasame_addressed(event: dict, text: str) -> bool:
     invocation = character_invocation(text, profiles)
     if invocation and invocation.profile_id.casefold() == "murasame":
         return True
-    # A character lookup may mention both Murasame (as the addressee) and its
-    # subject. That is intentionally ambiguous for persona switching, but is
-    # still a clear addressed lookup such as “小丛雨介绍爱弥斯”.
+    # 角色查询里可能同时提到作为称呼的丛雨和被查询的对象。
+    # 这会让切换人格的意图有歧义，但仍是明确的角色查询，
+    # 例如“小丛雨介绍爱弥斯”。
     return bool(
         extract_anime_character_profile_query(text)
         and re.match(r"^(?:小丛雨|丛雨)[，,、：:\s]*", str(text or "").strip())
@@ -895,7 +924,7 @@ def murasame_addressed(event: dict, text: str) -> bool:
 
 
 def mentioned_image_command(event: dict, commands: frozenset[str]) -> bool:
-    """Return whether a QQ @mention contains one of the image commands."""
+    """检查 QQ @消息是否包含图片命令。"""
     return bot_mentioned(event) and message_text(event) in commands
 
 
@@ -953,9 +982,9 @@ def extract_group_memory(event: dict, text: str) -> str | None:
     for prefix in ("记住，", "记住,", "记住 ", "群里记住：", "群里记住:"):
         if text.startswith(prefix):
             return text[len(prefix) :].strip(" ，,：:")[:300]
-    # Natural variants such as “记住我是…” / “让你记住我是…”.
-    # Keep the leading 我/你 so qualify_group_memory can bind it to the
-    # speaker or current bot identity before persistence.
+    # “记住我是……”和“让你记住我是……”这类自然说法。
+    # 保留开头的“我/你”，这样 qualify_group_memory 才能在
+    # 保存前绑定说话者或当前机器人身份。
     if text.startswith(("记住我", "记住你")):
         return text[len("记住") :].strip(" ，,：:")[:300]
     if text.startswith(("让你记住我", "让你记住你")):
@@ -1007,7 +1036,7 @@ def qualify_group_memory(
     current_identity: str,
     speaker_name: str = "",
 ) -> str:
-    """Bind first/second-person group facts to identities at save time."""
+    """保存群聊中的第一、第二人称事实时，先绑定到具体身份。"""
     content = re.sub(r"\s+", " ", content).strip()
     speaker = re.sub(r"[\r\n\t]", " ", speaker_name or "").strip()[:40]
     replacements = [
@@ -1243,7 +1272,7 @@ def extract_member_identity_binding(
     content: str,
     current_user_id: str,
 ) -> tuple[str, str] | None:
-    """Extract stable QQ-user -> alias bindings without treating relations as aliases."""
+    """提取稳定的 QQ 用户到别名映射，不把关系描述当作别名。"""
     compact = re.sub(r"\s+", "", str(content or "")).strip("，,。；;：:")
     if not compact:
         return None
@@ -1323,7 +1352,7 @@ def possession_identity_prompt(name: str, mode: str) -> str:
 
 
 def enforce_possession_identity(answer: str, name: str) -> str:
-    """Prevent providers from reverting to the default persona during possession."""
+    """避免凭依模式下服务提供方把角色切回默认人格。"""
     for default_name in {"小丛雨", "阿柚", settings.persona_name}:
         if default_name and default_name != name:
             answer = answer.replace(default_name, name)
@@ -1372,12 +1401,12 @@ MURASAME_SERIOUS_HINTS = (
 
 
 def should_add_murasame_tsundere(seed: str, prompt: str = "") -> bool:
-    """Use a stable, very rare tsundere flourish only in light conversation."""
+    """只在轻松对话里偶尔加一句稳定、少见的傲娇语气。"""
     if not seed or any(hint in prompt for hint in MURASAME_SERIOUS_HINTS):
         return False
-    # Keep this as an occasional surprise, not a speaking habit.  A stable
-    # bucket makes the frequency predictable while avoiding repeated tails in
-    # adjacent replies with different prompts.
+    # 只偶尔带出这句，别变成固定口头禅。用稳定的
+    # 分桶让出现频率可预测，同时避免不同提示下的相邻回复
+    # 总是带上同一个尾句。
     return hashlib.sha256(seed.encode("utf-8")).digest()[0] % 60 == 0
 
 
@@ -1433,7 +1462,7 @@ def is_romance_comfort_request(prompt: str) -> bool:
 
 
 def ensure_romance_comfort_length(answer: str, prompt: str) -> str:
-    """Keep a short model reply from skipping the requested comfort details."""
+    """避免模型回答太短，漏掉用户要求的安慰内容。"""
     if not answer or not is_romance_comfort_request(prompt):
         return answer
     visible_length = len(re.sub(r"\s+", "", answer))
@@ -1462,14 +1491,14 @@ def ensure_default_murasame_voice(
     if answer.startswith(("```", "<WEB_SEARCH>")):
         return answer
     if response_language in {"en", "ja", "yue"}:
-        # Persona markers and the comfort-length suffix are Chinese.  Keep
-        # foreign-language replies in the language the user requested so the
-        # TTS frontend receives a coherent single-language sentence.
+        # 人格标记和安慰语长度后缀都是中文。
+        # 外语回复要保持用户要求的语言，确保
+        # TTS 前端收到的是连贯的单一语言句子。
         return answer.strip()
     if romance_mode:
-        # The base persona still contains legacy markers for compatibility
-        # with normal mode.  Romance mode has its own softer voice and must
-        # never append the old fixed “杂鱼” flourish.
+        # 基础人格仍保留旧标记以兼容普通模式。
+        # 恋爱模式有更柔和的语气，必须使用自己的标记。
+        # 不再追加旧版固定的“杂鱼”尾句。
         answer = re.sub(r"^\s*苟修金，吾辈来说：\s*", "", answer)
         answer = re.sub(r"杂鱼(?:[~～\s]*杂鱼)?", "", answer)
         for marker, replacement in (
@@ -1507,12 +1536,18 @@ def repeat_echo_candidate(
     group_id: str,
     text: str,
 ) -> str | None:
-    """Return text once when the same eligible group message appears twice in a row."""
+    """同一条符合条件的群消息连续出现两次时，只处理一次。"""
     normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    menu_command = normalize_menu_intent(normalized)
     if (
         not normalized
         or len(normalized) > 500
         or normalized.startswith(("/", "http://", "https://"))
+        or normalized in CAT_IMAGE_COMMANDS | PIG_IMAGE_COMMANDS | NAILONG_IMAGE_COMMANDS
+        or menu_command != normalized
+        or is_help_menu_request(normalized)
+        or is_text_menu_request(normalized)
+        or registry.resolve(normalized)[0] is not None
     ):
         state.pop(group_id, None)
         return None
@@ -1529,7 +1564,7 @@ def repeat_echo_candidate(
     return None
 
 def automatic_web_search_query(prompt: str, model_answer: str = "") -> str | None:
-    """Return a bounded query for clearly current or model-deferred questions."""
+    """为明确的时效性问题或模型暂缓回答的问题生成有限范围查询。"""
     prompt = re.sub(r"\s+", " ", prompt).strip()
     if not prompt:
         return None
@@ -1713,7 +1748,7 @@ def webhook_token_valid(
     x_signature: str | None = None,
     raw_body: bytes = b"",
 ) -> bool:
-    """Accept NapCat HMAC signatures plus the legacy token header styles."""
+    """接受 NapCat HMAC 签名以及旧版 Token 请求头格式。"""
     if not configured_token:
         return True
 
@@ -1741,7 +1776,7 @@ async def send_group_message(group_id: str, message: str) -> None:
         if route.access_token
         else {}
     )
-    async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
+    async with onebot_client(settings, timeout=10, trust_env=False) as client:
         response = await client.post(
             f"{route.api_base.rstrip('/')}/send_group_msg",
             headers=headers,
@@ -1763,7 +1798,7 @@ async def send_group_message(group_id: str, message: str) -> None:
 
 
 def split_qq_text(message: str, chunk_chars: int | None = None) -> list[str]:
-    """Split long text into QQ-sized chunks without dropping content."""
+    """把长文本切成 QQ 可发送的长度，不丢内容。"""
     limit = max(500, chunk_chars or settings.qq_send_chunk_chars)
     text = str(message or "").strip()
     if not text:
@@ -1838,7 +1873,7 @@ async def send_group_share_card(
         data["content"] = content[:180]
     if image:
         data["image"] = image
-    async with httpx.AsyncClient(timeout=12, trust_env=False) as client:
+    async with onebot_client(settings, timeout=12, trust_env=False) as client:
         response = await client.post(
             f"{route.api_base.rstrip('/')}/send_group_msg",
             headers=headers,
@@ -1866,7 +1901,7 @@ async def group_member_name(group_id: str, user_id: str) -> str:
         if route.access_token
         else {}
     )
-    async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
+    async with onebot_client(settings, timeout=10, trust_env=False) as client:
         response = await client.post(
             f"{route.api_base.rstrip('/')}/get_group_member_info",
             headers=headers,
@@ -1884,7 +1919,7 @@ async def group_member_name(group_id: str, user_id: str) -> str:
 def schedule_possession_style_learning(
     request: Request, group_id: str, user_id: str, display_name: str
 ) -> None:
-    """Start one non-blocking style-learning job per member and group."""
+    """每位成员每个群同时只启动一个后台风格学习任务。"""
     key = (group_id, user_id)
     tasks: dict = request.app.state.style_learning_tasks
     current = tasks.get(key)
@@ -1963,11 +1998,9 @@ async def llm_confirm_ultraman_image_candidate(
     label: str = "",
     page_url: str = "",
 ) -> bool | None:
-    """Ask the configured LLM for a final metadata-level identity check.
+    """请配置的 LLM 最后检查一次图片身份元数据。
 
-    The model does not invent or fetch an image URL here. It only checks whether
-    the evidence attached to the already-found candidate is specific enough for
-    the requested Ultraman/independent form. Ambiguous evidence is rejected.
+    模型不会在这里生成或查找图片 URL，只检查已找到候选项的证据是否足以确认用户要找的奥特曼或独立形态。证据有歧义就拒绝。
     """
     if llm is None:
         return None
@@ -2044,7 +2077,7 @@ def _ultraman_image_cache_metadata_path(path: Path) -> Path:
 
 
 def _ultraman_image_payload_usable(image_file: str) -> bool:
-    """Reject corrupt, tiny, or nearly blank/dark images before cache/send."""
+    """发送或缓存前，先拦截损坏、过小或几乎全黑的图片。"""
     if not image_file.startswith("base64://"):
         return False
     try:
@@ -2181,11 +2214,9 @@ async def _llm_ultraman_search_queries(hero, llm) -> tuple[str, ...]:
 
 
 async def resolve_ultraman_card_image(hero, llm=None) -> ImageResolution:
-    """Resolve a hero image with a strict response deadline and persistent cache.
+    """在严格时限内解析英雄图片，并使用持久缓存。
 
-    Independent sources race in parallel instead of accumulating individual
-    timeouts. The selected winner is the only source permitted to write cache;
-    unfinished contenders are cancelled before returning to the caller.
+    多个来源并行竞争，不逐个累加超时时间。只有胜出的来源可以写缓存；返回结果前会取消未完成的请求。
     """
     cached = _load_ultraman_image_cache(hero)
     if cached is not None:
@@ -2193,9 +2224,9 @@ async def resolve_ultraman_card_image(hero, llm=None) -> ImageResolution:
         return cached
 
     aliases = ultraman_image_aliases(hero)
-    # A few form images live in tabs on a general encyclopedia page. Resolve
-    # those verified URLs first so a fast but generic Geed/hero banner can never
-    # win the race and be shown as the requested independent form.
+    # 有些形态图片藏在综合百科页面的标签页里。先解析这些已核实的图片，
+    # 避免通用的捷德或英雄横幅先返回，
+    # 被误当成用户要找的独立形态。
     try:
         direct_form = await _resolve_ultraman_source(
             hero,
@@ -2372,7 +2403,7 @@ async def resolve_ultraman_card_image(hero, llm=None) -> ImageResolution:
 
 
 def _qq_safe_image_variant(image_file: str) -> str | None:
-    """Normalize still images, while preserving GIF animation frames."""
+    """规范化静态图片，同时保留 GIF 动画帧。"""
     if not image_file.startswith("base64://"):
         return None
     try:
@@ -2420,7 +2451,7 @@ def _qq_safe_image_variant(image_file: str) -> str | None:
 
 
 def _persist_outgoing_image(image_file: str) -> str | None:
-    """Persist a normalized base64 image so same-host NapCat can retry by file URI."""
+    """保存规范化后的 base64 图片，让同主机 NapCat 可通过文件 URI 重试。"""
     if not image_file.startswith("base64://"):
         return None
     try:
@@ -2445,7 +2476,7 @@ async def _send_group_image_once(
     route,
     headers: dict[str, str],
 ) -> None:
-    async with httpx.AsyncClient(timeout=25, trust_env=False) as client:
+    async with onebot_client(settings, timeout=25, trust_env=False) as client:
         response = await client.post(
             f"{route.api_base.rstrip('/')}/send_group_msg",
             headers=headers,
@@ -2541,7 +2572,7 @@ async def send_group_image(group_id: str, image_file: str, caption: str = "") ->
 
 
 async def send_group_record(group_id: str, record_file: str) -> bool:
-    """Send a OneBot 11 record segment; return whether OneBot accepted it."""
+    """发送 OneBot 11 语音段，并返回 OneBot 是否接收成功。"""
     route = onebot_route(settings)
     if not route.api_base:
         logger.info("[dry-run] bot=%s group=%s record=%s", route.self_id, group_id, record_file[:80])
@@ -2551,7 +2582,7 @@ async def send_group_record(group_id: str, record_file: str) -> bool:
         if route.access_token
         else {}
     )
-    async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
+    async with onebot_client(settings, timeout=30, trust_env=False) as client:
         response = await client.post(
             f"{route.api_base.rstrip('/')}/send_group_msg",
             headers=headers,
@@ -2575,7 +2606,7 @@ async def maybe_send_voice_reply(
     target_language: str = "zh",
     voice_profile_id: str | None = None,
 ) -> bool:
-    """Send TTS only for users who explicitly enabled voice mode."""
+    """只为明确开启语音模式的用户合成 TTS。"""
     if not settings.voice_enabled or not await request.app.state.db.voice_mode(group_id, user_id):
         return False
     try:
@@ -2609,7 +2640,7 @@ async def send_conversational_reply(
     target_language: str = "zh",
     voice_profile_id: str | None = None,
 ) -> None:
-    """Use the opted-in voice channel once, with the full text as fallback."""
+    """使用已开启的语音渠道回复一次，完整文字作为兜底。"""
     if not await maybe_send_voice_reply(
         request,
         group_id,
@@ -2624,7 +2655,7 @@ async def send_conversational_reply(
 async def selected_voice_profile_id(
     request: Request, group_id: str, user_id: str
 ) -> str:
-    """Read the user's configured profile and fail closed to an available one."""
+    """读取用户设置的人格；不可用时安全回退到可用人格。"""
     profiles = voice_profiles(settings)
     selected = await request.app.state.db.voice_profile(
         group_id, user_id, settings.voice_profile_default
@@ -2837,7 +2868,7 @@ async def send_group_music_card(group_id: str, track: MusicTrack) -> None:
     }
     if track.cover_url:
         data["image"] = track.cover_url
-    async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
+    async with onebot_client(settings, timeout=15, trust_env=False) as client:
         response = await client.post(
             f"{route.api_base.rstrip('/')}/send_group_msg",
             headers=headers,
@@ -2859,7 +2890,7 @@ async def send_group_netease_card(group_id: str, track: NeteaseTrack) -> None:
         if route.access_token
         else {}
     )
-    async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
+    async with onebot_client(settings, timeout=15, trust_env=False) as client:
         response = await client.post(
             f"{route.api_base.rstrip('/')}/send_group_msg",
             headers=headers,
@@ -2876,21 +2907,45 @@ async def send_group_netease_card(group_id: str, track: NeteaseTrack) -> None:
         raise RuntimeError(payload.get("wording") or "OneBot NetEase music card failed")
 
 
-async def _run_singing_job(job: SingingJob, profile_id: str, bot_self_id: str) -> None:
-    """Perform long GPU work outside the webhook, retaining its OneBot route."""
+async def _run_singing_job(
+    job: SingingJob, profile_id: str, bot_self_id: str, mode: str = "full"
+) -> None:
+    """把耗时较长的 GPU 任务放到 webhook 外运行，同时保留 OneBot 路由。"""
     group_id = job.key[1]
 
     async def progress(message: str) -> None:
         job.progress = message
-        # Intermediate phases are visible through 唱歌状态. Only admission,
-        # delivery and failure post to the group, limiting notification noise.
+        # 中间阶段会通过“唱歌状态”显示。只有接单、
+        # 只有接单、送达或失败时才发群消息，减少通知。
 
     delivered = 0
+
+    async def deliver(part: SingingDelivery) -> None:
+        nonlocal delivered
+        if delivered == 0:
+            kind = "片段翻唱" if part.mode == "clip" else "完整翻唱"
+            await send_group_message(
+                group_id, f"🎤 {part.label} · {part.song.track.title}\n"
+                f"{kind}，共 {part.total} 段。",
+            )
+        job.progress = f"正在发送第 {part.index}/{part.total} 段"
+        await send_group_message(group_id, f"🎵 第 {part.index}/{part.total} 段")
+        record = "base64://" + base64.b64encode(part.chunk.path.read_bytes()).decode("ascii")
+        if not await send_group_record(group_id, record):
+            raise SingingPipelineError("QQ 未接受这一段语音，已停止后续生成和发送。")
+        delivered = part.index
+        if part.index < part.total:
+            await asyncio.sleep(settings.singing_segment_pause_seconds)
+
     try:
         async with asyncio.timeout(settings.singing_job_timeout_seconds):
             cover = await generate_singing_cover(
-                job.query, profile_id, job.id, settings, progress, bot_self_id=bot_self_id
+                job.query, profile_id, job.id, settings, progress,
+                bot_self_id=bot_self_id, mode=mode, on_chunk=deliver,
             )
+            if delivered:
+                job.progress = f"已发送全部 {delivered} 段"
+                return
             total = len(cover.chunks)
             pitch_shift = getattr(cover, "pitch_shift_semitones", 0)
             pitch_note = ""
@@ -2900,11 +2955,20 @@ async def _run_singing_job(job: SingingJob, profile_id: str, bot_self_id: str) -
                     pitch_note = f"人声{direction}一个八度，伴奏保持原调。\n"
                 else:
                     pitch_note = f"已按角色音区调整歌声（{direction} {abs(pitch_shift)} 个半音）。\n"
+            if mode == "clip":
+                start = cover.source_start_seconds
+                end = cover.source_end_seconds
+                delivery_note = (
+                    f"片段版，原曲 {start:.1f}–{end:.1f} 秒，约 {end - start:.0f} 秒。\n"
+                    f"共 {total} 段，每段不超过 115 秒。"
+                )
+            else:
+                delivery_note = f"完整翻唱，共 {total} 段，按原曲顺序发送，每段不超过 115 秒。"
             await send_group_message(
                 group_id,
                 f"🎤 {cover.label} · {cover.song.track.title}\n"
                 f"{pitch_note}"
-                f"共 {total} 段，按原曲顺序发送，每段不超过 55 秒。",
+                + delivery_note,
             )
             for index, chunk in enumerate(cover.chunks, 1):
                 job.progress = f"正在发送第 {index}/{total} 段"
@@ -2987,12 +3051,18 @@ async def _handle_singing_command(
         try:
             runtime_paths(settings)
             job = manager.submit(
-                key, command.query, lambda job: _run_singing_job(job, profile_id, bot_self_id)
+                key, command.query,
+                (lambda job: _run_singing_job(job, profile_id, bot_self_id, "clip"))
+                if command.mode == "clip"
+                else (lambda job: _run_singing_job(job, profile_id, bot_self_id)),
             )
             await send_group_message(
                 group_id,
-                f"已接收《{job.query}》的翻唱请求，使用{profiles[profile_id].get('label') or profile_id}音色。"
-                "\n生成需要一些时间，可发送“唱歌状态”或“取消唱歌”（需 @我）。",
+                f"已接收《{job.query}》的"
+                f"{'片段' if command.mode == 'clip' else '完整'}翻唱请求，"
+                f"使用{profiles[profile_id].get('label') or profile_id}音色。"
+                + (f"\n片段约 {settings.singing_clip_seconds:g} 秒，会尽量唱完整的几句歌词。" if command.mode == "clip" else "")
+                + "\n生成需要一些时间，可发送“唱歌状态”或“取消唱歌”（需 @我）。",
             )
         except (QueueError, SingingPipelineError) as exc:
             await send_group_message(group_id, str(exc))
@@ -3019,6 +3089,13 @@ async def onebot_webhook(
         raw_body,
     ):
         raise HTTPException(status_code=401, detail="invalid webhook token")
+    return await dispatch_onebot_event(event, request)
+
+
+async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True):
+    """已验证来源的群消息，HTTP 和 AstrBot 都走这里。"""
+    incoming_self_id = str(event.get("self_id") or "").strip()
+    set_current_onebot_self_id(incoming_self_id)
     raw_event_id = str(event.get("message_id") or event.get("event_id") or "")
     event_id = f"{incoming_self_id}:{raw_event_id}" if raw_event_id else ""
     if event_id and not await request.app.state.deduplicator.first_seen(event_id):
@@ -3027,6 +3104,8 @@ async def onebot_webhook(
         return {"ok": True, "ignored": True}
 
     text = message_text(event)
+    if bot_mentioned(event) or text.startswith("/"):
+        text = normalize_menu_intent(text)
     text = canonicalize_short_command(
         text,
         addressed=bot_mentioned(event) or text.startswith("/"),
@@ -3124,8 +3203,8 @@ async def onebot_webhook(
         return {"ok": True, "ignored": True, "reason": "group_ingress_rate_limited"}
 
     romance_mode = await request.app.state.db.romance_mode(group_id, user_id)
-    # Keep the legacy value readable for migrations/admin inspection, but do
-    # not mutate it during normal chat; romance mode is now the active switch.
+    # 迁移或管理员查看时仍可读取旧值，但日常聊天不要修改；
+    # 恋爱模式现在使用新的开关。
     current_affection = await request.app.state.db.affection_score(
         group_id, user_id, AFFECTION_INITIAL
     )
@@ -3142,8 +3221,8 @@ async def onebot_webhook(
         )
     romance_blocked_today = severe_hostility_count > 3
     affection_changes_enabled = False
-    # Romance mode replaces the old numeric threshold: enabling it grants
-    # access to the related memory features without changing a score.
+    # 恋爱模式已替代旧数值门槛：开启后可以使用相关记忆功能，
+    # 不会改动好感分数。
     memory_unlock_enabled = romance_mode or current_affection >= MEMORY_UNLOCK_SCORE
 
     if text in ROMANCE_MODE_COMMANDS and (text.startswith("/") or bot_mentioned(event)):
@@ -3219,8 +3298,8 @@ async def onebot_webhook(
             if voice_profile_authorized(settings, profile_id, current_onebot_self_id())
         },
     )
-    # Keep the selected role local to this request while other messages may
-    # concurrently change the same user's persisted choice.
+    # 把选中的角色保存在本次请求里，避免处理期间其他消息
+    # 并发改动同一用户的持久化选择。
     request_voice_profile_id = (
         invocation.profile_id
         if invocation
@@ -3340,10 +3419,10 @@ async def onebot_webhook(
         previous_reply = request.app.state.last_murasame_replies.pop(
             (group_id, user_id), ""
         )
-        # Rule-based praise/hostility still works on ordinary mentions. The LLM
-        # may interpret nuanced affection only when the user explicitly quoted
-        # a previous message, preventing stale replies from unrelated topics
-        # being scored as if they were direct answers.
+        # 普通提及时仍使用规则判断夸奖或敌意。只有用户明确引用了
+        # 之前的消息时，LLM 才判断细微的好感表达，
+        # 避免把其他话题的旧回复
+        # 当成当前回答来打分。
         hostile = hostility_assessment(text)
         slang_verdict = None
         if hostile.delta == 0:
@@ -3795,8 +3874,15 @@ async def onebot_webhook(
             schedule_possession_style_learning(request, group_id, target_id, name)
         else:
             await send_group_message(group_id, "今天还没有候选人：群友当天发言达到 15 条才会加入随机抽取。")
-    elif text in HELP_COMMANDS:
-        await send_group_message(group_id, registry.help_text())
+    elif is_text_menu_request(text):
+        await send_group_message(group_id, concise_text_menu())
+    elif text in HELP_COMMANDS or is_help_menu_request(text):
+        try:
+            menu = await render_help_menu(settings)
+            await send_group_image(group_id, menu)
+        except (OSError, ValueError, RuntimeError) as exc:
+            logger.warning("help image unavailable (%s)", type(exc).__name__)
+            await send_group_message(group_id, "菜单图片暂时打不开，可以 @我 文字版菜单。")
     elif text in VOICE_ON_COMMANDS:
         await request.app.state.db.set_voice_mode(group_id, user_id, True)
         if not settings.voice_enabled:
@@ -3825,9 +3911,9 @@ async def onebot_webhook(
         profile_id = await request.app.state.db.voice_profile(
             group_id, user_id, settings.voice_profile_default
         )
-        # Older databases may still contain a removed internal profile such as
-        # ``murasame_ja``.  Never expose that ID in a group message; treat it
-        # as the current default character until the user selects another one.
+        # 旧数据库里可能还留着已删除的内部角色 ID，例如
+        # ``murasame_ja``。不要把它发到群里；在用户选择其他角色前，
+        # 按当前默认角色处理。
         profile = profiles.get(profile_id)
         if profile is None or not voice_profile_authorized(
             settings, profile_id, current_onebot_self_id()
@@ -3901,8 +3987,8 @@ async def onebot_webhook(
         try:
             await send_group_image(group_id, await random_asset(settings, "image"))
         except FileNotFoundError:
-            # A local gallery is preferred, but the existing audited character
-            # resolver remains a useful read-only fallback for 丛雨 itself.
+            # 优先使用本地图片集；如果没有，再使用现有的已审核角色
+            # 查询器只读回退丛雨图片。
             murasame = ANIME_CHARACTER_BY_NAME.get("丛雨")
             try:
                 if murasame is None:
@@ -3966,9 +4052,9 @@ async def onebot_webhook(
     elif (murasame_addressed(event, text) or text.startswith("/")) and (
         profile_query := extract_anime_character_profile_query(text)
     ):
-        # Resolve the requested subject before invoking any persona-chat path.
-        # Otherwise “小丛雨介绍爱弥斯” can be mistaken for a request about
-        # Murasame because the generic LLM prompt is intentionally persona-led.
+        # 调用角色对话前先解析用户要查询的对象。
+        # 否则“小丛雨介绍爱弥斯”可能会被误认为是在问
+        # 丛雨，因为通用 LLM 提示会优先套用角色人格。
         profile_matches = resolve_anime_character_matches(profile_query)
         if len(profile_matches) == 1 and profile_matches[0].exact:
             character = profile_matches[0].character
@@ -4048,8 +4134,8 @@ async def onebot_webhook(
             )
             return {"ok": True, "source": "catalog_help"}
         elif catalog_kind == "all":
-            # The unified catalog searches both namespaces while keeping the
-            # two collection/favorite systems separate.
+            # 综合图鉴会搜索两个类别，但仍把
+            # 收藏和收集记录分开保存。
             ultraman_matches = resolve_ultraman_matches(catalog_query)
             anime_matches = resolve_anime_character_matches(catalog_query)
             if len(ultraman_matches) == 1 and ultraman_matches[0].exact:
@@ -4253,8 +4339,8 @@ async def onebot_webhook(
             await send_group_image(group_id, render_anime_character_catalog())
         except (RuntimeError, ValueError, OSError, httpx.HTTPError) as exc:
             logger.warning("anime character catalog image failed: %s", exc)
-            # Rare fallback only: if image delivery itself is unavailable, keep
-            # the old text pages so the command still works.
+            # 仅在图片确实发不出去时回退；
+            # 保留旧文字页面，让命令仍可用。
             for page in anime_character_catalog_text_pages():
                 await send_group_message(group_id, page)
     elif bot_mentioned(event) and (anime_matches := resolve_anime_character_matches(text)):
@@ -4681,7 +4767,7 @@ async def onebot_webhook(
             except (ValueError, RuntimeError, httpx.HTTPError) as exc:
                 logger.warning("web search failed: %s", exc)
                 await send_group_message(group_id, "联网搜索暂时不可用，稍后再试一下吧。")
-    elif text.startswith(("/ai ", "/AI ")) or (addressed_to_character and text):
+    elif allow_chat and (text.startswith(("/ai ", "/AI ")) or (addressed_to_character and text)):
         prompt = text.split(" ", 1)[1].strip() if text.startswith(("/ai ", "/AI ")) else text
         if invocation:
             prompt = invocation.prompt or "有人叫你出来聊聊。请用你自己的身份自然打个招呼。"
@@ -4690,8 +4776,8 @@ async def onebot_webhook(
             settings.voice_enabled
             and await request.app.state.db.voice_mode(group_id, user_id)
         )
-        # Snapshot the profile before doing any slow LLM/search work so the
-        # selected character's dialogue persona and eventual TTS voice match.
+        # 开始慢速 LLM 或搜索前先保存本次角色配置，确保
+        # 角色对话人格和最终 TTS 音色一致。
         voice_profile_id = request_voice_profile_id
         selected_voice_profile = voice_profiles(settings).get(voice_profile_id, {})
         selected_role_name = str(
@@ -4980,8 +5066,8 @@ async def onebot_webhook(
                 history_store[history_key] = voice_history
             else:
                 history_store.move_to_end(history_key)
-            # This transcript only contains this member and the bot.  It gives
-            # voice follow-ups continuity without exposing other group chatter.
+            # 这份会话记录只包含当前成员和机器人，
+            # 让语音追问能接上上下文，不会带入群内其他人的聊天。
             messages[1:1] = list(voice_history)
             messages[0]["content"] += (
                 "\n\n【语音会话上下文】以下仅是当前用户与机器人的近期对话。"
@@ -5022,9 +5108,9 @@ async def onebot_webhook(
                         if row and row not in existing:
                             group_cache.appendleft(row)
                             existing.add(row)
-        # Keep the large history cache for continuity, but do not dump thousands
-        # of raw chat lines into every model call. A bounded recent window avoids
-        # stale bot replies and unrelated catchphrases overpowering the persona.
+        # 保留较长的历史缓存供上下文使用，但每次模型调用不要塞入几千行
+        # 原始聊天内容。只取最近一段，避免旧回复和无关口头禅
+        # 压过当前角色人格。
         recent_group_context = ""
         if not voice_conversation_enabled:
             recent_group_context = group_context_from_lines(
@@ -5125,10 +5211,10 @@ async def onebot_webhook(
                 voice_history.append({"role": "assistant", "content": answer})
             if not possession_name and selected_persona_id == "murasame":
                 request.app.state.last_murasame_replies[(group_id, user_id)] = answer[-1800:]
-            # Voice mode is an alternate reply channel.  Once the record has
-            # been generated and accepted by OneBot, do not echo the same
-            # answer as text.  Text remains the reliable fallback for disabled,
-            # rate-limited, or failed TTS delivery.
+            # 语音模式是另一种回复渠道。录音已生成并被 OneBot 接收后，
+            # 不要再把同一答案以文字重复发送。以下情况仍用文字兜底：
+            # 语音关闭、触发限流
+            # 或 TTS 发送失败。
             await send_conversational_reply(
                 request,
                 group_id,

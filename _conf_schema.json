@@ -1,0 +1,8 @@
+{
+  "legacy_chat": {
+    "description": "普通消息是否继续使用现有角色聊天。",
+    "hint": "默认开启以保留所有现有人格。关闭后普通聊天交给 AstrBot，现有业务命令仍由本插件处理。",
+    "type": "bool",
+    "default": true
+  }
+}

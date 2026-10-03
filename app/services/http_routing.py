@@ -57,15 +57,14 @@ async def _proxy_port_open(proxy_url: str, timeout: float = 0.35) -> bool:
 
 
 async def resolve_web_proxy(settings: Settings) -> str | None:
-    """Resolve one outbound HTTP proxy for web search/media traffic.
+    """解析网页搜索和媒体请求要用的出站 HTTP 代理。
 
-    Priority:
-    1. WEB_PROXY_URL from .env.
-    2. Standard HTTP(S)_PROXY/ALL_PROXY environment variables.
-    3. Common Clash Verge/Clash mixed ports on host and Docker host gateway.
+    优先级：
+    1. `.env` 中的 WEB_PROXY_URL。
+    2. 标准 HTTP(S)_PROXY/ALL_PROXY 环境变量。
+    3. 主机和 Docker 网关上的常见 Clash Verge/Clash 混合端口。
 
-    An HTTP CONNECT proxy resolves remote hostnames on the proxy side, which also
-    avoids relying on the bot process having working public DNS.
+    使用 HTTP CONNECT 代理时，由代理解析远程主机名，也就不依赖机器人进程能否正常使用公共 DNS。
     """
     global _cached_proxy_key, _cached_proxy_value
 
@@ -114,12 +113,9 @@ def reset_proxy_cache_for_tests() -> None:
 
 
 async def install_outbound_proxy_environment(settings: Settings) -> str | None:
-    """Install the resolved proxy into standard HTTP(S)_PROXY variables.
+    """把解析出的代理写入标准 HTTP(S)_PROXY 环境变量。
 
-    Most httpx clients in this project keep trust_env=True, so doing this once at
-    startup routes Bing/Baidu/Wikipedia/official media and LLM HTTP traffic
-    without invasive per-client changes. Local OneBot sends explicitly use
-    trust_env=False and therefore remain direct.
+    项目中大多数 httpx 客户端保留 trust_env=True，因此启动时设置一次即可路由 Bing/百度/维基百科/官方媒体和 LLM 的 HTTP 请求，无需逐个修改客户端。本地 OneBot 请求显式使用 trust_env=False，仍直接发送。
     """
     proxy = await resolve_web_proxy(settings)
     if not proxy:

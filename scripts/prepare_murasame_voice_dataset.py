@@ -1,11 +1,6 @@
-"""Prepare a local GPT-SoVITS dataset from a user-provided voice zip.
+"""从用户提供的音色压缩包准备本地 GPT-SoVITS 数据集。
 
-The source archive is treated as local, user-authorized material. Audio and
-generated manifests are written below data/ and are intentionally ignored by
-Git.  Archive filenames are *not* transcripts: this particular archive uses
-Chinese descriptions for Japanese recordings.  A real, ordered transcript
-file is therefore required unless the operator deliberately opts into the
-unsafe filename mode for a different, correctly named archive.
+输入压缩包视为用户本地授权材料。音频和生成的清单都写到 data/ 下，且被 Git 忽略。压缩包文件名不代表转写：当前压缩包用中文描述日语录音，因此必须提供顺序正确的真实转写文件；只有其他压缩包的文件名确实是转写时，操作者才可明确启用不安全的文件名模式。
 """
 
 from __future__ import annotations
@@ -25,7 +20,7 @@ MAX_AUDIO_MEMBERS = 2_000
 
 
 def decode_member_name(name: str) -> str:
-    """Recover Chinese names from archives written with a legacy code page."""
+    """从使用旧代码页写入的压缩包中恢复中文文件名。"""
     for encoding in ("utf-8", "gbk", "big5"):
         try:
             raw = name.encode("cp437")
@@ -44,7 +39,7 @@ def transcript_from_name(name: str) -> str:
 
 
 def load_ordered_transcripts(path: Path) -> list[str]:
-    """Load one UTF-8 transcript per audio member, in archive order."""
+    """按压缩包成员顺序，为每个音频读取一份 UTF-8 转写。"""
     if not path.is_file():
         raise FileNotFoundError(path)
     transcripts = [line.strip() for line in path.read_text(encoding="utf-8-sig").splitlines()]
@@ -119,8 +114,8 @@ def prepare_dataset(
         if any("|" in value or "\n" in value or "\r" in value for value in resolved_transcripts):
             raise ValueError("transcripts cannot contain manifest delimiters or line breaks")
 
-        # Stage every file before publishing it.  A corrupt archive or a full
-        # disk must not leave a partial dataset that later looks reusable.
+        # 所有文件准备完成后再发布。压缩包损坏或磁盘写满时，
+        # 不要留下看起来还能复用的半成品数据集。
         staging_root = Path(tempfile.mkdtemp(prefix=".voice-prepare-", dir=output_root))
         staging_audio = staging_root / "audio"
         staging_audio.mkdir()

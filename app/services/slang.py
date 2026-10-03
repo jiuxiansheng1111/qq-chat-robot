@@ -20,8 +20,8 @@ def needs_slang_check(text: str) -> bool:
     compact = re.sub(r"[，,。.!！?？:：~～、]+", "", compact).strip()
     if not compact or len(compact) > 40:
         return False
-    # Short Latin acronyms are common in Chinese online slang (e.g. sb/fw/nt)
-    # and short Chinese phrases with insult-like morphemes are worth checking.
+    # 中文网络用语常见短拉丁字母缩写（如 sb/fw/nt）；
+    # 含有辱骂意味字根的短中文词组也值得检查。
     if re.fullmatch(r"[A-Za-z0-9]{2,6}", compact):
         lowered = compact.casefold()
         if compact.isupper() or not re.search(r"[aeiou]", lowered):
@@ -108,8 +108,8 @@ async def classify_unknown_slang(text: str, llm) -> SlangVerdict | None:
     if first is not None:
         return first
 
-    # If the model could not classify a short emerging term, use a tiny web
-    # lookup rather than pretending the term is unknown forever.
+    # 模型无法识别新出现的短词时，
+    # 简单查一下网页，别把它永远当成未知词。
     clean = re.sub(r"\s+", " ", str(text or "")).strip()[:80]
     try:
         results = await search_web(

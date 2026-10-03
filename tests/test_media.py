@@ -202,3 +202,18 @@ async def test_cat_gif_retries_recent_duplicate_content(monkeypatch):
     result = await random_cat_gif(SimpleNamespace(cat_cache_size=6))
     await asyncio.sleep(0)
     assert result == unique
+
+
+@pytest.mark.asyncio
+async def test_cat_gif_does_not_send_repeated_content_when_upstream_is_stuck(monkeypatch):
+    media_module._cat_gif_cache.clear()
+    media_module._cat_recent_hashes.clear()
+    duplicate = 'base64://' + base64.b64encode(b'GIF89a-stuck-cat').decode()
+    media_module._remember_cat_digest(media_module._cat_digest(duplicate))
+
+    async def fake_download(settings):
+        return duplicate
+
+    monkeypatch.setattr(media_module, '_download_cat_gif', fake_download)
+    with pytest.raises(RuntimeError, match='重复图片'):
+        await random_cat_gif(SimpleNamespace(cat_cache_size=6))

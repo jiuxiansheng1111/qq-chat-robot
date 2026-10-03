@@ -1,4 +1,4 @@
-"""Fail closed unless GPT-SoVITS has a usable paired S2 resume checkpoint."""
+"""只有 GPT-SoVITS 存在可用的成对 S2 恢复检查点时才继续。"""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ def latest(root: pathlib.Path, pattern: str) -> pathlib.Path:
     paths = list(root.glob(pattern))
     if not paths:
         raise RuntimeError(f"missing {pattern} checkpoint in {root}")
-    # Match GPT-SoVITS utils.latest_checkpoint_path(), which sorts every digit
-    # in the complete path rather than trusting file modification times.
+    # 与 GPT-SoVITS 的 utils.latest_checkpoint_path() 保持一致；
+    # 它按完整路径里的所有数字排序，不依赖文件修改时间。
     return max(paths, key=lambda path: int("".join(filter(str.isdigit, str(path)))))
 
 

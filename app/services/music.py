@@ -87,7 +87,7 @@ def normalize_music_text(value: str) -> str:
 
 
 def music_query_suffixes(query: str) -> list[str]:
-    """Return deterministic fallback title candidates from a mixed artist/title query."""
+    """从歌手/歌名混合查询中，稳定地生成备用标题候选。"""
     tokens = query.split()
     if len(tokens) < 2:
         return []
@@ -135,7 +135,7 @@ def parse_netease_tracks(payload: dict) -> list[NeteaseTrack]:
 def choose_netease_track(
     query: str, tracks: list[NeteaseTrack], expected_artist: str = "", expected_title: str = ""
 ) -> NeteaseTrack | None:
-    """Choose deterministically and reject covers unless the user requested that version."""
+    """稳定选择目标歌曲；除非用户明确点名版本，否则排除翻唱。"""
     query_norm = normalize_music_text(query)
     artist_norm = normalize_music_text(expected_artist)
     title_norm = normalize_music_text(expected_title)

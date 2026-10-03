@@ -1,15 +1,33 @@
 # QQ ChatRobot
 
-一个面向 QQ 群聊的可扩展机器人框架。项目使用 **NapCat / OneBot 11** 接入 QQ，以 **FastAPI** 处理事件，支持智谱、Groq 等 OpenAI 兼容 LLM，并内置联网搜索、音乐点歌、长期记忆、群聊风格学习、JWT 管理 API、插件系统、限流和随机图片。
+一个支持 QQ 群聊和微信接入的聊天机器人，支持 **AstrBot 插件部署**，也保留原来的 FastAPI 启动方式。通过 **NapCat / OneBot 11** 接入 QQ，包含角色聊天、语音、翻唱、联网搜索、点歌、视频、图鉴、记忆和小游戏。
 
-> 当前版本：`0.1.0`。适合个人机器人、群聊助手和二次开发。建议使用专门的机器人 QQ，并在正式使用前阅读本文的安全说明。
+> AstrBot 插件版本：`0.2.0`。账号、登录状态、密钥和本机模型放在 `.env`、`data/` 中，不提交到仓库。
+
+## AstrBot 部署
+
+在 AstrBot 插件市场的 GitHub 安装入口填本仓库地址即可安装。角色聊天、音色和网易云会员配置继续由部署者自己填写；原来已经训练的本机模型可以继续使用。
+
+Windows 本机在仓库目录运行：
+
+```powershell
+scripts\install_astrbot.ps1 -LinkProject
+scripts\run_astrbot.ps1
+```
+
+本地管理面板：`http://127.0.0.1:6185`。初始密码在本机 `data/astrbot/dashboard-login.txt`，首次登录按面板提示修改。QQ 平台初始关闭，先检查插件，再按 [QQ 切换说明](docs/ASTRBOT_QQ_SWITCH.md) 配置 NapCat 反向 WebSocket。停止旧 webhook 后再接入，避免重复回复。
+
+微信预设也初始关闭：在面板编辑“qq-chatrobot-wechat”，用手机扫码并保存，登录态留在本机。个人微信翻唱发送音频附件，QQ 翻唱发送分段语音。见 [微信接入](docs/ASTRBOT_WECHAT.md)。
+
+随机二次元图片可接 [画境拾珍插件](docs/ASTRBOT_PLUGINS.md)，原有角色抽取、图鉴和收藏数据保留。[迁移与启停说明](docs/ASTRBOT.md) 包含独立环境、原模型复用和回退步骤。
 
 ## 功能特性
 
 ### 群聊能力
 
 - `@机器人 问题` 或 `/ai 问题` 触发 AI 对话。
-- `@机器人 随机猫咪`、`/猫` 获取随机猫图。
+- `@机器人 随机猫咪`、`/猫` 获取随机 GIF 猫图，优先用 GIPHY，并避免连续重复。
+- AstrBot 安装图片插件后可说“来张随机二次元图片”；角色抽取、图鉴和收藏照常使用。
 - `@机器人 随机猪猪`、`/小猪` 获取随机真实小猪照片。
 - `@机器人 随机奶龙`、`/奶龙` 获取随机奶龙表情包。
 - `@机器人 丛雨图片`、`@机器人 丛雨表情` 从本地授权素材目录发送图片/GIF；`@机器人 生成图片 描述` 调用已配置的图片生成服务。
@@ -22,8 +40,10 @@
 - `@机器人 搜索 关键词` 使用免 Key 的 Bing RSS 联网搜索，并让 LLM 基于搜索结果总结。
 - 普通 `@机器人 问题` 遇到最新资料或模型无法可靠确认时，可自动回退到联网搜索并附来源；本地通过 `AUTO_WEB_SEARCH_ENABLED` 控制。
 - `@机器人 点歌 歌名` 使用网易云搜索并发送可点击的原唱音乐卡片；歌手名可选，支持别名和中英文输入，不会影响普通 @ 对话。
-- `@机器人 唱歌 歌名` 使用已选角色翻唱完整歌曲；也可用 `@机器人 翻唱 芳乃 歌名` 临时指定角色。按原曲顺序发送每段不超过 55 秒的语音。
+- `@机器人 唱歌 歌名` 使用已选角色翻唱完整歌曲；也可用 `@机器人 翻唱 芳乃 歌名` 临时指定角色。按原曲顺序发送，每段最多 115 秒，优先在句间停顿收尾。
 - 支持本机扫码连接部署者自己的网易云会员账号，登录状态持久保存，用于获取账号有权播放的完整翻唱音源。
+- 翻唱可选整首或约 20 秒片段，人声优先混音；整首按句间停顿逐段生成、发送，每段不到两分钟。
+- @“帮助”默认发送分组图片菜单，明确请求“文字版菜单”时再发送文字说明。
 - 成员可以明确要求机器人长期记住个人信息，并随时查看或全部删除。
 - 匿名统计群消息长度、标点和少量安全口头语，让回复逐渐贴近群聊氛围；不保存普通群聊原文。
 - 随机夺舍会从当天发言达到 15 条的群友中抽取一名“本群今日随机成员”，可反复重抽；指向夺舍可以不限次数地切换到被 @ 的群成员。
@@ -53,22 +73,19 @@
 ## 工作流程
 
 ```text
-QQ群消息
-   │
-   ▼
-NapCat / OneBot 11
-   │  HTTP Client 事件上报
-   ▼
-POST /onebot/webhook
-   │
-   ├─ 鉴权 / 去重 / 群开关 / 黑名单 / 限流
-   ├─ 内置指令与自定义插件
-   ├─ 智谱 → Groq 备用
-   └─ 网易云 / Bing RSS / CATAAS / Wikimedia Commons / nailong-memes
-   │
-   ▼
-NapCat HTTP Server → QQ群回复
+QQ → NapCat 反向 WebSocket ─┐
+微信 → AstrBot 微信适配器 ──┤
+                           ▼
+                       AstrBot 插件
+                           │
+                 去重 / 权限 / 指令 / 聊天
+                           │
+          语音 / 翻唱 / 网易云 / 图鉴 / 搜索 / 媒体
+                           │
+                 对应平台接口 → 当前会话
 ```
+
+原 FastAPI 模式仍可用：NapCat HTTP Client → `/onebot/webhook` → 原运行时。两种入口任选一种，原 SQLite 收藏与记忆数据继续复用。
 
 更完整的分层说明见 [架构设计](docs/ARCHITECTURE.md)。
 
@@ -122,7 +139,7 @@ NapCat HTTP Server → QQ群回复
 
 ## AI 翻唱
 
-管理员先在 Windows 项目目录运行 `powershell -ExecutionPolicy Bypass -File .\scripts\setup_singing.ps1`，再在 `.env` 中设置 `SINGING_ENABLED=true`。默认使用 `data/singing/runtime/.venv`、Seed-VC F0 44.1 kHz 歌声模型和 Demucs `htdemucs_ft`；路径、时长、队列与质量阈值可通过 `SINGING_*` 配置调整，详见 [AI 翻唱说明](docs/SINGING.md)。默认 `SINGING_USE_TRAINED_TTS_REFERENCE=true`，需要已有可用的 GPT-SoVITS 语音服务（`VOICE_ENABLED=true`、`VOICE_PROVIDER=gpt_sovits`），由它生成角色音色参考；仅使用角色配置里的本地参考录音时设为 `false`。
+管理员先在 Windows 项目目录运行 `powershell -ExecutionPolicy Bypass -File .\scripts\setup_singing.ps1`，再在 `.env` 中设置 `SINGING_ENABLED=true`。默认使用独立歌声环境、Seed-VC F0 44.1 kHz 模型和 Demucs `htdemucs_ft`，配置见 [AI 翻唱说明](docs/SINGING.md)。翻唱优先使用已配置的歌唱参考或角色原始录音；缺少这些录音时，才通过已有 GPT-SoVITS 语音服务生成短参考句。
 
 群里实际发给机器人的例子（歌曲后可用 `/` 明确分隔歌名和原唱歌手）：
 
@@ -130,11 +147,13 @@ NapCat HTTP Server → QQ群回复
 @机器人 唱歌 朋友的酒DJ版 / 泽亦轩
 @机器人 翻唱 芳乃 春泥棒 / ヨルシカ
 @机器人 翻唱 芳乃 Shape of You / Ed Sheeran
+@机器人 翻唱片段 茉子 朋友的酒DJ版 / 泽亦轩
+@机器人 翻唱完整 茉子 朋友的酒DJ版 / 泽亦轩
 @机器人 唱歌状态
 @机器人 取消唱歌
 ```
 
-流程简图：`QQ 指令 → 网易云账号/公开完整音源或本地歌曲 → Demucs 分离 → Seed-VC 转换角色音色 → 音准/音色检查 → 与伴奏混合 → 每段 ≤55 秒的 QQ 语音`。有歌词时辅助分段，没有歌词时按停顿分段；只有试听时会停止。中文、日文、英文走同一条路径，具体可用性取决于对应歌曲来源和角色参考录音。
+流程简图：`QQ 指令 → 完整音源 → 按需选约20秒片段 → Demucs 分离 → 找句间停顿 → 逐段转换、检查、人声优先混音 → 当前段发送后再生成下一段`。单段上限 115 秒，找不到停顿时不强行切句；只有平台试听时仍停止。中文、日文、英文走同一条路径，具体可用性取决于歌曲来源和角色参考录音。
 
 日文和英文歌曲示例展示输入格式，不保证平台当前有免费完整音源；只有试听片段时不会生成整首翻唱。
 
@@ -297,7 +316,7 @@ http://127.0.0.1:8000/docs
 
 ### 随机猫图
 
-使用 `/猫` 或 `@机器人 随机猫咪`。机器人通过 [CATAAS](https://cataas.com/) 的 `/cat/gif` 端点获取动态猫图，下载后会校验 GIF 文件头再发送，不需要 API Key。后台任务会持续维持 2 张 GIF 缓存；遇到上游临时 500 会短暂重试，缓存不足时每 3 秒继续补充，不再因一次失败永久停止预热。上游请求使用 12 秒短超时，GIF 上传到 QQ 仍可能根据文件大小耗时数秒。
+使用 `/猫`、`@机器人 随机猫咪`，或 `@机器人 发个猫咪动图`。优先从 [GIPHY 猫图页面](https://giphy.com/gifs/art-cat-HMDsITZh2SBGM) 和相关猫 GIF 中选择，校验格式、大小和动画帧后，把原 GIF 地址交给 QQ；不会把 WebP、视频或静态预览当动图。无需 API Key，可用 `CAT_GIPHY_ENABLED` 和 `CAT_GIPHY_PAGE_URL` 配置。GIPHY 不可用时使用 [CATAAS](https://cataas.com/) 的 `/cat/gif` 备用源，后台只预热 CATAAS 缓存。发送过的猫 GIF 会尽量避开重复。
 
 ### 随机真实小猪照片
 

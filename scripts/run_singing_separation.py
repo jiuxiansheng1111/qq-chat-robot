@@ -1,4 +1,4 @@
-"""Separate one original song; keep FFmpeg discovery local to this subprocess."""
+"""分离一首原曲；只在此子进程中查找 FFmpeg。"""
 
 import argparse
 import os

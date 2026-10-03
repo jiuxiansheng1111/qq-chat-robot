@@ -1,10 +1,6 @@
-"""Resolve songs, optional timed lyrics, and explicitly available audio for AI singing.
+"""查找歌曲、可选的定时歌词，以及明确可用的翻唱音源。
 
-Local originals belong in ``data/singing/songs.json`` as
-``{"12345": "songs/example.mp3"}`` (or ``{"12345": {"path": "..."}}``).
-All manifest paths are confined to ``data/singing``. Remote audio is accepted
-only when NetEase's account or anonymous player API returns a complete NetEase
-CDN source.
+本地歌曲清单放在 ``data/singing/songs.json``，格式为 ``{"12345": "songs/example.mp3"}`` 或 ``{"12345": {"path": "..."}}``。所有清单路径都限制在 ``data/singing`` 内。只有网易云账号或匿名播放器 API 返回完整的网易云 CDN 音源时，才接受远程音频。
 """
 
 import json
@@ -45,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 class SingingSourceError(RuntimeError):
-    """A full, usable singing source could not be resolved."""
+    """无法找到完整且可用的翻唱音源。"""
 
 
 @dataclass(frozen=True)
@@ -65,7 +61,7 @@ class SingingSong:
 
 
 def parse_lrc(value: str) -> tuple[LyricLine, ...]:
-    """Parse ordinary LRC, including repeated timestamps and millisecond offset."""
+    """解析普通 LRC，支持重复时间戳和毫秒级偏移。"""
     if len(value.encode("utf-8")) > _MAX_LYRICS_BYTES:
         raise SingingSourceError("歌词文件过大")
     offset_tag = _OFFSET_TAG.search(value)
@@ -166,8 +162,8 @@ def _cdn_url(value: object, *, upgrade_http: bool = False) -> str:
         or parsed.fragment
     ):
         return ""
-    # The anonymous player API currently emits HTTP CDN links. Rewrite only
-    # a validated official host; every actual download still uses HTTPS.
+    # 匿名播放器 API 当前会返回 HTTP CDN 链接。只改写
+    # 已核实的官方主机名；实际下载仍必须使用 HTTPS。
     return parsed._replace(scheme="https").geturl() if parsed.scheme == "http" else url
 
 
@@ -310,7 +306,7 @@ def _validated_source_payload(
     *,
     member: bool = False,
 ) -> tuple[str, int]:
-    """Validate a complete official NetEase player response for the selected track."""
+    """校验所选歌曲完整的网易云官方播放器响应。"""
     if member:
         if not isinstance(payload, dict) or payload.get("provider") != "netease_account":
             raise SingingSourceError("本机会员桥未返回网易云账号音源")
@@ -357,7 +353,7 @@ def _validated_source_payload(
 
 
 async def resolve_singing_song(query: str, settings: Settings) -> SingingSong:
-    """Find a song, optional lyrics, and a local or official full audio source."""
+    """查找歌曲、可选歌词以及本地或官方完整音源。"""
     query = " ".join(query.split()).strip()[:120]
     if not query:
         raise SingingSourceError("请提供歌名，建议同时提供歌手名")
@@ -369,8 +365,8 @@ async def resolve_singing_song(query: str, settings: Settings) -> SingingSong:
             if source_path is None:
                 track = await _detail_track(client, track)
             if local_lyrics is not None:
-                # Explicit local lyric mappings are configuration: bad paths,
-                # oversized files, and unreadable files must remain actionable errors.
+                # 明确配置的本地歌词映射属于配置错误：路径错误、
+                # 文件过大或不可读取都要返回清楚的错误。
                 lyrics_text = await _lyrics(client, track.song_id, local_lyrics)
                 lyric_lines = parse_lrc(lyrics_text)
             else:
@@ -378,8 +374,8 @@ async def resolve_singing_song(query: str, settings: Settings) -> SingingSong:
                     lyrics_text = await _lyrics(client, track.song_id, None)
                     lyric_lines = parse_lrc(lyrics_text)
                 except (httpx.HTTPError, ValueError, SingingSourceError) as exc:
-                    # Audio conversion needs a complete source, not lyrics. Keep
-                    # the failure visible in logs but continue with pause-based splitting.
+                    # 音频转换需要完整音源，不需要歌词。
+                    # 转换失败要写入日志，但继续尝试按停顿切分。
                     logger.info(
                         "Timed lyrics unavailable for NetEase song "
                         "id=%s (%s); continuing with audio source check",
@@ -406,7 +402,7 @@ async def resolve_singing_song(query: str, settings: Settings) -> SingingSong:
 
 
 async def download_singing_source(song: SingingSong, job_dir: Path, settings: Settings) -> Path:
-    """Stream a validated CDN file into a job directory under data/singing."""
+    """将已核实的 CDN 文件流式写入 data/singing 下的任务目录。"""
     if song.source_path is not None:
         source = _confined_path(song.source_path)
         if not source.is_file():

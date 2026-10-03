@@ -144,8 +144,8 @@ def bilibili_relevance_score(query: str, video: BilibiliVideo) -> float:
         title_overlap = len(query_bigrams & _bigrams(title)) / len(query_bigrams)
         score += title_overlap * 70
 
-    # A result that only mentions the query outside the title should stay behind
-    # genuinely matching titles no matter how many views it has.
+    # 如果结果只在标题以外提到查询词，无论播放量多高，
+    # 都应排在真正匹配标题的结果之后。
     if title_hits == 0 and query_compact not in title:
         score *= 0.55
     return score
@@ -182,9 +182,9 @@ def choose_bilibili_video(
         tier = _relevance_tier(query, video)
         if relevance < 18 or tier == 0:
             continue
-        # Semantic tier comes first. Once two titles are both strong matches,
-        # playback becomes the main tie-breaker; the fine-grained score and date
-        # only decide between similarly popular candidates.
+        # 先按语义匹配等级排序。两个标题都很匹配时，
+        # 播放量是主要的次级排序依据；更细的分数和日期
+        # 只用于区分人气相近的结果。
         scored.append((tier, video.play, relevance, video.pubdate, video))
 
     if not scored:

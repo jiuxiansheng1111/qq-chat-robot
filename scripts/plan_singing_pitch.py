@@ -1,4 +1,4 @@
-"""Plan a song-wide octave shift using Seed-VC's cached RMVPE model."""
+"""使用 Seed-VC 缓存的 RMVPE 模型，为整首歌曲规划八度偏移。"""
 
 import argparse
 import gc
@@ -45,7 +45,7 @@ def _plan(args: argparse.Namespace) -> dict:
     if not source.is_file():
         raise ValueError("--source must be an audio file")
 
-    # Keep this repository's app package ahead of Seed-VC's app.py.
+    # 确保本仓库的 app 包排在 Seed-VC 的 app.py 前面。
     seed_root_string = str(seed_root)
     add_seed_path = seed_root_string not in sys.path
     if add_seed_path:
@@ -55,7 +55,7 @@ def _plan(args: argparse.Namespace) -> dict:
     device = "cpu"
     rmvpe = None
     try:
-        os.chdir(seed_root)  # Seed-VC caches official checkpoints under ./checkpoints.
+        os.chdir(seed_root)  # Seed-VC 会把官方检查点缓存到 ./checkpoints。
         import librosa
         import numpy as np
         import torch
@@ -87,7 +87,7 @@ def _plan(args: argparse.Namespace) -> dict:
 
 
 def _safe_error(exc: Exception) -> dict[str, str | bool]:
-    """Return a machine-readable, path/token-free failure report."""
+    """返回机器可读且不包含路径/token 的失败报告。"""
     report: dict[str, str | bool] = {
         "accepted": False,
         "error_type": type(exc).__name__,

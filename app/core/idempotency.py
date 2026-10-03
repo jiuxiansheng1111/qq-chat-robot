@@ -34,6 +34,11 @@ class RedisEventDeduplicator:
         self.client = Redis.from_url(self.redis_url, decode_responses=True)
         await self.client.ping()
 
+    async def aclose(self) -> None:
+        client, self.client = self.client, None
+        if client is not None:
+            await client.aclose()
+
     async def first_seen(self, event_id: str) -> bool:
         if not event_id:
             return True

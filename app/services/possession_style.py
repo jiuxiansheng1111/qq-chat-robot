@@ -8,7 +8,7 @@ from app.config import Settings
 from app.db.database import Database
 from app.llm.manager import LLMManager
 from app.llm.providers import LLMError
-from app.services.onebot_routing import onebot_route
+from app.services.onebot_routing import onebot_client, onebot_route
 
 logger = logging.getLogger("qqchat.possession_style")
 
@@ -32,7 +32,7 @@ STYLE_CATCHPHRASES = (
 
 
 def history_message_text(message: object) -> str:
-    """Extract plain text only; images, mentions and other rich segments are ignored."""
+    """只提取纯文字；图片、@ 和其他富消息段都会忽略。"""
     if isinstance(message, str):
         value = re.sub(r"\[CQ:[^\]]+\]", "", message)
         return re.sub(r"\s+", " ", value).strip()
@@ -95,7 +95,7 @@ def group_history_context(
     char_limit: int = 7000,
     exclude_user_ids: set[str] | None = None,
 ) -> str:
-    """Build a compact, speaker-labelled transcript from recent group history."""
+    """把近期群聊历史整理为简短、带说话者标记的对话。"""
     data = payload.get("data")
     messages = data.get("messages", []) if isinstance(data, dict) else []
     rows: list[str] = []
@@ -136,10 +136,10 @@ async def fetch_group_context(
         settings,
         group_id,
         "",
-        # NapCat resolves quoted messages while walking history; asking for the
-        # full 3000-message cache on every cold start is both slow and noisy.
-        # Bootstrap only a recent slice, then let the in-process cache grow up
-        # to group_context_history_count from live traffic.
+        # NapCat 遍历历史消息时会解析被引用的消息。每次冷启动都拉取
+        # 3000 条完整缓存会很慢，也会产生很多无用请求。
+        # 先读取最近的一段，再让进程内缓存根据实时消息逐渐
+        # 增长到 group_context_history_count。
         count=min(settings.group_context_history_count, 300),
     )
     route = onebot_route(settings)
@@ -153,7 +153,7 @@ async def fetch_group_context(
 
 
 def style_reference_examples(samples: list[str], limit: int = 5) -> list[str]:
-    """Choose a few low-risk phrases that show rhythm without carrying facts."""
+    """挑选少量低风险短语，只保留说话节奏，不带入具体事实。"""
     selected: list[str] = []
     seen: set[str] = set()
     for sample in samples:
@@ -175,7 +175,7 @@ def style_reference_examples(samples: list[str], limit: int = 5) -> list[str]:
 
 
 def style_catchphrases(samples: list[str], limit: int = 3) -> list[str]:
-    """Return a small, allowlisted set of expressions actually used by the member."""
+    """返回成员实际用过的少量白名单表达。"""
     found: list[str] = []
     combined = "\n".join(samples)
     for phrase in STYLE_CATCHPHRASES:
@@ -249,7 +249,7 @@ POSSESSION_RECALL_QUERY_FILLERS = (
 
 
 def possession_recall_terms(prompt: str) -> tuple[list[str], list[str]]:
-    """Extract deterministic subject and intent terms for possession-history lookup."""
+    """提取确定性的对象和意图词，用于查找凭依历史记录。"""
     value = re.sub(r"\[CQ:[^\]]+\]", " ", str(prompt or ""))
     value = re.sub(r"\s+", " ", value).strip()
     if not value:
@@ -290,7 +290,7 @@ def select_possession_recall_evidence(
     samples: list[str],
     limit: int = 12,
 ) -> list[str]:
-    """Rank a member's own messages against the current question and keep nearby context."""
+    """从成员自己的消息中找出与当前问题相关的内容，并带上邻近上下文。"""
     subjects, intents = possession_recall_terms(prompt)
     if not subjects and not intents:
         return []
@@ -367,7 +367,7 @@ def possession_recall_prompt(
     samples: list[str],
     limit: int = 12,
 ) -> str:
-    """Build a non-verbatim fallback note when semantic summarization is unavailable."""
+    """语义摘要不可用时，生成不逐字引用原文的回退说明。"""
     evidence = select_possession_recall_evidence(question, samples, limit=limit)
     if not evidence:
         return ""
@@ -402,7 +402,7 @@ async def summarize_possession_recall(
     llm: LLMManager,
     limit: int = 12,
 ) -> str:
-    """Turn matched history into semantic notes so the reply never sees raw member quotes."""
+    """把匹配到的历史整理成语义摘要，避免回复直接看到成员原话。"""
     evidence = select_possession_recall_evidence(question, samples, limit=limit)
     if not evidence:
         return ""
@@ -484,7 +484,7 @@ async def summarize_possession_recall(
 
 
 def member_media_style_marker(payload: dict, user_id: str) -> str:
-    """Describe image/sticker frequency without retaining media content."""
+    """只描述图片/贴纸的使用频率，不保留媒体内容。"""
     data = payload.get("data")
     messages = data.get("messages", []) if isinstance(data, dict) else []
     message_count = 0
@@ -513,7 +513,7 @@ def member_media_style_marker(payload: dict, user_id: str) -> str:
 
 
 def image_references_from_message(message: object) -> list[str]:
-    """Return OneBot-sendable image references, never local paths or raw bytes."""
+    """返回可由 OneBot 发送的图片引用，不返回本机路径或原始字节。"""
     if not isinstance(message, list):
         return []
     references: list[str] = []
@@ -533,7 +533,7 @@ def image_references_from_message(message: object) -> list[str]:
 
 
 def member_style_image_refs(payload: dict, user_id: str, limit: int = 5) -> list[str]:
-    """Get a small, unique pool of images that the target member actually sent."""
+    """从目标成员实际发送过的图片中取少量不重复素材。"""
     data = payload.get("data")
     messages = data.get("messages", []) if isinstance(data, dict) else []
     references: list[str] = []
@@ -573,7 +573,7 @@ async def fetch_member_style_history(
         "count": max(20, min(history_count, 3000)),
         "reverseOrder": False,
     }
-    async with httpx.AsyncClient(timeout=12, trust_env=False) as client:
+    async with onebot_client(settings, timeout=12, trust_env=False) as client:
         response = await client.post(
             f"{route.api_base.rstrip('/')}/get_group_msg_history",
             headers=headers,
@@ -598,7 +598,7 @@ async def fetch_member_style_samples(
 async def fetch_member_recall_samples(
     settings: Settings, group_id: str, user_id: str
 ) -> list[str]:
-    """Fetch a deeper pool of the target member's own recent messages for question-time recall."""
+    """在回答问题时，获取目标成员更大范围的近期消息。"""
     payload = await fetch_member_style_history(
         settings,
         group_id,
@@ -629,7 +629,7 @@ async def learn_possession_style(
     force_refresh: bool = False,
     fallback_samples: list[str] | None = None,
 ) -> list[str]:
-    """Learn asynchronously and persist only a compact style summary, never raw history."""
+    """在后台学习并持久化简短的风格摘要，不保存原始聊天记录。"""
     try:
         cached = await db.possession_style_profile(
             group_id, user_id, settings.possession_style_refresh_hours

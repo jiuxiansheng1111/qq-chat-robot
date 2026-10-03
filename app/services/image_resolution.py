@@ -1,9 +1,6 @@
-"""Shared, immutable result contract for images sent through OneBot.
+"""通过 OneBot 发送图片时使用的共享、不可变结果结构。
 
-Providers are deliberately allowed to keep their small, legacy ``str`` helpers.
-Only the public resolver boundary uses :class:`ImageResolution`, so source
-attribution is not accidentally discarded while a candidate travels through a
-cache or the OneBot send path.
+允许各来源继续使用小型旧版 ``str`` helper。只有公开解析器边界使用 :class:`ImageResolution`，避免候选图片经过缓存或 OneBot 发送流程时丢失来源信息。
 """
 
 from __future__ import annotations
@@ -14,11 +11,9 @@ from urllib.parse import urlparse
 
 @dataclass(frozen=True)
 class ImageResolution:
-    """An image plus the evidence needed to trace where it came from.
+    """图片内容，以及追溯来源所需的证据。
 
-    ``data`` is the existing OneBot-compatible ``base64://`` (or other image)
-    value. Keeping that representation at this boundary avoids a broad and
-    risky change to the established image normalization/send pipeline.
+    ``data`` 保留现有 OneBot 兼容的 ``base64://`` 或其他图片值。在这个边界沿用该格式，可避免大幅改动现有图片规范化和发送流程。
     """
 
     data: str
@@ -33,24 +28,24 @@ class ImageResolution:
 
     @property
     def pixel_area(self) -> int:
-        """Decoded pixel area used to prefer genuinely higher-resolution art."""
+        """解码后的像素面积，用于优先选择分辨率更高的图片。"""
         return max(0, int(self.width)) * max(0, int(self.height))
 
     @property
     def source(self) -> str:
-        """Compatibility spelling for existing provider/audit consumers."""
+        """兼容旧版来源方/审计脚本使用的字段名。"""
         return self.provider
 
     @property
     def page_url(self) -> str:
-        """Compatibility spelling for existing provider/audit consumers."""
+        """兼容旧版来源方/审计脚本使用的字段名。"""
         return self.source_page_url
 
     def with_cache_hit(self, cache_hit: bool = True) -> ImageResolution:
         return replace(self, cache_hit=cache_hit)
 
     def attribution_text(self) -> str:
-        """Return a compact, user-visible source line suitable for a caption."""
+        """返回适合放进图片说明的简短来源文字。"""
         provider = self.provider or "unknown"
         detail = f"（{self.label}）" if self.label else ""
         if _http_url(self.source_page_url):
@@ -58,7 +53,7 @@ class ImageResolution:
         return f"图片来源：{provider}{detail}"
 
     def cache_metadata(self) -> dict[str, object]:
-        """Serialize only provenance; image bytes remain in the image file."""
+        """只序列化来源信息；图片字节仍保存在图片文件中。"""
         payload = asdict(self)
         payload.pop("data", None)
         return payload
@@ -93,7 +88,7 @@ def coerce_image_resolution(
     label: str = "",
     evidence: str = "",
 ) -> ImageResolution | None:
-    """Adapt legacy provider results without making them part of the API."""
+    """转换旧版来源方的结果，不把旧格式扩展成公共 API。"""
     if isinstance(value, ImageResolution):
         return value
     if isinstance(value, str) and value:
@@ -121,7 +116,7 @@ def coerce_image_resolution(
 
 
 def append_image_attribution(caption: str, result: ImageResolution) -> str:
-    """Append provenance once while preserving captions from legacy callers."""
+    """只追加一次来源说明，并保留旧调用方传入的图片说明。"""
     line = result.attribution_text()
     return f"{caption.rstrip()}\n{line}" if caption.strip() else line
 

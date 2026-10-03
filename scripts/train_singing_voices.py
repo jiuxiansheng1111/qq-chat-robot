@@ -1,8 +1,6 @@
-"""Prepare per-character Seed-VC singing fine-tunes without activating them.
+"""为每个角色准备 Seed-VC 歌唱微调，仅生成候选模型，不自动启用。
 
-Only audio named by the selected profile's existing training manifest is used.
-Generated datasets, checkpoints, configs, and candidate registries live below
-the ignored ``data/singing`` directory and are never committed by this script.
+只使用所选角色现有训练清单列出的音频。生成的数据集、检查点、配置和候选清单都放在被 Git 忽略的 ``data/singing`` 下，本脚本不会提交它们。
 """
 
 from __future__ import annotations
@@ -39,7 +37,7 @@ def parse_training_manifest(
     manifest: Path,
     audio_roots: Iterable[Path],
 ) -> list[Path]:
-    """Resolve pipe-delimited GPT-SoVITS/Seed pilot manifests to audio files."""
+    """把用竖线分隔的 GPT-SoVITS/Seed 试验清单解析为音频文件。"""
     roots = [root.resolve() for root in audio_roots]
     sources: list[Path] = []
     seen: set[Path] = set()
@@ -68,7 +66,7 @@ def parse_training_manifest(
 
 
 def _read_settings() -> tuple[dict[str, dict[str, object]], dict[str, dict[str, str]]]:
-    # Import only settings fields needed for local profile/reference discovery.
+    # 只导入本地角色/参考音频发现所需的 Settings 字段。
     sys.path.insert(0, str(PROJECT_ROOT))
     from app.config import get_settings
 
@@ -81,7 +79,7 @@ def _read_settings() -> tuple[dict[str, dict[str, object]], dict[str, dict[str, 
 
 
 def _manifest_candidates(profile_id: str, weight_map: dict[str, str]) -> list[tuple[Path, list[Path]]]:
-    """Locate local manifests first, then the Japanese pilot next to its weight."""
+    """先找本地清单，再找权重旁的日语试验清单。"""
     found: list[tuple[Path, list[Path]]] = []
     for dataset in sorted(DATA_ROOT.glob(f"{profile_id}_voice_dataset*")):
         manifest = dataset / f"{profile_id}.train.list"
@@ -91,15 +89,15 @@ def _manifest_candidates(profile_id: str, weight_map: dict[str, str]) -> list[tu
     japanese_weight = weight_map.get("ja")
     if japanese_weight:
         weight = Path(japanese_weight)
-        # Pilot layout: <project>/weights/sovits/<checkpoint> and
-        # <project>/inputs/train_ja.list + <project>/exp/<name>/5-wav32k.
+        # 试验目录：<project>/weights/sovits/<checkpoint> 和
+        # <project>/inputs/train_ja.list + <project>/exp/<name>/5-wav32k。
         pilot_root = weight.parent.parent.parent
         manifest = pilot_root / "inputs" / "train_ja.list"
         exp_root = pilot_root / "exp" / pilot_root.name / "5-wav32k"
         if manifest.is_file():
             found.append((manifest, [exp_root, pilot_root / "source-audio"]))
 
-    # Keep only existing manifests and de-duplicate paths without rewriting them.
+    # 只保留实际存在的清单，去重时不改写路径。
     unique: dict[Path, list[Path]] = {}
     for manifest, roots in found:
         unique.setdefault(manifest.resolve(), roots)
@@ -114,7 +112,7 @@ def discover_training_sources(
     manifest_override: Path | None = None,
     audio_root_override: Path | None = None,
 ) -> tuple[Path, list[Path], Path]:
-    """Return manifest, resolved audio rows, and the configured reference file."""
+    """返回清单、解析后的音频行和已配置的参考音频。"""
     if profile_id not in profiles:
         raise KeyError(f"Unknown voice profile: {profile_id}")
     ref_value = profiles[profile_id].get("ref_audio_path")
@@ -142,8 +140,8 @@ def discover_training_sources(
             "Pass --manifest to select reviewed local training material; "
             "the reference clip alone is not used as training data."
         )
-    # Prefer the local profile dataset that contains the configured reference,
-    # otherwise prefer the first data-root manifest over an external pilot.
+    # 优先选择包含所配置参考音频的本地角色数据集；
+    # 否则优先使用 data-root 下的首个清单，而非外部试验数据。
     ref_parent = reference.parent.resolve()
     local_match = next(
         (
@@ -186,7 +184,7 @@ def prepare_audio_dataset(
     reference: Path,
     resume: bool = False,
 ) -> dict[str, object]:
-    """Normalize selected clips to mono 44.1-kHz PCM, splitting long items."""
+    """把选中的片段转成单声道 44.1 kHz PCM，并切分过长的音频。"""
     fingerprint = _source_fingerprint(manifest, sources)
     metadata_path = output_dir / "singing_dataset.json"
     if output_dir.exists():
@@ -287,7 +285,7 @@ def prepare_audio_dataset(
 
 
 def save_candidate_registry(registry_path: Path, profile_id: str, candidate: dict[str, object]) -> None:
-    """Add a candidate without replacing any existing or accepted profile."""
+    """添加候选模型，不覆盖任何已有或已验收的角色模型。"""
     current: dict[str, object] = {}
     if registry_path.exists():
         loaded = json.loads(registry_path.read_text(encoding="utf-8"))
@@ -316,7 +314,7 @@ def _safe_run_name(value: str) -> str:
 
 
 def build_training_environment(base: dict[str, str] | None = None) -> dict[str, str]:
-    """Pin model downloads to official HF by default for this child process."""
+    """默认将此子进程的模型下载源固定为官方 Hugging Face。"""
     env = dict(os.environ if base is None else base)
     env["HF_ENDPOINT"] = (
         env.get("SINGING_HF_ENDPOINT", "").strip() or "https://huggingface.co"
@@ -327,7 +325,7 @@ def build_training_environment(base: dict[str, str] | None = None) -> dict[str, 
 
 
 def resolve_inference_assets(seed_root: Path = SEED_ROOT) -> tuple[Path, Path]:
-    """Get the config and v2 weights that inference.py loads, from one HF revision."""
+    """从同一个 Hugging Face revision 获取 inference.py 使用的配置和 v2 权重。"""
     cache = seed_root / "checkpoints"
     repo_cache = cache / "models--Plachta--Seed-VC"
     snapshots = repo_cache / "snapshots"
@@ -378,7 +376,7 @@ def resolve_inference_assets(seed_root: Path = SEED_ROOT) -> tuple[Path, Path]:
 
 
 def build_training_config(inference_config: Path, preset: Path, log_dir: Path) -> dict:
-    """Preserve inference architecture and add only missing training metadata."""
+    """保留推理架构，只补上训练所需的元数据。"""
     import yaml
 
     base = yaml.safe_load(inference_config.read_text(encoding="utf-8"))
@@ -407,15 +405,15 @@ def build_training_config(inference_config: Path, preset: Path, log_dir: Path) -
         or model.get("length_regulator", {}).get("f0_condition") is not True
     ):
         raise ValueError("The inference model is not the 44.1 kHz F0 singing architecture")
-    # Explicit --pretrained-ckpt is mandatory. An empty value prevents train.py
-    # from silently downloading an older preset model if a run has no checkpoint.
+    # 必须显式传入 --pretrained-ckpt。值为空时，train.py 不会
+    # 在缺少检查点的情况下静默下载旧预设模型。
     config["pretrained_model"] = ""
     config["log_dir"] = str(log_dir)
     return config
 
 
 def validate_run_architecture(run_config: Path, inference_config: Path) -> dict:
-    """Reject old run configs before they can load only a few matching weights."""
+    """拒绝旧版运行配置，避免最终只加载少量匹配权重。"""
     import yaml
 
     run = yaml.safe_load(run_config.read_text(encoding="utf-8"))
@@ -438,7 +436,7 @@ def validate_run_architecture(run_config: Path, inference_config: Path) -> dict:
 
 
 def validate_checkpoint_signature(checkpoint: Path, config: dict) -> None:
-    """Check key tensor shapes before Seed-VC's permissive checkpoint loader."""
+    """在 Seed-VC 宽松加载检查点前，先核对关键张量形状。"""
     import torch
 
     state = torch.load(checkpoint, map_location="cpu", weights_only=False, mmap=True)
@@ -569,8 +567,8 @@ def main(argv: list[str] | None = None) -> int:
         run_root.mkdir(parents=True, exist_ok=False)
         run_config.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=True), encoding="utf-8")
 
-    # Seed-VC skips a periodic save at its exact stop step, but always writes
-    # ft_model.pth. Save halfway through a 100-step round for crash recovery.
+    # Seed-VC 在刚好到达停止步数时不会保存周期检查点，但始终会写出
+    # ft_model.pth。每轮 100 步时，中途另存一次以便崩溃恢复。
     save_every = 50 if args.max_steps == 100 else 100
     command = [
         str(args.python.resolve()),

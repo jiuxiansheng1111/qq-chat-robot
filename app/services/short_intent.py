@@ -43,10 +43,9 @@ def _strip_polite_prefix(text: str) -> str:
 
 
 def canonicalize_short_command(text: str, *, addressed: bool) -> str:
-    """Map natural short phrases onto existing command strings.
+    """把自然的短语映射到已有命令字符串。
 
-    Only explicitly addressed messages (bot mention) or slash commands are
-    normalized. Long conversational messages are deliberately left untouched.
+    只规范化明确 @机器人 的消息或斜杠命令。较长的对话内容保持原样。
     """
     raw = str(text or "").strip()
     if not raw:
@@ -58,7 +57,7 @@ def canonicalize_short_command(text: str, *, addressed: bool) -> str:
     if not compact or len(compact) > _SHORT_LIMIT:
         return raw
 
-    # Affection
+    # 好感度
     if "好感" in compact:
         if _contains_any(compact, ("重置", "恢复初始", "初始化")):
             return "重置好感度"
@@ -71,7 +70,7 @@ def canonicalize_short_command(text: str, *, addressed: bool) -> str:
         ):
             return "好感度"
 
-    # Memory / identity controls. Do not rewrite "记住..." because it carries data.
+    # 记忆/身份控制命令。不要改写“记住……”，因为其中包含要保存的数据。
     if "身份" in compact and "记忆" in compact:
         if _contains_any(compact, _CLEAR_WORDS):
             return "清除身份记忆"
@@ -100,7 +99,7 @@ def canonicalize_short_command(text: str, *, addressed: bool) -> str:
         if _contains_any(compact, ("清空短期", "删除短期", "清除短期")):
             return "/记忆删除"
 
-    # Possession
+    # 憑依模式
     if "夺舍" in compact or "附身" in compact:
         if _contains_any(compact, ("退出", "结束", "解除", "取消")):
             return "退出夺舍"
@@ -109,7 +108,7 @@ def canonicalize_short_command(text: str, *, addressed: bool) -> str:
         if _contains_any(compact, _RANDOM_WORDS):
             return "随机夺舍"
 
-    # Ultraman
+    # 奥特曼
     if "奥特曼" in compact:
         if _contains_any(compact, _CATALOG_WORDS):
             return "奥特曼图鉴"
@@ -118,7 +117,7 @@ def canonicalize_short_command(text: str, *, addressed: bool) -> str:
         if _contains_any(compact, _RANDOM_WORDS):
             return "今日奥特曼"
 
-    # Anime character collection
+    # 动漫角色收藏命令
     if "二次元" in compact or "二次元角色" in compact:
         if _contains_any(compact, _CATALOG_WORDS):
             return "二次元角色图鉴"
@@ -127,7 +126,7 @@ def canonicalize_short_command(text: str, *, addressed: bool) -> str:
         if _contains_any(compact, _RANDOM_WORDS):
             return "随机二次元角色"
 
-    # Help/menu
+    # 帮助/菜单
     if compact in {
         "帮助",
         "帮忙",
@@ -144,7 +143,7 @@ def canonicalize_short_command(text: str, *, addressed: bool) -> str:
     }:
         return "帮助"
 
-    # Casual image request aliases.
+    # 随口提图片的短说法。
     if "奶龙" in compact and _contains_any(compact, ("图", "图片", "来张", "来个", "随机")):
         return "随机奶龙"
     if "猫" in compact and _contains_any(compact, ("猫图", "图片", "来张", "来个", "随机")):
@@ -154,8 +153,8 @@ def canonicalize_short_command(text: str, *, addressed: bool) -> str:
     ):
         return "随机猪猪"
 
-    # Parameter-carrying commands: normalize only the action prefix and preserve
-    # the payload so existing extractors still receive the user's query.
+    # 带参数的命令：只规范化动作前缀，
+    # 保留参数内容，让现有提取器仍能读取用户查询。
     stripped = _strip_polite_prefix(raw.lstrip("/"))
     prefix_patterns = (
         (r"^(?:找个视频|找视频|搜个视频|搜视频|播放一下视频)\s*(.+)$", "播放视频"),

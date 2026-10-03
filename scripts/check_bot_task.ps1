@@ -1,9 +1,15 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param()
 
 $ErrorActionPreference = "Continue"
 $taskName = "QQChatRobot API"
 $projectRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'bot_runtime_mode.ps1')
+if ((Get-QQChatRobotRuntime -ProjectRoot $projectRoot) -eq 'astrbot') {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'run_astrbot.ps1')
+    exit $LASTEXITCODE
+}
+
 $logRoot = Join-Path $projectRoot "logs"
 $watchdogLog = Join-Path $logRoot "watchdog.log"
 
@@ -20,7 +26,7 @@ try {
     }
 }
 catch {
-    # The service is unavailable. The long-running task below owns process recovery.
+    # 服务当前不可用；下方的常驻任务负责恢复进程。
 }
 
 $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue

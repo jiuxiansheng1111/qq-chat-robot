@@ -33,7 +33,7 @@ class AnimeCharacter:
 
 @dataclass(frozen=True)
 class AnimeCharacterMatch:
-    """A direct or near match found for a user-entered character name."""
+    """找到与用户输入角色名直接或近似匹配的结果。"""
 
     character: AnimeCharacter
     matched_alias: str
@@ -144,9 +144,9 @@ ANIME_CHARACTER_BY_NAME = {item.name: item for item in ANIME_CHARACTER_ROSTER}
 ANIME_IMAGE_CACHE_VERSION = "v5-moegirl-preferred-fallback-20260928"
 
 ANIME_SERIES_ALIASES: dict[str, tuple[str, ...]] = {
-    # A slash is not preserved by ``_normalize``.  Keep the independently
-    # meaningful product/family names so a real 初音未来 page categorized as
-    # either VOCALOID or Piapro Characters is not rejected as unrelated.
+    # _normalize 不会保留斜杠，所以要分别保留这些独立且有意义的
+    # 产品名/系列名；这样真正归类为 VOCALOID 或 Piapro Characters 的
+    # 初音未来页面不会被误判为无关内容。
     "VOCALOID / Piapro Characters": ("VOCALOID", "Piapro Characters"),
     "《千恋＊万花》": ("Senren * Banka", "Senren Banka", "千恋＊万花"),
     "《魔女的夜宴》": ("Sanoba Witch", "サノバウィッチ"),
@@ -207,10 +207,10 @@ ANIME_CHARACTER_SEARCH_HINTS: dict[str, tuple[str, ...]] = {
 def anime_character_profile_text(character: AnimeCharacter) -> str:
     series = character.series.strip()
     aliases = "、".join(character.aliases[:4]) or "暂无公开别名"
-    # Keep the card useful even for entries loaded from the lightweight JSON
-    # catalog: the local record remains the source of truth, but the response
-    # now explains the character's role, setting, and search aliases instead of
-    # exposing only one short sentence.
+    # 轻量 JSON 图鉴中的条目也要保留信息。以本地记录为准，同时让回复
+    # 说明角色定位、设定和搜索别名，
+    # 不要只展示一句简短介绍。
+
     background = (
         f"{character.name}出自{series}。在作品的角色群像中，TA的行动、选择与人际关系"
         "会随着故事推进逐步展开；本条资料以当前图鉴收录的作品归属和角色设定为准，"
@@ -234,11 +234,9 @@ _ONLINE_ANIME_PROFILE_CACHE: dict[str, str] = {}
 
 
 def extract_anime_character_profile_query(text: str) -> str | None:
-    """Extract the target from an explicit character-introduction request.
+    """从明确的角色介绍请求中提取用户想查询的对象。
 
-    Keep this intentionally narrow: ordinary conversation should continue to
-    reach the persona chat, while requests such as “小丛雨介绍爱弥斯” must be
-    handled as a lookup about 爱弥斯 rather than as a question about 丛雨.
+    刻意把匹配范围限制得很窄：普通对话仍交给角色聊天；像“小丛雨介绍爱弥斯”这样的请求，应该查爱弥斯，而不是回答丛雨。
     """
     value = re.sub(r"\s+", " ", str(text or "")).strip()
     value = value.removeprefix("/")
@@ -301,7 +299,7 @@ def _moegirl_title_candidates(character: AnimeCharacter) -> tuple[str, ...]:
 
 
 def _moegirl_search_queries(character: AnimeCharacter) -> tuple[str, ...]:
-    """Search candidates for redirects/disambiguations; never use them as evidence."""
+    """搜索重定向或消歧候选；它们不能用作身份依据。"""
     series = character.series.strip("《》 ")
     return tuple(
         dict.fromkeys(
@@ -321,13 +319,13 @@ def _moegirl_page_evidence(page: dict) -> str:
         for item in raw_categories
         if isinstance(item, dict)
     )
-    # Search terms are never evidence: they contain the work name even when
-    # the returned page is unrelated to that work.
+    # 搜索词不能作为证据：即使返回的页面与作品无关，搜索词里也会有
+    # 作品名。
     return " ".join((str(page.get("title") or ""), str(page.get("extract") or ""), categories))
 
 
 def _is_moegirl_disambiguation(page: dict) -> bool:
-    """Return whether MediaWiki marks this result as a disambiguation page."""
+    """返回 MediaWiki 是否把此结果标记为消歧义页面。"""
     pageprops = page.get("pageprops")
     return isinstance(pageprops, dict) and "disambiguation" in pageprops
 
@@ -349,12 +347,9 @@ def _verified_moegirl_image(result: ImageResolution) -> bool:
 
 
 def _anime_moegirl_image_strict(settings: Settings) -> bool:
-    """Whether the image resolver must fail closed outside Moegirl.
+    """判断图片解析是否必须拒绝萌娘百科以外的来源。
 
-    ``ANIME_MOEGIRL_ONLY`` remains backwards-compatible for deployments that
-    need a strict source boundary.  The explicit preferred-with-fallback mode
-    only relaxes image retrieval after a verified Moegirl image cannot be
-    downloaded; profile source handling remains strict elsewhere.
+    ``ANIME_MOEGIRL_ONLY`` 继续兼容需要严格限定来源的部署。显式的“优先并可回退”模式，只会在已核实的萌娘百科图片无法下载后放宽图片来源；其他角色资料来源仍保持严格。
     """
     return bool(
         settings.anime_moegirl_only
@@ -366,7 +361,7 @@ async def _moegirl_character_profile(
     character: AnimeCharacter,
     settings: Settings,
 ) -> tuple[str, str] | None:
-    """Fetch a short, attributable Moegirl extract for profile enrichment."""
+    """获取简短且带来源的萌娘百科介绍，用于补充角色资料。"""
     if not settings.moegirl_image_provider_enabled:
         return None
     timeout = max(3.0, min(float(settings.media_timeout_seconds), 10.0))
@@ -398,8 +393,8 @@ async def _moegirl_character_profile(
                         continue
                     title = str(page.get("title") or "")
                     extract = re.sub(r"\s+", " ", str(page.get("extract") or "")).strip()
-                    # The search query intentionally is not part of evidence:
-                    # only the returned page can establish work membership.
+                    # 搜索查询本身不能作为证据：
+                    # 只有返回的页面能证明角色属于该作品。
                     evidence = _normalize(_moegirl_page_evidence(page))
                     if not _candidate_name_matches(character, tuple(character.aliases), [title]):
                         continue
@@ -462,10 +457,9 @@ async def resolve_anime_character_profile(
     settings: Settings,
     llm=None,
 ) -> str:
-    """Build a factual, readable profile from Moegirl/search evidence and LLM editing.
+    """根据萌娘百科/搜索证据和 LLM 编辑，整理事实清楚、易读的角色资料。
 
-    The model is only asked to rewrite supplied evidence; it is not allowed to
-    invent a biography or pretend that an unavailable source was consulted.
+    模型只会改写提供的证据，不能编造人物传记，也不能假装查过无法访问的来源。
     """
     cache_key = (
         character.name,
@@ -573,10 +567,9 @@ async def search_anime_character_profile(
     name: str,
     llm=None,
 ) -> str | None:
-    """Search for an unlisted character without borrowing the bot persona's lore.
+    """搜索未收录角色，不借用机器人的人格设定。
 
-    Search snippets are treated as untrusted evidence, the requested name must
-    appear in the result itself, and all sources are returned for attribution.
+    搜索摘要只作未核实线索；结果本身必须包含请求的角色名，并返回全部来源用于注明出处。
     """
     target = re.sub(r"\s+", " ", str(name or "")).strip()[:60]
     normalized_target = _normalize(target)
@@ -714,7 +707,7 @@ def _load_catalog_font(size: int):
 
 
 def render_anime_character_catalog() -> str:
-    """Render the full character roster as one JPEG to avoid flooding QQ."""
+    """把完整角色列表绘制成一张 JPEG，避免在 QQ 中刷屏。"""
     columns = 4
     rows = math.ceil(len(ANIME_CHARACTER_ROSTER) / columns)
     width = 2200
@@ -814,12 +807,9 @@ def resolve_anime_character_matches(
     *,
     limit: int = 4,
 ) -> tuple[AnimeCharacterMatch, ...]:
-    """Return exact, ambiguous, or conservative near-name matches.
+    """返回精确匹配、有歧义的匹配，或保守的近似名称匹配。
 
-    Exact aliases are returned immediately, including all characters sharing an
-    alias (for example ``结衣``). Near matches are deliberately only offered for
-    an addressed query; the caller asks for confirmation before fetching an
-    image, so a typo can never silently select the wrong character.
+    精确别名会立即返回，包括共用同一别名的所有角色（例如 ``结衣``）。只对明确 @机器人的查询提供近似匹配；调用方会先请求确认再查图片，因此不会因拼写错误而静默选错角色。
     """
     key = _anime_character_query_key(text)
     if not key:
@@ -991,7 +981,7 @@ def _candidate_score(
     if any(term in normalized for term in _series_terms(character)):
         score += 5
 
-    # A character match is mandatory. Series-only results are not enough.
+    # 必须先匹配到角色；只匹配到作品系列还不够。
     has_name = any(term in normalized for term in _name_terms(character, aliases))
     return score if has_name else 0
 
@@ -1046,7 +1036,7 @@ async def _vndb_image(
     aliases: tuple[str, ...],
     settings: Settings,
 ) -> ImageResolution | None:
-    """Resolve visual-novel character art through VNDB's structured API."""
+    """通过 VNDB 的结构化 API 查找视觉小说角色图片。"""
     queries = tuple(
         dict.fromkeys(
             value
@@ -1173,7 +1163,7 @@ async def _bangumi_image(
     aliases: tuple[str, ...],
     settings: Settings,
 ) -> ImageResolution | None:
-    """Resolve character art through Bangumi's public character search API."""
+    """通过 Bangumi 公开角色搜索 API 查找角色图片。"""
     queries = tuple(
         dict.fromkeys(
             value
@@ -1265,9 +1255,9 @@ async def _bangumi_image(
                 except (httpx.HTTPError, ValueError):
                     subjects = []
                 if not isinstance(subjects, list) or not subjects:
-                    # A Bangumi character name alone is not enough to
-                    # disambiguate homonyms. Require a linked work before
-                    # accepting its portrait as this catalog character.
+                    # 只凭 Bangumi 角色名无法区分同名角色。必须先确认关联作品，
+                    # 再判断作品归属，
+                    # 才能把该头像用于图鉴中的这个角色。
                     continue
                 subject_values: list[str] = []
                 for subject in subjects:
@@ -1294,10 +1284,10 @@ async def _bangumi_image(
                     )
                 image_candidates.append(str(item.get("img") or ""))
                 if character_id:
-                    # Bangumi OpenAPI exposes a dedicated character-image
-                    # endpoint. It redirects to the actual CDN image and is a
-                    # useful fallback when search payload image fields are empty
-                    # or stale.
+                    # Bangumi OpenAPI 提供专门的角色图片接口。
+                    # 接口会跳转到实际图片 CDN；当搜索结果里的图片字段为空
+                    # 或过期时，
+                    # 可用作回退。
                     image_candidates.append(
                         f"https://api.bgm.tv/v0/characters/{character_id}/image?type=large"
                     )
@@ -1348,7 +1338,7 @@ async def _anilist_image(
     aliases: tuple[str, ...],
     settings: Settings,
 ) -> ImageResolution | None:
-    """Resolve anime/manga character art through AniList GraphQL."""
+    """通过 AniList GraphQL 查找动漫/漫画角色图片。"""
     queries = tuple(
         dict.fromkeys(
             value
@@ -1449,8 +1439,8 @@ async def _anilist_image(
             if not normalized_media or not any(
                 term in normalized_media for term in series_terms
             ):
-                # Require a positive character-to-work link; a name-only
-                # result is not enough to rule out homonyms.
+                # 必须有明确的“角色属于作品”关系；只有名字
+                # 还不足以排除同名角色。
                 continue
 
             image = item.get("image") or {}
@@ -1641,13 +1631,12 @@ async def _moegirl_legacy_image(
     aliases: tuple[str, ...],
     settings: Settings,
 ) -> str | None:
-    """Resolve character art from Moegirlpedia, then from the work page.
+    """先从萌娘百科角色页查图，再查看作品页。
 
-    Resolution order:
-    1. exact character/alias page;
-    2. Moegirlpedia internal search for the character + work;
-    3. the work page itself, selecting an image whose metadata names the
-       requested character.
+    查找顺序：
+    1. 精确角色名或别名页面；
+    2. 萌娘百科内部搜索“角色名 + 作品名”；
+    3. 作品页面中元数据明确写出该角色名的图片。
     """
     timeout = max(4.0, min(float(settings.media_timeout_seconds), 12.0))
     headers = {
@@ -1685,7 +1674,7 @@ async def _moegirl_legacy_image(
         for domain in domains:
             discovered: list[str] = []
 
-            # Exact character/alias pages first.
+            # 先查精确角色名或别名页面。
             for title in titles:
                 try:
                     response = await client.get(
@@ -1744,8 +1733,8 @@ async def _moegirl_legacy_image(
                         ):
                             continue
 
-            # If the title is not exact, use Moegirlpedia's own search rather
-            # than treating a failed direct title as "missing".
+            # 标题不完全匹配时，使用萌娘百科自己的搜索，
+            # 不要直接把标题查询失败当成“没有条目”。
             search_queries = []
             for title in titles[:6]:
                 search_queries.append(f"{title} {series_titles[0]}" if series_titles else title)
@@ -1812,8 +1801,8 @@ async def _moegirl_legacy_image(
                         ):
                             continue
 
-            # No usable character lead image: open the work page and select an
-            # <img> whose alt/title/url names the requested character.
+            # 找不到可用的角色主图时，打开作品页面，选取
+            # alt、title 或 URL 中明确写出角色名的 <img>。
             work_pages = list(series_titles)
             for series_title in series_titles[:4]:
                 try:
@@ -1994,11 +1983,9 @@ async def _bing_image_relaxed(
     aliases: tuple[str, ...],
     settings: Settings,
 ) -> str | None:
-    """Last-resort exact-query image search.
+    """最后回退到精确查询的图片搜索。
 
-    The exact character + series query is strong evidence by itself. We still
-    require either the character identity or the series to appear in Bing tile
-    metadata, but do not require both.
+    “角色名 + 系列名”本身是强证据。仍要求 Bing 图片信息中至少出现角色身份或系列名之一，但不强求两者同时出现。
     """
     timeout = max(5.0, min(float(settings.media_timeout_seconds), 15.0))
     headers = {
@@ -2254,10 +2241,9 @@ async def _search_engine_first_image(
     aliases: tuple[str, ...],
     settings: Settings,
 ) -> str | None:
-    """Return the first downloadable exact-query image without source filtering.
+    """返回第一张可下载的精确查询图片，不按来源过滤。
 
-    This is deliberately permissive: if strict matching fails, a Tencent Video,
-    iQIYI, Bilibili, article, wiki, or other search-result source is acceptable.
+    这是宽松回退：严格匹配失败时，可以接受腾讯视频、爱奇艺、哔哩哔哩、文章、百科或其他搜索结果来源。
     """
     queries = [
         f"{character.name} {character.series}",
@@ -2391,12 +2377,9 @@ async def _moegirl_image(
     aliases: tuple[str, ...],
     settings: Settings,
 ) -> ImageResolution | None:
-    """Resolve a strictly identified character image from Moegirl's API.
+    """通过萌娘百科 API 查找身份明确的角色图片。
 
-    Moegirl's terms require permission for automated/off-site image use, so the
-    provider is opt-in.  Do not use ``imageinfo`` here: that action is not
-    enabled by the public API.  ``pageimages`` supplies the original/thumbnail
-    URLs allowed by this query shape instead.
+    萌娘百科条款要求自动或站外使用图片前取得许可，因此该来源默认关闭。此处不要调用 ``imageinfo``：公开 API 没有启用该操作。当前查询格式允许使用 ``pageimages`` 返回的原图或缩略图 URL。
     """
     if not settings.moegirl_image_provider_enabled:
         return None
@@ -2418,8 +2401,8 @@ async def _moegirl_image(
                 title = str(page.get("title") or "")
                 evidence_text = _moegirl_page_evidence(page)
                 normalized_evidence = _normalize(evidence_text)
-                # The requested work name is not evidence; only content from
-                # the returned page can establish the character's series.
+                # 用户请求的作品名不是证据；只有
+                # 返回页面的内容能确认角色所属系列。
                 if not _candidate_name_matches(character, aliases, [title]):
                     continue
                 if series_terms and not any(term in normalized_evidence for term in series_terms):
@@ -2480,9 +2463,9 @@ async def _moegirl_image(
             "format": "json",
             "formatversion": "2",
         }
-        # Exact titles/aliases are both faster and more precise than a broad
-        # search for the common case. Search remains a fallback for redirects
-        # or disambiguated titles.
+        # 常见情况优先查精确标题或别名，速度更快也更准确。
+        # 如果标题跳转或有歧义，
+        # 再回退到搜索。
         try:
             response = await client.get(
                 "https://zh.moegirl.org.cn/api.php",
@@ -2517,8 +2500,8 @@ async def _moegirl_image(
             search_result = await matching_image(pages)
             if search_result is not None:
                 return search_result
-    # Keep the remote branch's direct/work-page strategy as a last resort, but
-    # adapt its legacy string payload to the shared provenance contract.
+    # 保留远程分支的“直接查作品页”策略作为最后回退，但
+    # 把旧字符串结果转换为统一的来源信息格式。
     legacy_data = None
     if not saw_pages and not settings.anime_moegirl_only:
         legacy_data = await _moegirl_legacy_image(character, aliases, settings)
@@ -2558,7 +2541,7 @@ def _anime_image_cache_metadata_path(path: Path) -> Path:
 def _preferred_image_cache_is_fresh(
     character: AnimeCharacter, settings: Settings, cached: ImageResolution
 ) -> bool:
-    """Refresh preferred-source images periodically, including low-res Moegirl art."""
+    """定期刷新首选来源的图片，包括低分辨率的萌娘百科图片。"""
     if not (settings.anime_moegirl_only and settings.anime_moegirl_preferred_with_fallback):
         return True
     try:
@@ -2660,10 +2643,10 @@ def _with_anime_source_attribution(
                 width, height = decoded.size
         except (ValueError, OSError):
             width, height = 0, 0
-    # A fallback resolver must never retain a stale/incorrect Moegirl label.
-    # This can happen with legacy adapters returning ImageResolution rather
-    # than their usual base64 payload.  Preserve the actual URL/evidence, but
-    # identify it as the resolver that supplied the image.
+    # 回退解析器不能保留过期或错误的萌娘百科标签。
+    # 旧适配器有时会返回 ImageResolution，
+    # 而不是平常的 base64 数据。保留实际 URL 和证据，
+    # 但来源要标成真正提供图片的解析器。
     source_is_moegirl = source_name == "萌娘百科角色/作品页"
     provider = result.provider
     if not source_is_moegirl and provider == "萌娘百科":
@@ -2675,10 +2658,10 @@ def _with_anime_source_attribution(
         and provider == result.provider
     ):
         return result
-    # A number of legacy providers intentionally return only the normalized
-    # image payload (their public helpers are also used by older callers). Do
-    # not let that erase provenance at the resolver boundary: keep a stable,
-    # clickable provider search page in the cache sidecar and QQ caption.
+    # 有些旧来源只返回规范化后的图片数据（其公开 helper 还会被旧调用方使用）。
+    # 不要让它丢失来源信息；
+    # 在缓存 sidecar 和 QQ 图片说明中保留稳定、
+    # 可点击的来源搜索页。
     query = quote(f"{character.name} {character.series}".strip())
     source_pages = {
         "VNDB": f"https://vndb.org/c?q={query}",
@@ -2730,9 +2713,9 @@ async def _delayed_anime_first_image(
     aliases: tuple[str, ...],
     settings: Settings,
 ) -> ImageResolution:
-    # Give structured/official sources enough time before accepting a generic
-    # search-engine image. This reduces wrong-character hits without losing the
-    # final fallback.
+    # 使用通用搜索引擎图片前，先给结构化/官方来源足够的时间。
+    # 这样能减少角色匹配错误，
+    # 同时保留最后的回退选项。
     await asyncio.sleep(1.5)
     image = await _search_engine_first_image(character, aliases, settings)
     result = coerce_image_resolution(
@@ -2750,7 +2733,7 @@ async def _delayed_anime_first_image(
 
 
 def _anime_image_quality_key(result: ImageResolution) -> tuple[int, int, int]:
-    """Rank candidates by decoded resolution, then by source reliability."""
+    """先按解码后的分辨率排序，再按来源可靠性排序。"""
     provider_rank = {
         "萌娘百科": 8,
         "VNDB": 7,
@@ -2805,9 +2788,9 @@ async def _run_anime_source_group(
     pending = set(tasks)
     candidates: list[ImageResolution] = []
     deadline = asyncio.get_running_loop().time() + group_timeout
-    # Once the first valid image arrives, give nearby providers a short grace
-    # period so a larger candidate can win without making the bot wait for a
-    # permanently hung source.
+    # 第一个有效图片到达后，给其他来源短暂的等待时间，
+    # 让更大的候选图有机会胜出，也不会一直等
+    # 卡住的来源。
     grace_deadline: float | None = None
     try:
         while pending:
@@ -2853,12 +2836,9 @@ async def resolve_anime_character_image(
     settings: Settings,
     llm=None,
 ) -> ImageResolution:
-    """Resolve every catalog character with structured sources and fallbacks.
+    """使用结构化来源和回退方式查找图鉴中每个角色的图片。
 
-    Structured APIs remain on the fast path. A language model never supplies
-    image URLs or identity evidence. The selected winner is the only source
-    permitted to write cache, and unfinished contenders are cancelled before
-    returning.
+    结构化 API 优先。语言模型不会提供图片 URL 或身份依据。只有最终选中的来源可以写缓存；返回前会取消其他未完成请求。
     """
 
     strict_moegirl = _anime_moegirl_image_strict(settings)
@@ -2889,19 +2869,19 @@ async def resolve_anime_character_image(
         return moegirl
 
     aliases = tuple(character.aliases)
-    # Do not hammer every remote provider at the same time. Some of the
-    # structured APIs throttle concurrent requests, which made a valid
-    # Murasame/Bangumi result arrive just after the old 10-second deadline.
-    # Groups keep the fast structured sources first, then widen to web/search
-    # fallbacks while still cancelling unfinished work after each stage.
+    # 不要同时猛发请求给所有远程来源。有些
+    # 结构化 API 会限制并发，导致有效的
+    # 丛雨/Bangumi 结果比旧的 10 秒时限晚一点返回。
+    # 先查快速的结构化来源，再扩大到网页/搜索
+    # 回退，并在每一阶段结束时取消未完成任务。
     preferred_mode = bool(
         settings.anime_moegirl_only
         and settings.anime_moegirl_preferred_with_fallback
     )
     if preferred_mode:
-        # Compare verified structured sources before choosing. Moegirl wins
-        # resolution ties, while a larger exact Bangumi/VNDB/AniList image can
-        # replace an older or thumbnail-sized Moegirl result.
+        # 选择图片前先比较已核实的结构化来源。分辨率相同时优先萌娘百科；
+        # 更大的精确匹配 Bangumi/VNDB/AniList 图片可以
+        # 替换较旧或只有缩略图的萌娘百科图片。
         source_groups = (
             (
                 (
@@ -2989,8 +2969,8 @@ async def resolve_anime_character_image(
             break
 
     if winner is not None:
-        # Only the chosen result reaches durable cache.  In particular, a
-        # delayed candidate cannot overwrite a source already sent to QQ.
+        # 只有最终选中的图片会写入持久缓存。特别要避免延迟到达的候选图
+        # 覆盖已经发给 QQ 的图片。
         _save_anime_image_cache(character, settings, winner)
         return winner
 

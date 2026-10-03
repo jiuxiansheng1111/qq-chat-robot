@@ -1,1 +1,1 @@
-"""External service integrations."""
+"""外部服务集成。"""

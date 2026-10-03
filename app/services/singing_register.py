@@ -1,4 +1,4 @@
-"""Model-independent octave planning for preserving a singer's melody in a target register."""
+"""与模型无关的八度规划，用于把歌手旋律移到目标音域。"""
 
 from __future__ import annotations
 
@@ -10,11 +10,9 @@ OCTAVE_SHIFTS = (-12, 0, 12)
 
 
 def choose_octave_shift(source_f0, target_median_hz: float) -> dict[str, float | int]:
-    """Choose one octave offset that moves a song's median F0 nearest the target.
+    """选择一个八度偏移，让整首歌的 F0 中位数最接近目标。
 
-    Non-finite and non-positive F0 frames are excluded from the voiced statistics.
-    At least one finite, positive frame is required. The shift is applied uniformly,
-    preserving intervals and key; an exact register tie prefers no shift.
+    计算有声统计时会排除非有限或非正的 F0 帧，并至少要求一帧有效数据。整体统一移调，保留音程和调性；目标音域距离相同时不移调。
     """
     if isinstance(target_median_hz, (bool, str, bytes)):
         raise TypeError("target_median_hz must be a number from 80 to 1000 Hz")

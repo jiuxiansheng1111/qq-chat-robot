@@ -1,4 +1,4 @@
-"""Opt-in multilingual character voice output."""
+"""按需输出多语言角色语音。"""
 
 import asyncio
 import base64
@@ -17,8 +17,8 @@ from app.config import Settings
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
 _KANA_RE = re.compile(r"[\u3040-\u30ff]")
 
-# A GPT-SoVITS sidecar has one active GPT and SoVITS model. The lock covers
-# both mutable weight switches and the following /tts request.
+# GPT-SoVITS sidecar 同时只用一组 GPT 与 SoVITS 模型；锁要覆盖
+# 权重切换和随后的 /tts 请求。
 _GPT_SOVITS_LOCKS: dict[tuple[int, str], asyncio.Lock] = {}
 _SUPPORTED_GPT_SOVITS_WEIGHT_LANGUAGES = frozenset({"zh", "ja", "en", "ko", "yue"})
 _SUPPORTED_PROFILE_LANGUAGES = frozenset({"zh", "ja", "en", "yue"})
@@ -57,7 +57,7 @@ _JAPANESE_DIRECTIVE_RE = re.compile(r"日本語で")
 
 
 def voice_profiles(settings: Settings) -> dict[str, dict[str, object]]:
-    """Return character voice profiles without exposing internal IDs to users."""
+    """返回角色语音配置，不向用户展示内部 ID。"""
     try:
         payload = json.loads(settings.voice_profiles_json or "{}")
     except (TypeError, ValueError, json.JSONDecodeError):
@@ -85,9 +85,8 @@ def voice_profiles(settings: Settings) -> dict[str, dict[str, object]]:
                     "languages",
                 )
             }
-            # Keep language-specific values raw until synthesis. This lets the
-            # menu remain usable while a malformed voice-only setting fails
-            # closed at the point it could otherwise produce a wrong voice.
+            # 语言专属配置先按原值保留，到合成时再处理。这样配置错误只会影响语音，
+            # 不会导致菜单失效或发出错误音色。
             for field in (
                 "ref_audio_path_by_language",
                 "prompt_text_by_language",
@@ -124,13 +123,10 @@ def re_safe_profile_id(value: str) -> bool:
 
 
 def profile_supported_languages(profile: dict[str, object]) -> tuple[str, ...] | None:
-    """Return an explicit accepted-language allowlist, or preserve legacy behavior.
+    """读取允许的语言列表；未配置时沿用旧行为。
 
-    A missing field intentionally means the profile predates per-language
-    acceptance and retains its existing routing behavior. A present field is
-    strict: malformed or unsupported values must not allow an unaccepted TTS
-    request through to the sidecar.
-    """
+    缺少此字段表示该 profile 还没配置按语言授权，保留现有路由。
+    配置此字段后会严格校验；值格式错误或语言不支持时，不允许请求发到 sidecar。"""
     if "supported_languages" not in profile:
         return None
     raw_languages = profile["supported_languages"]
@@ -147,12 +143,12 @@ def profile_supported_languages(profile: dict[str, object]) -> tuple[str, ...] |
 
 
 def profile_text_split_method(profile: dict[str, object]) -> str | None:
-    """Return an optional sidecar-supported split method without changing legacy payloads."""
+    """读取可选的 sidecar 分段方式，不改旧请求参数。"""
     if "text_split_method" not in profile:
         return None
     raw_method = profile["text_split_method"]
     if not isinstance(raw_method, str):
-        raise RuntimeError(  # noqa: TRY004 - this is a user-safe synthesis failure
+        raise RuntimeError(  # noqa: TRY004 - 用户可见的合成错误提示
             "所选角色的 text_split_method 配置无效，已回退文字回复"
         )
     method = raw_method.strip()
@@ -166,7 +162,7 @@ def profile_text_split_method(profile: dict[str, object]) -> str | None:
 
 
 def profile_inference_overrides(profile: dict[str, object]) -> dict[str, int | float | bool]:
-    """Validate optional per-character GPT-SoVITS sampling overrides."""
+    """校验角色可选的 GPT-SoVITS 采样参数。"""
     overrides: dict[str, int | float | bool] = {}
     if "seed" in profile:
         seed = profile["seed"]
@@ -202,12 +198,11 @@ def profile_inference_overrides(profile: dict[str, object]) -> dict[str, int | f
 
 
 def character_languages(profile: dict[str, object]) -> str:
-    """Return a compact display label for the character's supported languages."""
+    """返回角色支持语言的简短显示名。"""
     try:
         supported_languages = profile_supported_languages(profile)
     except RuntimeError:
-        # Keep a role visible in the selector without claiming malformed
-        # configuration can synthesize a language.
+        # 角色配置不完整时仍显示在选择菜单里，但不声称它支持合成某种语言。
         return "语音暂不可用"
     if supported_languages is not None:
         return " / ".join(_PROFILE_LANGUAGE_LABELS[language] for language in supported_languages)
@@ -230,7 +225,7 @@ def character_label(profile_id: str, profile: dict[str, object]) -> str:
 
 
 def voice_profile_authorized(settings: Settings, profile_id: str, bot_self_id: str | None) -> bool:
-    """Keep account-scoped character licenses off other OneBot accounts."""
+    """限制按账号授权的角色音色，避免其他 OneBot 账号使用。"""
     restricted = {
         item.strip()
         for item in settings.voice_primary_account_profile_ids.split(",")
@@ -254,8 +249,7 @@ def voice_profile_menu(settings: Settings, bot_self_id: str | None = None) -> st
                 "yue" in (profile_supported_languages(profile) or ())
             )
         except RuntimeError:
-            # Invalid per-role language configuration is already displayed as
-            # unavailable by character_languages; do not advertise it here.
+            # character_languages 已将该角色的语言配置标为不可用，这里也不要展示。
             continue
     lines.append("发送“选择角色 角色名”切换")
     if cantonese_available:
@@ -266,7 +260,7 @@ def voice_profile_menu(settings: Settings, bot_self_id: str | None = None) -> st
 def resolve_character_profile(
     settings: Settings, selection: str, bot_self_id: str | None = None
 ) -> str | None:
-    """Resolve a user-facing character name, preserving old internal IDs as aliases."""
+    """按用户输入的角色名查找配置，并保留旧内部 ID 作为别名。"""
     requested = re.sub(r"\s+", "", str(selection or "")).casefold()
     if not requested:
         return None
@@ -286,52 +280,42 @@ def resolve_character_profile(
 
 
 def detect_speech_language(text: str, preferred: str = "auto") -> str:
-    """Return the target language code used by multilingual TTS backends.
+    """返回多语言 TTS 要用的目标语言代码。
 
-    Automatic detection intentionally defaults to Chinese.  Character replies
-    often contain an English product name, acronym, or short quote; treating
-    any Latin character as English makes GPT-SoVITS use the wrong frontend.
-    A configured non-``auto`` preference is the explicit language override.
-    """
+    自动识别默认选中文。角色回复常含英文产品名、缩写或短引文；只要出现拉丁字母就判英语，会让 GPT-SoVITS 选错前端。
+    配置为非 ``auto`` 时，明确按该语言合成。"""
     requested = str(preferred or "auto").strip().casefold()
     if requested in {"zh", "en", "ja", "ko", "yue"}:
         return requested
     candidate = str(text or "")
     kana_count = len(_KANA_RE.findall(candidate))
     cjk_count = len(_CJK_RE.findall(candidate))
-    # Japanese ordinarily includes several kana; a lone kana in an otherwise
-    # Chinese sentence is not enough to override the safe Chinese default.
+    # 日语通常会出现多个假名；中文句子里偶然只有一个假名，不足以覆盖中文默认值。
     if kana_count >= 2 and kana_count >= cjk_count * 0.15:
         return "ja"
     if cjk_count:
         return "zh"
-    # Ignore URLs before inspecting Latin words: their host/path components do
-    # not indicate the language that should be spoken.
+    # 先忽略 URL，再检查拉丁字母；主机名和路径不能用来判断应说的语言。
     prose_candidate = re.sub(r"(?:https?://|www\.)\S+", "", candidate, flags=re.IGNORECASE)
     latin_words = re.findall(r"[A-Za-z]+(?:'[A-Za-z]+)?", prose_candidate)
     latin_letters = sum(len(word.replace("'", "")) for word in latin_words)
-    # Require an actual English-looking utterance.  This keeps "AI", "v2",
-    # URLs and identifiers from flipping a Chinese reply to English.
+    # 只有文本明显像英语时才判英语，避免 "AI"、"v2"、URL、编号把中文回复误判成英文。
     if latin_letters >= 4 and len(latin_words) >= 2:
         return "en"
     return "zh"
 
 
 def requested_speech_language(prompt: str) -> str:
-    """Resolve an explicit per-message voice language; otherwise use Chinese.
+    """读取本条消息明确要求的语音语言；未要求时用中文。
 
-    The generated answer itself is deliberately not used as the language
-    switch.  Product names, quotations, or an LLM unexpectedly replying in a
-    foreign language must not silently change the user's voice preference.
-    """
+    不按生成答案内容切换语言。产品名、引文或模型偶尔用外语回答，都不会暗中改变用户的语音语言偏好。"""
     candidate = " ".join(str(prompt or "").split())
     if not candidate:
         return "zh"
     directives: list[tuple[int, str]] = []
     for match in _LANGUAGE_DIRECTIVE_RE.finditer(candidate):
-        # A negative preference (for example, “不要用英语”) is not a request
-        # to synthesize another foreign language.  With no later positive
-        # directive, the product rule is to fall back to Chinese.
+        # 用户说“不要用英语”这类否定偏好，不代表要改用另一种外语。
+        # 后面没有新的正向要求时，仍按产品规则回退到中文。
         if match.group("early_negation") or match.group("negation"):
             continue
         language = match.group("language") or match.group("language_first")
@@ -342,18 +326,15 @@ def requested_speech_language(prompt: str) -> str:
     directives.extend(
         (match.start(), "ja") for match in _JAPANESE_DIRECTIVE_RE.finditer(candidate)
     )
-    # If a user corrects themselves in one message, the last positive request
-    # wins: “不要用英语，改用日语回答” must resolve to Japanese.
+    # 用户同一条消息里改了要求时，按最后一个正向语言要求处理：
+    # “不要用英语，改用日语回答”应判为日语。
     return max(directives, default=(-1, "zh"), key=lambda item: item[0])[1]
 
 
 def validate_voice_text_language(text: str, target_language: str) -> None:
-    """Reject clear text/frontend mismatches before producing garbled speech.
+    """生成语音前拦截明显的文本/前端语言不匹配。
 
-    This intentionally does not try to classify mixed language or short
-    fragments. It only guards the obvious case where the LLM answered in a
-    different script from the explicitly selected GPT-SoVITS frontend.
-    """
+    不尝试判断混合语言或短片段，只拦截明显用错文字系统的回复。"""
     candidate = re.sub(
         r"(?:https?://|www\.)\S+", "", str(text or ""), flags=re.IGNORECASE
     )
@@ -390,7 +371,7 @@ def _profile_value_for_language(
     *,
     allow_empty: bool = False,
 ) -> str:
-    """Choose an optional language-specific profile value with legacy fallback."""
+    """优先取 profile 的语言专属值，缺少时回退到旧值。"""
     mapping_field = f"{field}_by_language"
     legacy = str(profile.get(field) or "").strip()
     if mapping_field not in profile:
@@ -411,7 +392,7 @@ def _profile_value_for_language(
 
 
 def gpt_sovits_language_weights(settings: Settings) -> dict[str, str]:
-    """Read the optional per-language SoVITS weight map from settings."""
+    """读取可选的按语言 SoVITS 权重映射。"""
     raw = str(settings.voice_sovits_weights_by_language_json or "").strip()
     if not raw:
         return {}
@@ -437,7 +418,7 @@ def gpt_sovits_language_weights(settings: Settings) -> dict[str, str]:
 
 
 def gpt_sovits_profile_language_weights(settings: Settings) -> dict[str, dict[str, str]]:
-    """Read optional profile-specific GPT-SoVITS weights from settings."""
+    """读取可选的角色专属 GPT-SoVITS 权重映射。"""
     raw = str(settings.voice_sovits_weights_by_profile_json or "").strip()
     if not raw:
         return {}
@@ -473,11 +454,9 @@ def gpt_sovits_profile_language_weights(settings: Settings) -> dict[str, dict[st
 def selected_gpt_sovits_weight(
     settings: Settings, profile_id: str, target_language: str
 ) -> str | None:
-    """Choose a weight without allowing a default profile model to leak.
+    """选择 SoVITS 权重，避免默认角色模型串到其他角色。
 
-    The older language map remains an explicit default-profile route. Any
-    non-default profile needs its own entry in the nested profile map.
-    """
+    旧的按语言映射仍可明确配置默认角色。非默认角色必须在 profile 映射里单独配置。"""
     profile_weights = gpt_sovits_profile_language_weights(settings)
     default_profile = settings.voice_profile_default
     if profile_id != default_profile:
@@ -491,7 +470,7 @@ def selected_gpt_sovits_weight(
             )
         return None
 
-    # A profile-specific default entry may override the legacy default map.
+    # profile 的 default 权重项可覆盖旧版默认映射。
     selected_weight = profile_weights.get(profile_id, {}).get(target_language)
     if selected_weight:
         return selected_weight
@@ -509,7 +488,7 @@ def selected_gpt_sovits_weight(
 
 
 def selected_gpt_weight(settings: Settings, profile_id: str) -> str | None:
-    """Resolve an explicit GPT route, never retaining another role's model."""
+    """按明确路由选 GPT 检查点，不沿用其他角色的模型。"""
     raw = str(settings.voice_gpt_weights_by_profile_json or "").strip()
     if not raw:
         return None
@@ -534,13 +513,12 @@ def selected_gpt_weight(settings: Settings, profile_id: str) -> str | None:
 
 
 def _gpt_sovits_control_endpoint(tts_endpoint: str) -> str:
-    """Return api_v2's weight-switch endpoint for a normalized /tts URL."""
+    """返回规范化 /tts 地址对应的 api_v2 权重切换接口。"""
     return tts_endpoint.rsplit("/tts", 1)[0] + "/set_sovits_weights"
 
 
 def _gpt_sovits_lock(endpoint: str) -> asyncio.Lock:
-    # pytest creates a fresh event loop per test. Locks are loop-local while
-    # the active-weight cache deliberately belongs to the process/sidecar.
+    # pytest 每个测试都会建新的事件循环。锁只属于当前 loop，活动权重缓存则属于整个进程/sidecar。
     key = (id(asyncio.get_running_loop()), endpoint)
     lock = _GPT_SOVITS_LOCKS.get(key)
     if lock is None:
@@ -550,13 +528,9 @@ def _gpt_sovits_lock(endpoint: str) -> asyncio.Lock:
 
 
 def _reject_near_silent_wav(raw: bytes) -> None:
-    """Reject a broken TTS result before it becomes a group voice message.
+    """在 TTS 结果变成群语音前，拦截损坏的音频。
 
-    A failed/under-trained SoVITS checkpoint can still return HTTP 200 and a
-    valid WAV container while containing little more than a short breath.  We
-    only inspect PCM WAV responses (other providers may return MP3/OGG), and
-    keep the threshold deliberately conservative so quiet speech is retained.
-    """
+    训练不足或损坏的 SoVITS 检查点仍可能返回 HTTP 200 和有效 WAV 文件，但内容几乎只有一口气。这里只检查 PCM WAV 响应（其他服务可能返回 MP3/OGG），阈值保持保守，避免误删轻声说话。"""
     if len(raw) < 44 or raw[:4] != b"RIFF" or raw[8:12] != b"WAVE":
         return
     try:
@@ -582,7 +556,7 @@ def _reject_near_silent_wav(raw: bytes) -> None:
 
 
 def _gpt_sovits_tts_failure_message(response: httpx.Response) -> str:
-    """Make a sidecar 4xx actionable without exposing a raw traceback to chat."""
+    """把 sidecar 返回的 4xx 转成用户能看懂的提示，不暴露原始堆栈。"""
     try:
         payload = response.json()
     except (json.JSONDecodeError, ValueError):
@@ -632,9 +606,8 @@ async def synthesize_voice(
     clean = " ".join(str(text or "").split())
     if not clean:
         raise ValueError("没有可转换成语音的文字")
-    # Sending the first N characters as the entire voice reply silently drops
-    # the rest of the answer once text is suppressed.  Preserve the complete
-    # answer through the caller's text fallback until chunked TTS is supported.
+    # 只发送前 N 个字符并抑制文字回复，会悄悄丢掉答案剩余部分。
+    # 分块 TTS 支持前，调用方仍要用文字补全完整答案。
     if len(clean) > max(20, int(settings.voice_max_chars)):
         raise RuntimeError("回复超过语音长度上限，已回退完整文字")
     headers = {"Content-Type": "application/json"}
@@ -695,8 +668,7 @@ async def synthesize_voice(
         inference_overrides = profile_inference_overrides(profile)
         payload = {
             "text": clean,
-            # GPT-SoVITS uses all_yue for speech spoken entirely in Cantonese;
-            # plain yue denotes Cantonese-English mixed input in its front end.
+            # 整句粤语用 all_yue；yue 表示 GPT-SoVITS 前端中的粤英混合输入。
             "text_lang": "all_yue" if target_language == "yue" else target_language,
             "ref_audio_path": reference,
             "prompt_lang": prompt_lang,
@@ -718,9 +690,8 @@ async def synthesize_voice(
         model = profile.get("model") or settings.voice_model
         if model:
             payload["model"] = model
-        # Non-standard fields are opt-in because many OpenAI-compatible endpoints
-        # reject unknown JSON keys. Enable them only for a provider documented to
-        # accept multilingual/instruction fields.
+        # 非标准字段默认不发送，因为许多兼容 OpenAI 的服务会拒绝未知 JSON 字段。
+        # 只有服务方文档明确支持多语言/指令字段时才启用。
         if settings.voice_supports_language_fields:
             if profile.get("language"):
                 payload["language"] = profile["language"]
@@ -732,7 +703,7 @@ async def synthesize_voice(
         trust_env=False,
     ) as client:
         if provider in {"gpt_sovits", "gpt-sovits"}:
-            # Keep model switching and its synthesis request indivisible.
+            # 模型切换和对应合成请求必须作为一个不可拆分的操作。
             async with _gpt_sovits_lock(endpoint):
                 if selected_gpt:
                     switch = await client.get(
@@ -741,10 +712,8 @@ async def synthesize_voice(
                         params={"weights_path": selected_gpt},
                     )
                     switch.raise_for_status()
-                # api_v2 exposes no stable process identity or active-weight
-                # read endpoint. Reassert a configured route for every
-                # synthesis: a restarted sidecar or external weight change
-                # otherwise makes an in-process cache unsafe.
+                # api_v2 没有稳定的进程 ID 或当前权重查询接口。每次合成都重新写入配置的路由；
+                # 否则 sidecar 重启或外部改权重后，进程内缓存可能失效。
                 if selected_weight:
                     switch = await client.get(
                         _gpt_sovits_control_endpoint(endpoint),

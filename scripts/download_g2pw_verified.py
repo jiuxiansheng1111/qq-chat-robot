@@ -1,4 +1,4 @@
-"""Download the GPT-SoVITS G2PW archive in verified HTTP ranges."""
+"""以校验过的 HTTP 分段下载 GPT-SoVITS G2PW 压缩包。"""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ def download(path: Path) -> None:
                     out.flush()
                     print(f"{position}/{SIZE} ({position / SIZE:.1%})", flush=True)
                     break
-                except Exception as exc:  # network connections are flaky here
+                except Exception as exc:  # 网络连接偶尔会不稳定。
                     out.truncate(position)
                     if attempt == 10:
                         raise

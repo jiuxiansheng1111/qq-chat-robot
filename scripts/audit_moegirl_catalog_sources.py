@@ -1,7 +1,6 @@
-"""Audit Moegirl metadata for the anime catalog without downloading images.
+"""检查动漫图鉴中的萌娘百科元数据，不下载图片。
 
-This is a low-rate inventory, not proof that every remote image can be sent to
-QQ. The report belongs under ignored data/ and keeps missing entries explicit.
+这是低频的条目盘点，不代表所有远程图片都能发到 QQ。报告放在被忽略的 data/ 下，并明确保留缺失项。
 """
 
 from __future__ import annotations
@@ -31,12 +30,12 @@ API_URL = "https://zh.moegirl.org.cn/api.php"
 
 
 def error_text(exc: Exception) -> str:
-    """Keep timeout/status error classes visible when their message is empty."""
+    """即使错误消息为空，也保留 timeout/status 错误类别。"""
     return (str(exc).strip() or type(exc).__name__)[:240]
 
 
 def _retryable_http_error(exc: httpx.HTTPError) -> bool:
-    """Retry transport errors and throttling/server failures, never ordinary 4xx."""
+    """重试传输错误和限流/服务器错误，不重试普通 4xx。"""
     if not isinstance(exc, httpx.HTTPStatusError):
         return True
     status = exc.response.status_code
@@ -44,7 +43,7 @@ def _retryable_http_error(exc: httpx.HTTPError) -> bool:
 
 
 def match_page(character, pages: list[dict]) -> tuple[dict | None, dict[str, int]]:
-    """Return a strict source and auditable reasons for a non-match."""
+    """返回严格的来源判断，以及未匹配原因供审计。"""
     series_terms = _series_match_terms(character)
     diagnostics = {
         "returned_pages": len(pages),
@@ -99,7 +98,7 @@ def match_page(character, pages: list[dict]) -> tuple[dict | None, dict[str, int
 
 
 def non_match_classification(diagnostics: dict[str, int]) -> str:
-    """Name the strongest observed reason without treating it as a source."""
+    """指出最有力的观察原因，但不把原因误作来源。"""
     if diagnostics["without_pageimage"]:
         return "identified_without_pageimage"
     if diagnostics["untrusted_image_host"]:
@@ -116,7 +115,7 @@ def non_match_classification(diagnostics: dict[str, int]) -> str:
 
 
 def returned_titles(pages: list[dict]) -> list[str]:
-    """Keep a small, non-sensitive review trail for alias/title mismatches."""
+    """为别名/标题不匹配保留简短且不敏感的审阅记录。"""
     return list(
         dict.fromkeys(
             str(page.get("title") or "").strip()
@@ -187,10 +186,10 @@ async def run(
         follow_redirects=True,
         headers={"User-Agent": "qq-chatrobot/0.1 (low-rate source audit)"},
     ) as client:
-        # Request a few characters' exact titles/aliases together.  Matching
-        # still runs per character, so a returned alias or redirect cannot be
-        # silently credited to another catalog record.  This keeps a complete
-        # 300-entry audit practical without increasing the request rate.
+        # 一次请求几个角色的精确标题/别名。
+        # 仍然逐个角色匹配，避免把返回的别名或重定向
+        # 错记到其他图鉴条目上。这样可以在不增加请求频率的情况下，
+        # 完成 300 条图鉴检查。
         for start in range(0, len(characters), batch_size):
             batch = characters[start : start + batch_size]
             direct_titles = list(
@@ -223,9 +222,9 @@ async def run(
                     diagnostics = {f"direct_{key}": value for key, value in direct_diagnostics.items()}
                     candidates = {"direct": returned_titles(pages)}
                     via = "direct"
-                    # A page may exist yet legitimately omit pageimages.
-                    # Search after direct titles/aliases fail to produce a
-                    # usable strict result, retaining that fact in the report.
+                    # 页面可能存在，但确实没有 pageimages 图片。
+                    # 直接标题/别名没有严格匹配结果时，再运行搜索，
+                    # 并在报告中保留使用了回退的记录。
                     if source is None:
                         try:
                             search_pages = await fetch_pages(

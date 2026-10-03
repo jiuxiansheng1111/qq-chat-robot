@@ -1,4 +1,4 @@
-"""Audit the static anime/Galgame catalog before it is published."""
+"""发布前检查静态动漫/游戏角色图鉴。"""
 
 import argparse
 import json

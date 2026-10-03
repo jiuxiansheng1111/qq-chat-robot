@@ -1,9 +1,6 @@
-"""Prepare a GPT-SoVITS TTS config for an isolated local acceptance sidecar.
+"""为隔离的本地验收 sidecar 准备 GPT-SoVITS TTS 配置。
 
-Pass the printed output path to ``api_v2.py -c`` for a non-production port.
-GPT-SoVITS persists /set_sovits_weights changes into that selected config, so
-this tool deliberately refuses to overwrite the source/live config.  Supplying
-``--sovits-weights`` writes that existing weight path only into the new copy.
+把打印出的新文件路径传给 ``api_v2.py -c``，并使用非生产端口。GPT-SoVITS 会把 /set_sovits_weights 的改动写回所选配置，因此本工具拒绝覆盖源配置或线上配置。提供 ``--sovits-weights`` 时，也只把已有权重路径写入新副本。
 """
 
 from __future__ import annotations
@@ -26,7 +23,7 @@ def _custom_block_bounds(lines: list[str]) -> tuple[int, int]:
 
     start = custom_indices[0]
     for index in range(start + 1, len(lines)):
-        # A non-indented, non-comment line begins the next top-level YAML block.
+        # 非缩进且非注释的行表示下一个 YAML 顶层区块。
         if re.match(r"^[^\s#]", lines[index]):
             return start + 1, index
     return start + 1, len(lines)
@@ -39,7 +36,7 @@ def _custom_scalar_lines(lines: list[str], field: str) -> list[int]:
 
 
 def source_custom_sovits_weights(source: Path) -> str:
-    """Return the source custom SoVITS value for an explicit inheritance warning."""
+    """返回源配置中 custom SoVITS 的值，用于明确提示继承关系。"""
     lines = source.read_text(encoding="utf-8").splitlines(keepends=True)
     matches = _custom_scalar_lines(lines, "vits_weights_path")
     if len(matches) != 1:
@@ -52,7 +49,7 @@ def _yaml_double_quoted(value: str) -> str:
 
 
 def _with_custom_sovits_weights(config_text: str, weights: Path) -> str:
-    """Replace only the inline custom.vits_weights_path scalar, fail-closed."""
+    """只替换 custom.vits_weights_path 的行内值；无法确认时停止。"""
     lines = config_text.splitlines(keepends=True)
     matches = _custom_scalar_lines(lines, "vits_weights_path")
     if len(matches) != 1:
@@ -69,8 +66,8 @@ def _with_custom_sovits_weights(config_text: str, weights: Path) -> str:
     indentation = match.group("indent")
     lines[index] = f"{indentation}vits_weights_path: {_yaml_double_quoted(str(weights))}{newline}"
 
-    # YAML emitters can wrap a quoted Windows path onto indented continuation
-    # lines. They belong to the replaced scalar, not to the next custom key.
+    # YAML 输出器可能把带引号的 Windows 路径换成缩进行；
+    # 这些续行仍属于被替换的值，不是下一个 custom 键。
     continuation_end = index + 1
     while continuation_end < len(lines):
         continuation = lines[continuation_end]

@@ -102,6 +102,44 @@ def test_expected_pitch_shift_uses_transposed_source_and_reports_median_hz():
     assert "转换后音高偏差过大" not in quality_failures(shifted_report)
 
 
+def test_pitch_residual_diagnostics_separate_source_motion_from_output_spike():
+    frames = np.arange(300)
+    # 源有自然起伏，转换正常时残差仍为零。
+    source = 220 * 2 ** (0.35 * np.sin(2 * np.pi * 5 * frames / 100) / 12)
+    converted = source.copy()
+    natural = _report(source, converted)
+    assert natural["source_pitch_step_p95_cents"] > 0
+    assert natural["pitch_residual_step_p95_cents"] == pytest.approx(0, abs=1e-8)
+    assert natural["pitch_residual_isolated_jump_count"] == 0
+    assert not any("音高" in failure for failure in quality_failures(natural))
+
+    converted[150] *= 2 ** (2 / 12)
+    with_spike = _report(source, converted)
+    assert with_spike["pitch_residual_isolated_jump_count"] == 1
+    assert with_spike["pitch_residual_adjacent_pair_count"] == len(source) - 1
+    # 该诊断不会额外变成接受门槛。
+    assert "转换后音高抖动过多" not in quality_failures(with_spike)
+
+
+def test_optional_energy_thresholds_fail_closed_only_when_configured():
+    report = {"source_voiced_frames": 200}
+    assert quality_failures(report) == [
+        "转换后音高偏差过大",
+        "转换后保留的旋律音高比例不足",
+        "转换后保留的有声帧比例不足",
+        "转换前后时长偏差过大",
+        "转换后人声音量过低",
+        "转换后人声削波过多",
+        "转换后与目标音色相似度不足",
+    ]
+    assert "转换后人声能量覆盖比例不足" in quality_failures(
+        report, min_energy_recall=0.90
+    )
+    assert "转换后连续缺失人声过长" in quality_failures(
+        report, max_missing_vocal_seconds=1.2
+    )
+
+
 def test_identity_similarity_uses_held_out_embedding_and_keeps_prompt_score():
     f0 = np.full(200, 220.0)
     report = _report(
@@ -130,6 +168,24 @@ def test_identity_reference_cli_option_is_optional(monkeypatch):
     assert str(args.reference) == "prompt.wav"
     assert str(args.identity_reference) == "held-out.wav"
     assert args.expected_semitone_shift == 3
+
+
+def test_cli_uses_current_vocal_coverage_threshold_defaults(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "check_singing_quality.py",
+            "--seed-root", "seed",
+            "--source", "source.wav",
+            "--converted", "converted.wav",
+            "--reference", "prompt.wav",
+            "--output", "quality.json",
+        ],
+    )
+    args = check_singing_quality._parse_args()
+    assert args.min_voiced_recall == pytest.approx(0.88)
+    assert args.min_energy_recall == pytest.approx(0.90)
+    assert args.max_missing_vocal_seconds == pytest.approx(1.2)
 
 
 def test_f0_delay_search_aligns_up_to_100_ms():

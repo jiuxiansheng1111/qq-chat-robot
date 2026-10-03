@@ -265,7 +265,7 @@ class Database:
                 await db.execute(
                     "ALTER TABLE group_affection_daily ADD COLUMN severe_hostility_count INTEGER NOT NULL DEFAULT 0"
                 )
-            # Keep old collection rows valid when display names are corrected.
+            # 显示名称调整后，旧的收藏记录仍要保持有效。
             ultraman_name_migrations = (
                 ("欧布奥特曼·雷霆肩章", "欧布奥特曼·暗耀形态"),
                 ("梦比优斯无限形态", "梦比优斯奥特曼·无限形态"),
@@ -294,8 +294,8 @@ class Database:
                 ((new_name, old_name) for old_name, new_name in ultraman_name_migrations),
             )
 
-            # One-time v2 affection rebalance requested for the live bot:
-            # everyone starts again from 30 and old event/daily bonus history is cleared.
+            # 按线上机器人需求，只执行一次好感分数重置：
+            # 所有人回到 30 分，并清除旧事件/每日奖励记录。
             reset_marker = await (
                 await db.execute(
                     "SELECT meta_value FROM app_meta WHERE meta_key = ?",
@@ -362,11 +362,9 @@ class Database:
         news_date: str,
         items: list[tuple[str, str, str, str, str]],
     ) -> list[tuple[str, str, str]]:
-        """Persist one immutable daily edition and return the winning edition.
+        """保存每天唯一的版本，并返回最终采用的版本。
 
-        A transaction makes simultaneous manual/scheduled requests converge on
-        the same list instead of creating two different editions for one day.
-        Each item is ``(canonical_url, title_key, title, url, snippet)``.
+        事务可让同时发起的手动/定时请求收敛到同一份列表，不会为同一天创建两个版本。每个条目格式为 ``(canonical_url, title_key, title, url, snippet)``。
         """
         async with aiosqlite.connect(self.path) as db:
             await db.execute("BEGIN IMMEDIATE")
@@ -458,10 +456,9 @@ class Database:
         )
 
     async def romance_turn_count(self, group_id: str, user_id: str) -> int:
-        """Return recent successful romance-chat turns for this group/member.
+        """返回此群/成员最近成功的恋爱聊天轮次。
 
-        The count expires after a quiet period so a later factual question does
-        not inherit an overly coy tone from an unrelated old conversation.
+        安静一段时间后计数会过期，避免之后的事实性提问继承无关旧对话中过分娇羞的语气。
         """
         row = await self.fetchone(
             "SELECT romance_turn_count FROM user_preferences "
@@ -472,7 +469,7 @@ class Database:
         return max(0, min(int(row[0]), 12)) if row else 0
 
     async def record_romance_turn(self, group_id: str, user_id: str) -> int:
-        """Record one delivered LLM reply, resetting after 45 minutes idle."""
+        """记录一次已送达的 LLM 回复；空闲 45 分钟后重置。"""
         await self.execute(
             "INSERT INTO user_preferences("
             "group_id, user_id, romance_turn_count, romance_last_turn_at"
@@ -1028,11 +1025,11 @@ class Database:
         user_id: str,
         activity_date: str,
     ) -> tuple[int, int, int, str]:
-        """Record a meaningful addressed interaction and return a bounded bonus.
+        """记录一次明确指向本机器人的有效互动，并返回有限的奖励分。
 
-        Bonuses reward sustained conversation instead of one-shot farming:
-        - first meaningful interaction after 2+ consecutive days: +1..+3
-        - 3rd and 8th meaningful interaction of the day: +1 each
+        奖励侧重持续互动，避免一次性刷分：
+        - 连续 2 天或更久后第一次有效互动：+1 到 +3
+        - 当天第 3 次和第 8 次有效互动：各 +1
         """
         today = date.fromisoformat(activity_date)
         yesterday = (today - timedelta(days=1)).isoformat()
@@ -1092,7 +1089,7 @@ class Database:
                 bonus += 1
                 reasons.append(f"今日第 {count} 次认真互动")
 
-            # Cap consistency bonuses at +5 per day even if rules expand later.
+            # 即使以后扩展规则，每日连贯性奖励最多加 5 分。
             bonus = max(0, min(bonus, 5 - bonus_awarded))
             if bonus:
                 await db.execute(
@@ -1111,7 +1108,7 @@ class Database:
         activity_date: str,
         action_key: str,
     ) -> bool:
-        """Allow each unlocked intimate action to grant points once per day."""
+        """每个已解锁的亲密动作每天只能加分一次。"""
         clean = str(action_key).strip().replace(",", "")[:24]
         if not clean:
             return False
@@ -1314,7 +1311,7 @@ class Database:
         await self.execute("DELETE FROM group_memories WHERE group_id = ?", (group_id,))
 
     async def delete_group_memories_matching(self, group_id: str, text: str) -> int:
-        """Delete shared facts containing the exact text and drop transient context."""
+        """删除包含指定原文的共享事实，并清除临时上下文。"""
         async with aiosqlite.connect(self.path) as db:
             cursor = await db.execute(
                 "DELETE FROM group_memories WHERE group_id = ? AND instr(content, ?) > 0",

@@ -6,7 +6,7 @@ class LLMError(RuntimeError):
 
 
 def describe_llm_error(exc: Exception) -> str:
-    """Classify an LLM failure so logs reveal the actual cause."""
+    """对 LLM 故障分类，方便日志显示实际原因。"""
     text = str(exc)
     if "circuit open" in text:
         return "circuit_open"

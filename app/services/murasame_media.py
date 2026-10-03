@@ -1,4 +1,4 @@
-"""Local, user-provided Murasame image and emoji assets."""
+"""本地用户提供的丛雨图片和表情素材。"""
 
 import asyncio
 import base64

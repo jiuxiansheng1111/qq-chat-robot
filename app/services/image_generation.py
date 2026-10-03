@@ -1,9 +1,6 @@
-"""Opt-in image generation adapter for the QQ bot.
+"""QQ 机器人的可选图片生成适配器。
 
-The adapter intentionally speaks the small, common OpenAI-compatible images
-API surface. It accepts either ``data[].b64_json`` or ``data[].url`` and
-normalizes both to a OneBot ``base64://`` image payload. Providers remain
-configurable so the bot does not depend on a single vendor.
+适配器只实现通用 OpenAI 兼容图片 API 的常用部分。它接受 ``data[].b64_json`` 或 ``data[].url``，并将两者都规范化为 OneBot ``base64://`` 图片内容。服务商可配置，不绑定单一厂商。
 """
 
 import base64

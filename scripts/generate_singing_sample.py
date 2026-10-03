@@ -1,4 +1,4 @@
-"""Generate a complete local cover for listening without posting to QQ."""
+"""生成整首或短版翻唱，保存到本机回听。"""
 
 import argparse
 import asyncio
@@ -37,6 +37,7 @@ async def generate(args: argparse.Namespace) -> None:
             cover = await generate_singing_cover(
                 args.query, args.profile, job_id, settings, progress,
                 bot_self_id=args.bot_self_id or settings.onebot_self_id,
+                mode=args.mode,
             )
         output.mkdir(parents=True)
         shutil.copy2(cover.full_path, output / "cover.wav")
@@ -45,13 +46,16 @@ async def generate(args: argparse.Namespace) -> None:
         for chunk in cover.chunks:
             shutil.copy2(chunk.path, chunks / chunk.path.name)
         job_dir = singing_job_directory(job_id)
-        for name in ("voice_reference.wav", "lyrics.lrc"):
+        for name in ("voice_reference.wav", "lyrics.lrc", "selection.json"):
             if (job_dir / name).is_file():
                 shutil.copy2(job_dir / name, output / name)
         report = {
             "song": cover.song.track.title,
             "song_id": cover.song.track.song_id,
             "profile": cover.profile_id,
+            "mode": cover.mode,
+            "source_start_seconds": cover.source_start_seconds,
+            "source_end_seconds": cover.source_end_seconds,
             "pitch_shift_semitones": cover.pitch_shift_semitones,
             "quality": cover.quality,
             "chunks": [
@@ -70,6 +74,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--query", required=True)
     parser.add_argument("--profile", default="murasame")
+    parser.add_argument("--mode", choices=["full", "clip"], default="full")
     parser.add_argument("--bot-self-id", default="")
     parser.add_argument("--output", required=True, type=Path)
     asyncio.run(generate(parser.parse_args()))

@@ -180,11 +180,9 @@ def parse_memory_relation(content: str) -> MemoryRelation | None:
 
 
 def rewrite_first_person_identity_question(question: str, speaker_name: str) -> str:
-    """Bind first-person identity questions to the actual QQ sender.
+    """把第一人称身份问题绑定到实际 QQ 发送者。
 
-    This prevents prompts such as "你知道我是谁吗" from being misread as
-    "你是谁". Only identity-style questions are rewritten; ordinary first-person
-    chat remains untouched.
+    这样“你知道我是谁吗”就不会被误读成“你是谁”。只改写身份类问题，普通第一人称聊天保持原样。
     """
     text = _clean(question, 120)
     speaker = _clean(speaker_name, 80)
@@ -206,10 +204,9 @@ def rewrite_relation_pronouns(
     speaker_name: str,
     bot_name: str,
 ) -> str:
-    """Bind simple first/second-person relation questions to concrete entities.
+    """把简单的第一/第二人称关系问题绑定到具体对象。
 
-    Only well-defined relation-question shapes are rewritten. Quoted or free-form
-    prose is left untouched for the LLM, avoiding destructive global replacement.
+    只改写格式明确的关系问题。带引号或自由叙述的文字留给 LLM，避免全局替换造成破坏。
     """
     text = _clean(question, 160)
     speaker = _clean(speaker_name, 80)

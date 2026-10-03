@@ -12,15 +12,15 @@ class Settings(BaseSettings):
     database_path: str = "./data/qqchat.db"
     redis_url: str = ""
     event_dedupe_ttl_seconds: int = 300
-    # High-ceiling ingress protection for all group events.
+    # 给所有群消息设较高的入口限流阈值。
     ingress_user_rate_limit_per_minute: int = 60
     ingress_group_rate_limit_per_minute: int = 300
-    # Dedicated keys prevent legacy USER_RATE_LIMIT_PER_MINUTE=5 values in old
-    # .env files from silently keeping generic AI chat on the old strict limit.
+    # 单独使用这些键，避免旧 .env 中的 USER_RATE_LIMIT_PER_MINUTE=5
+    # 继续把普通 AI 对话限制在旧的低阈值。
     llm_user_rate_limit_per_minute: int = 20
     llm_group_rate_limit_per_minute: int = 120
     rate_limit_notice_cooldown_seconds: int = 10
-    # Legacy keys are accepted for old .env files but no longer drive runtime limiting.
+    # 兼容旧 .env 配置，但旧键不再控制运行时限流。
     user_rate_limit_per_minute: int = 5
     group_rate_limit_per_minute: int = 60
     plugin_modules: str = "app.plugins.hello"
@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     onebot_access_token: str = Field(default="", repr=False)
     onebot_webhook_token: str = Field(default="", repr=False)
     onebot_self_id: str = ""
-    # Optional second NapCat / QQ account. Empty values keep legacy single-bot behavior.
+    # 可选的第二个 NapCat / QQ 账号。留空时仍按单机器人运行。
     onebot_api_base_2: str = ""
     onebot_access_token_2: str = Field(default="", repr=False)
     onebot_webhook_token_2: str = Field(default="", repr=False)
@@ -59,8 +59,8 @@ class Settings(BaseSettings):
     llm_queue_timeout_seconds: float = 8
     auto_web_search_enabled: bool = True
     auto_web_search_limit: int = 5
-    # Optional outbound proxy for web search/media. When empty, common local
-    # Clash Verge/Clash mixed ports are auto-detected.
+    # 可选出站代理，用于网页搜索和媒体访问。留空时自动探测本机
+    # Clash Verge/Clash 混合端口。
     web_proxy_url: str = ""
     web_proxy_auto_detect: bool = True
 
@@ -78,24 +78,20 @@ class Settings(BaseSettings):
     media_retry_attempts: int = 2
     ultraman_image_resolve_timeout_seconds: float = 12
     ultraman_image_cache_dir: str = "./data/ultraman_image_cache"
-    # Structured providers can take several seconds when their CDN is cold;
-    # the resolver uses staged fallbacks within this overall deadline.
+    # 图片源 CDN 冷启动时可能要等几秒；解析器会在这个总超时内
+    # 分阶段尝试备用来源。
     anime_image_resolve_timeout_seconds: float = 24
     anime_image_cache_dir: str = "./data/anime_image_cache"
-    # Moegirl restricts automated/off-site image use. Keep disabled until the
-    # deployer has obtained the permissions required for their bot/use case.
+    # 萌娘百科限制自动抓取和站外使用；未取得机器人用途所需授权前保持关闭。
     moegirl_image_provider_enabled: bool = False
-    # Image policy only: when enabled, character pictures stay on Moegirl
-    # unless the explicit image fallback option below is also enabled.
-    # Text profiles may still search other sources and cite them, so a missing
-    # Moegirl page does not silently turn into unrelated persona lore.
+    # 仅控制图片来源：开启后角色图片只使用萌娘百科，除非同时开启下方图片回退。
+    # 文字档案仍可搜索其他来源并引用；缺少萌娘百科页面时不会换成不相关的角色设定。
     anime_moegirl_only: bool = False
-    # Keep Moegirl as the first image source but, when its image CDN or a
-    # verified page image is unavailable, allow the bounded catalog fallback
-    # chain.  This setting intentionally affects images only.
+    # 优先使用萌娘百科图片；若图片 CDN 或已核实页面图片不可用，则允许按限定目录回退。
+    # 此项只影响图片。
     anime_moegirl_preferred_with_fallback: bool = False
-    # Optional image-generation provider. The endpoint follows the OpenAI
-    # /v1/images/generations response shape (data[].b64_json or data[].url).
+    # 可选图片生成服务。接口响应需符合 OpenAI /v1/images/generations 格式
+    # （data[].b64_json 或 data[].url）。
     image_generation_enabled: bool = False
     image_generation_api_url: str = ""
     image_generation_api_key: str = Field(default="", repr=False)
@@ -104,13 +100,11 @@ class Settings(BaseSettings):
     image_generation_timeout_seconds: float = 90
     image_generation_max_prompt_chars: int = 500
     image_generation_cooldown_seconds: int = 20
-    # Local, user-provided Murasame image/emoji assets. No copyrighted assets
-    # are downloaded automatically; drop files into these directories.
+    # 本地丛雨图片/表情素材由用户提供。不会自动下载受版权保护的素材；把文件放进这些目录即可。
     murasame_asset_dir: str = "./data/murasame_assets"
     murasame_image_subdir: str = "images"
     murasame_emoji_subdir: str = "emotes"
-    # Voice is deliberately opt-in and character-based. Each character can
-    # serve multiple languages through one unified profile.
+    # 语音默认关闭，并按角色选择音色。每个角色可用同一配置支持多种语言。
     voice_enabled: bool = False
     voice_provider: str = "openai_compatible"
     voice_api_url: str = ""
@@ -119,12 +113,10 @@ class Settings(BaseSettings):
     voice_name: str = "alloy"
     voice_profile_default: str = "murasame"
     voice_supports_language_fields: bool = False
-    # Comma-separated profile IDs licensed only for the configured primary
-    # OneBot account. Restricted profiles fail closed when event self_id is
-    # absent or differs from ONEBOT_SELF_ID.
+    # 逗号分隔的 profile ID 仅授权给配置中的主 OneBot 账号。
+    # 事件缺少 self_id 或其值与 ONEBOT_SELF_ID 不同，受限音色会拒绝使用。
     voice_primary_account_profile_ids: str = ""
-    # JSON object keyed by a safe internal id. User-facing menus only show
-    # the character label and supported languages.
+    # 按安全内部 ID 索引的 JSON 对象。菜单只显示角色名和支持的语言。
     voice_profiles_json: str = (
         '{"murasame":{"label":"小丛雨","voice":"murasame",'
         '"language":"zh","languages":"中 / 日 / 英","target_language":"zh",'
@@ -134,20 +126,18 @@ class Settings(BaseSettings):
     voice_timeout_seconds: float = 45
     voice_max_chars: int = 360
     voice_send_cooldown_seconds: int = 20
-    # Stable GPT-SoVITS sampling; unconstrained CPU sampling occasionally
-    # returns a short near-silent sample even with a valid HTTP 200 response.
+    # GPT-SoVITS 采样保持稳定；CPU 采样偶尔会在 HTTP 200 正常时
+    # 返回几乎静音的短音频。
     voice_seed: int = 17
     voice_top_k: int = 15
     voice_temperature: float = 0.8
     voice_repetition_penalty: float = 1.35
-    # Optional JSON map from GPT-SoVITS frontend language to a local SoVITS
-    # weight. Keeping this empty preserves the single configured/default model.
+    # 可选 JSON 映射，把 GPT-SoVITS 前端语言关联到本地 SoVITS 权重。
+    # 留空时沿用单一配置/默认模型。
     voice_sovits_weights_by_language_json: str = ""
-    # Optional nested profile -> language -> SoVITS weight map. This keeps
-    # distinct character checkpoints from being used across profiles.
+    # 可选的 profile -> language -> SoVITS 权重映射，避免不同角色误用对方的检查点。
     voice_sovits_weights_by_profile_json: str = ""
-    # Optional profile -> GPT checkpoint map. Once enabled, every selected
-    # profile requires an explicit route, including the default profile.
+    # 可选 profile -> GPT 检查点映射。启用后，每个 profile（包括默认角色）都必须有明确路由。
     voice_gpt_weights_by_profile_json: str = ""
     daily_news_enabled: bool = True
     daily_news_hour: int = 12
@@ -155,6 +145,8 @@ class Settings(BaseSettings):
     daily_news_timezone: str = "Asia/Shanghai"
     daily_news_group_lookback_days: int = 30
     cat_api_url: str = "https://cataas.com/cat/gif"
+    cat_giphy_enabled: bool = True
+    cat_giphy_page_url: str = "https://giphy.com/gifs/art-cat-HMDsITZh2SBGM"
     cat_timeout_seconds: float = 12
     cat_cache_size: int = 6
     pig_api_url: str = "https://commons.wikimedia.org/w/api.php"
@@ -165,8 +157,8 @@ class Settings(BaseSettings):
     netease_member_enabled: bool = False
     netease_member_bridge_url: str = "http://127.0.0.1:3010"
     netease_member_token_path: str = "./data/netease/bridge-token.txt"
-    # Singing runs in an isolated CUDA subprocess; conversational TTS stays
-    # on its configured backend. Never send a QQ record longer than 55s.
+    # 翻唱在隔离的 CUDA 子进程中运行；日常 TTS 继续使用原配置。
+    # QQ 语音留一点余量，最长 115 秒。
     singing_enabled: bool = False
     singing_hf_offline: bool = False
     singing_python: str = "./data/singing/runtime/.venv/Scripts/python.exe"
@@ -174,15 +166,22 @@ class Settings(BaseSettings):
     singing_ffmpeg_path: str = "./data/singing/runtime/bin/ffmpeg.exe"
     singing_ffprobe_path: str = "./data/singing/runtime/bin/ffprobe.exe"
     singing_use_trained_tts_reference: bool = True
-    # Keep singing references separate from conversational TTS. A reviewed
-    # singing recording may override a profile's original speech reference.
+    singing_prefer_recorded_reference: bool = True
+    # 翻唱参考音频与日常 TTS 参考音频分开配置。审核过的翻唱录音可覆盖角色的原说话参考音频。
     singing_real_reference_profile_ids: str = "murasame"
     singing_reference_audio_by_profile_json: str = "{}"
     singing_semitone_shift_by_profile_json: str = "{}"
     singing_target_median_f0_by_profile_json: str = "{}"
-    singing_vocal_target_rms: float = Field(default=0.099, ge=0.01, le=0.3)
+    singing_vocal_target_rms: float = Field(default=0.20, ge=0.01, le=0.3)
     singing_master_gain: float = Field(default=0.93, gt=0, le=1)
-    singing_chunk_seconds: float = Field(default=55, gt=0, le=55)
+    singing_chunk_seconds: float = Field(default=115, ge=5, le=115)
+    singing_clip_seconds: float = Field(default=20, ge=5, le=115)
+    singing_accompaniment_gain: float = Field(default=0.85, gt=0, le=1)
+    singing_vocal_background_gap_db: float = Field(default=3, ge=0, le=24)
+    singing_min_voiced_recall: float = Field(default=0.88, ge=0, le=1)
+    singing_min_energy_recall: float = Field(default=0.90, ge=0, le=1)
+    singing_max_missing_vocal_seconds: float = Field(default=1.2, ge=0, le=5)
+    help_menu_background_path: str = "./assets/help-menu-background.png"
     singing_max_song_seconds: float = Field(default=600, gt=0, le=1800)
     singing_max_source_bytes: int = Field(default=104857600, gt=0, le=524288000)
     singing_model_timeout_seconds: float = Field(default=900, ge=30, le=3600)
@@ -191,6 +190,8 @@ class Settings(BaseSettings):
     singing_cooldown_seconds: float = Field(default=120, ge=0)
     singing_segment_pause_seconds: float = Field(default=1.5, ge=0.5, le=30)
     singing_diffusion_steps: int = Field(default=35, ge=10, le=80)
+    singing_seed: int = Field(default=20261004, ge=0, le=4294967295)
+    singing_repair_f0_spikes: bool = False
     singing_inference_cfg_rate: float = Field(default=0.7, ge=0, le=2)
     singing_separation_model: str = Field(default="htdemucs_ft", pattern=r"^htdemucs(_ft)?$")
     singing_max_pitch_error_cents: float = Field(default=100, gt=0, le=200)
@@ -234,4 +235,5 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    # AstrBot 的工作目录可能不同，配置仍从本项目读取。
+    return Settings(_env_file=Path(__file__).resolve().parents[1] / ".env")

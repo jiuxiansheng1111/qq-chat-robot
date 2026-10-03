@@ -284,7 +284,7 @@ def resolve_ultraman_matches(
 
 
 def resolve_ultraman_query(query: str) -> Ultraman | None:
-    """Resolve an exact official name or common nickname without fuzzy chat matches."""
+    """精确匹配官方名称或常见昵称，不做模糊聊天匹配。"""
     matches = resolve_ultraman_matches(query)
     if len(matches) == 1 and matches[0].exact:
         return matches[0].hero
@@ -292,7 +292,7 @@ def resolve_ultraman_query(query: str) -> Ultraman | None:
 
 
 def ultraman_catalog_text_pages(max_chars: int = 1700) -> list[str]:
-    """Return complete plain-text fallback pages that stay below QQ message limits."""
+    """返回完整的纯文字回退页面，并控制在 QQ 消息长度限制内。"""
     pages: list[str] = []
     current = f"✦ 奥特曼图鉴 · 共 {len(ULTRAMAN_ROSTER)} 位/形态 ✦\n"
     for index, hero in enumerate(ULTRAMAN_ROSTER, start=1):
@@ -308,7 +308,7 @@ def ultraman_catalog_text_pages(max_chars: int = 1700) -> list[str]:
 
 
 def render_ultraman_catalog() -> str:
-    """Render the full roster as one readable, QQ-sendable JPEG catalog."""
+    """把完整角色名单绘制成一张清晰、可通过 QQ 发送的 JPEG 图鉴。"""
     columns = 3
     rows = math.ceil(len(ULTRAMAN_ROSTER) / columns)
     width = 1800
@@ -538,11 +538,11 @@ ULTRAMAN_DEBUT_YEARS = {
     "提欧奥特曼": 2026,
 }
 
-# The first version only contained one default form for each TV lead.  Keep the
-# catalog data here so every form is independently collectible without changing
-# the persistence schema (the database stores the display name as its key).
+# 第一版只给每个 TV 主角保留一个默认形态。这里扩充图鉴数据，
+# 让每个形态都能单独收藏，同时不改数据库结构；
+# 数据库仍用显示名作键。
 _EXPANDED_ULTRAMAN_DATA = (
-    # Official hero encyclopedia entries omitted by the original 30-character pool.
+    # 补上原来 30 位角色名单中漏掉的官方英雄百科条目。
     ("佐菲奥特曼", "zoffy", "", 1967, "宇宙警备队队长，M87光线拥有顶尖威力。", "多次在奥特兄弟陷入绝境时率领援军抵达。"),
     ("奥特之父", "father-of-ultra", "", 1972, "光之国宇宙警备队大队长，象征久经战火的领袖力量。", "在奥特大战争中守护光之国，并培养一代代年轻战士。"),
     ("奥特之母", "mother-of-ultra", "", 1973, "银十字军队长，拥有卓越的治愈与复苏能力。", "她以温柔而坚定的光守护宇宙警备队员。"),
@@ -567,7 +567,7 @@ _EXPANDED_ULTRAMAN_DATA = (
     ("利布特奥特曼", "ultraman-ribut", "", 2014, "银河救援队成员，使用利布特盾与精确格斗保护生命。", "活跃在多元宇宙救援前线，面对未知灾害总是率先出动。"),
     ("雷古洛思奥特曼", "ultraman-regulos", "", 2021, "掌握赤龙白虎拳的宇宙幻兽拳斗士。", "在D60修行并背负同门意志，于绝境中完成真正的传承。"),
     ("帝纳斯奥特曼", "ultraman-decker", "", 2023, "以怪兽卡片之力战斗的女性光之巨人。", "拉维安星少女帝纳斯得到戴拿之光后，以自己的方式延续希望。"),
-    # Legendary and dark Ultras. Some use an official related page when no hero entry exists.
+    # 传说中的黑暗奥特曼。有些角色没有独立英雄条目，就关联到官方页面。
     ("诺亚奥特曼", "ultraman-nexus", "", 2004, "跨越时空的究极光之巨人，拥有诺亚之翼与近乎神迹的力量。", "奈克瑟斯之光不断进化后显现的本来姿态，是传承与希望的终点。"),
     ("雷杰多奥特曼", "ultraman-cosmos", "", 2003, "高斯与杰斯提斯之光融合而成的宇宙传说，能够推动或化解终极能量。", "当两种正义真正达成一致时，宇宙意志让传说之光降临。"),
     ("赛迦奥特曼", "ultraman-zero", "/business/titlelist/8015", 2012, "由赛罗、戴拿与高斯的光和人类勇气共同诞生的奇迹战士。", "在未来地球的绝望战场上，三道跨越宇宙的光合为希望。"),
@@ -722,7 +722,7 @@ _FORM_IMAGE_HINTS = {
 }
 
 _FORM_IMAGE_DIRECT_URLS = {
-    # Manually verified against Tsuburaya's own page placement / rendered image.
+    # 已根据圆谷官网的页面位置和渲染图片人工核实。
     "格罗布奥特曼": (
         "https://tsuburaya-prod.com/wp-content/uploads/2018/12/"
         "%E3%82%A6%E3%83%AB%E3%83%88%E3%83%A9%E3%83%9E%E3%83%B3"
@@ -774,7 +774,7 @@ _FORM_IMAGE_DIRECT_URLS = {
 }
 
 _FORM_IMAGE_PAGE_URLS = {
-    # Tsuburaya's official store page has a dedicated Glitter Tiga product image.
+    # 圆谷官方商店页有专门的闪耀迪迦商品图。
     "闪耀迪迦": "https://store.m-78.jp/collections/tdg/products/4582769901454",
 }
 _FORM_IMAGE_SEARCH_QUERIES = {
@@ -1022,7 +1022,7 @@ _ENCYCLOPEDIA_IMAGE_ALIASES = {
 
 
 def ultraman_image_search_query(hero: Ultraman) -> str:
-    """Return the strongest single search term for this exact character/form."""
+    """为这个精确角色/形态返回最有辨识度的单个搜索词。"""
     explicit = _FORM_IMAGE_SEARCH_QUERIES.get(hero.name)
     if explicit:
         return explicit
@@ -1032,11 +1032,9 @@ def ultraman_image_search_query(hero: Ultraman) -> str:
 
 
 def ultraman_image_aliases(hero: Ultraman) -> tuple[str, ...]:
-    """Aliases allowed to validate an image as the requested character/form.
+    """用于核验图片是否属于指定角色/形态的允许别名。
 
-    Independent forms deliberately exclude conversational nicknames such as
-    "强力型" / "暗耀形态" on their own. Those short aliases are useful for chat
-    parsing but are too weak to prove that an image belongs to the correct hero.
+    独立形态不接受“强力型”“暗耀形态”等口语简称单独作为依据。这些短名称可用于聊天解析，但无法证明图片属于哪个英雄。
     """
     values: list[str] = [hero.name]
     values.extend(_FORM_ALT_NAMES.get(hero.name, ()))
@@ -1111,8 +1109,8 @@ def _normalize_image_descriptor(value: str) -> str:
 
 
 def _official_form_terms(hero: Ultraman) -> tuple[str, ...]:
-    # Only full canonical/formal aliases are accepted. Never auto-add the bare
-    # suffix after "·": labels like "强力型" or "空中型" can belong to multiple heroes.
+    # 只接受完整的正式名称或别名。不要自动补上“·”之后的
+    # 裸形态名，因为“强力型”“空中型”等名称可能属于多个英雄。
     values = list(ultraman_image_aliases(hero))
     generic = {
         _normalize_image_descriptor(value)
@@ -1163,10 +1161,9 @@ class _OfficialSearchImageParser(HTMLParser):
 
 
 async def official_ultraman_search_image(hero: Ultraman, settings: Settings) -> str:
-    """Find a form-specific image on official Tsuburaya/M78 pages.
+    """从圆谷/M78 官方页面查找指定形态的图片。
 
-    This never accepts a page-level hero/banner image. The individual image
-    element's label or filename itself must name the requested form.
+    不接受页面级英雄横幅。图片元素自己的标签或文件名必须明确写出该形态。
     """
     if not is_ultraman_form_variant(hero):
         raise RuntimeError("官方站内精确图片搜索仅用于独立形态")
@@ -1247,7 +1244,7 @@ async def official_ultraman_search_image(hero: Ultraman, settings: Settings) -> 
 
 
 def _official_image_candidates(image_url: str) -> tuple[str, ...]:
-    """Keep the encoded path intact when the legacy official image host redirects."""
+    """旧版官方图片主机跳转时，保留原有百分号编码路径。"""
     if image_url.startswith("http://"):
         image_url = "https://" + image_url.removeprefix("http://")
     if not image_url.startswith("https://"):
@@ -1256,9 +1253,9 @@ def _official_image_candidates(image_url: str) -> tuple[str, ...]:
     parts = urlsplit(image_url)
     candidates: list[str] = []
     if parts.hostname == "en.tsuburaya-prod.co.jp":
-        # That host currently redirects Japanese filenames after decoding them as
-        # latin-1, producing a mojibake path and a 404. Switching only the host
-        # preserves the original percent-encoded UTF-8 path on the same official CDN.
+        # 这个主机目前会把日文文件名解码成 latin-1 再跳转，
+        # 造成乱码路径并返回 404。只换主机名可以
+        # 在同一个官方 CDN 上保留原有 UTF-8 百分号编码路径。
         candidates.append(
             urlunsplit(
                 ("https", "tsuburaya-prod.com", parts.path, parts.query, "")
@@ -1306,8 +1303,8 @@ async def official_ultraman_image(hero: Ultraman, settings: Settings) -> str:
                         _official_image_candidates(urljoin(page_url, hinted))
                     )
 
-            # Base characters may safely use the page's og:image. Independent
-            # forms need a dedicated page, verified direct image, or exact match.
+            # 基础角色可以安全使用页面的 og:image。独立形态必须有
+            # 专属页面、核实过的直链或精确匹配图片。
             if dedicated_page or not is_ultraman_form_variant(hero):
                 candidate_urls.extend(_official_image_candidates(parser.image_url))
 
@@ -1333,7 +1330,7 @@ ULTRAMAN_IMAGE_BACKGROUND = (32, 48, 78)
 
 
 def normalize_ultraman_source_image(source: Image.Image) -> Image.Image:
-    """Flatten transparent artwork onto a visible Ultra-themed background."""
+    """把透明图片合成到清晰可见的奥特曼主题背景上。"""
     if source.mode in {"RGBA", "LA"} or "transparency" in source.info:
         rgba = source.convert("RGBA")
         background = Image.new(
@@ -1353,10 +1350,10 @@ def render_ultraman_card(
         target_width, target_height = 900, 1200
         source_ratio = source.width / max(1, source.height)
         if source_ratio > 1.2:
-            # A cover crop of a broad banner often removes the actual hero —
-            # Geed Royal Mega-Master's old two-pose banner was cut exactly
-            # between its subjects. Keep the complete source on a subdued
-            # fitted backdrop instead, so a form's silhouette stays legible.
+            # 宽横幅裁切后常会把英雄主体切掉——
+            # 旧版捷德皇家至尊双人横幅正好在两个角色中间被切开。
+            # 改用完整原图放在较暗的衬底上，
+            # 保留形态剪影，方便辨认。
             backdrop = ImageOps.fit(
                 source,
                 (target_width, target_height),
@@ -1428,7 +1425,7 @@ def render_ultraman_card(
 
 
 def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """Load a CJK-capable font on Windows/Linux, with a portable final fallback."""
+    """在 Windows/Linux 上加载支持中日韩文字的字体，并保留可移植的最终回退字体。"""
     for candidate in FONT_CANDIDATES:
         try:
             return ImageFont.truetype(candidate, size)

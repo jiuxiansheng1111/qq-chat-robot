@@ -1,4 +1,4 @@
-"""Song-to-character singing pipeline, separate from conversational TTS."""
+"""歌曲转角色翻唱流程，独立于对话 TTS。"""
 
 from __future__ import annotations
 
@@ -10,16 +10,26 @@ import math
 import re
 import shutil
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from contextlib import suppress
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Literal
 
 from app.config import Settings
 from app.services.audio_chunks import (
     AudioChunk,
     locate_audio_tool,
     run_audio_command,
-    split_audio_for_qq,
 )
+from app.services.singing_excerpt import (
+    SingingExcerpt,
+    format_excerpt_lrc,
+    select_singing_excerpt,
+    shift_excerpt_lyrics,
+)
+from app.services.singing_gpu import async_gpu_lock
+from app.services.singing_mix import vocal_forward_mix_filter, wav_rms
+from app.services.singing_sections import plan_paused_sections
 from app.services.singing_sources import (
     SINGING_DATA_ROOT,
     SingingSong,
@@ -39,7 +49,7 @@ Progress = Callable[[str], Awaitable[None]]
 
 
 def singing_job_directory(job_id: str) -> Path:
-    """Confine job files, including resolved symlinks, to the jobs directory."""
+    """将作业文件及其解析后的符号链接都限制在 jobs 目录内。"""
     if not re.fullmatch(r"[a-f0-9]{32}", job_id):
         raise ValueError("Invalid singing job ID")
     singing_root = SINGING_DATA_ROOT.resolve()
@@ -59,7 +69,7 @@ def cleanup_singing_job(job_id: str) -> None:
 
 
 def archive_singing_job(job_id: str, *, keep: int = 5) -> None:
-    """Keep a bounded number of completed covers for local listening."""
+    """限制本地试听时保留的已完成翻唱数量。"""
     directory = singing_job_directory(job_id)
     if not directory.is_dir():
         return
@@ -71,10 +81,17 @@ def archive_singing_job(job_id: str, *, keep: int = 5) -> None:
     if review.parent != root:
         raise ValueError("Singing result directory escapes its root")
     review.mkdir(parents=True, exist_ok=True)
-    for name in ("cover.wav", "lyrics.lrc", "quality.json", "quality_retry.json", "pitch_plan.json"):
+    for name in (
+        "cover.wav", "lyrics.lrc", "quality.json", "quality_retry.json",
+        "pitch_plan.json", "selection.json", "voice_reference.wav",
+        "vocal_before.wav", "vocal_after.wav",
+    ):
         path = directory / name
         if path.is_file():
             shutil.move(str(path), str(review / name))
+    chunks = directory / "chunks"
+    if chunks.is_dir() and not (review / "chunks").exists():
+        shutil.move(str(chunks), str(review / "chunks"))
     previous = sorted(
         (path for path in root.iterdir() if re.fullmatch(r"[a-f0-9]{32}", path.name)
          and path.is_dir() and not path.is_symlink()),
@@ -87,7 +104,7 @@ def archive_singing_job(job_id: str, *, keep: int = 5) -> None:
 
 
 class SingingPipelineError(RuntimeError):
-    """A safe, actionable error that may be shown to a group member."""
+    """可安全展示给群成员的明确错误提示。"""
 
 
 @dataclass(frozen=True)
@@ -95,6 +112,7 @@ class SingingCommand:
     action: str
     query: str = ""
     profile_id: str | None = None
+    mode: Literal["full", "clip"] = "full"
 
 
 @dataclass(frozen=True)
@@ -106,12 +124,38 @@ class SingingCover:
     chunks: tuple[AudioChunk, ...]
     quality: dict
     pitch_shift_semitones: int = 0
+    mode: Literal["full", "clip"] = "full"
+    source_start_seconds: float = 0
+    source_end_seconds: float | None = None
+
+
+@dataclass(frozen=True)
+class SingingDelivery:
+    song: SingingSong
+    label: str
+    chunk: AudioChunk
+    index: int
+    total: int
+    mode: Literal["full", "clip"]
+    pitch_shift_semitones: int
+
+
+ChunkDelivery = Callable[[SingingDelivery], Awaitable[None]]
+
+
+def _take_singing_mode(query: str, mode: Literal["full", "clip"]) -> tuple[str, Literal["full", "clip"]]:
+    # 模式词要单独写，别把歌名里的“片段”误删了。
+    match = re.match(r"^(片段|部分|完整|整首|整曲|clip|full)(?=$|[\s:：])", query, re.IGNORECASE)
+    if not match:
+        return query, mode
+    selected = "clip" if match.group(1).casefold() in {"片段", "部分", "clip"} else "full"
+    return query[match.end():].strip(" ：:"), selected
 
 
 def parse_singing_command(
     text: str, profiles: Mapping[str, Mapping[str, object]], *, addressed: bool
 ) -> SingingCommand | None:
-    """Require a slash command or a real bot mention; keep titles intact."""
+    """需要斜杠命令或真正的机器人 @；歌曲标题保持原样。"""
     candidate = text.strip()
     controls = {
         "唱歌状态": "status", "翻唱状态": "status",
@@ -121,17 +165,28 @@ def parse_singing_command(
     lowered = candidate.removeprefix("/")
     if (addressed or candidate.startswith("/")) and lowered in controls:
         return SingingCommand(controls[lowered])
-    prefixes = ("/唱歌", "/翻唱", "/sing", "/cover")
+    prefixes = (
+        ("/唱歌片段", "clip"), ("/翻唱片段", "clip"),
+        ("/唱歌完整", "full"), ("/翻唱完整", "full"),
+        ("/唱歌", "full"), ("/翻唱", "full"), ("/sing", "full"), ("/cover", "full"),
+    )
     if addressed:
-        prefixes += ("帮我唱", "唱一首", "唱歌", "翻唱")
-    for prefix in prefixes:
+        prefixes += (
+            ("帮我唱一段", "clip"), ("帮我唱几句", "clip"),
+            ("唱歌片段", "clip"), ("翻唱片段", "clip"),
+            ("唱歌完整", "full"), ("翻唱完整", "full"),
+            ("唱一段", "clip"), ("唱几句", "clip"),
+            ("帮我唱", "full"), ("唱一首", "full"), ("唱歌", "full"), ("翻唱", "full"),
+        )
+    for prefix, mode in prefixes:
         if candidate.casefold().startswith(prefix.casefold()):
             if prefix.isascii() and len(candidate) > len(prefix) and not candidate[len(prefix)].isspace():
                 continue
             query = candidate[len(prefix):].strip(" ：:")[:160]
+            query, mode = _take_singing_mode(query, mode)
             profile_id = None
-            # An explicit voice requires a separating space/colon so a title
-            # containing a character's name cannot silently lose its prefix.
+            # 用户明确指定音色时，名称与歌名之间必须有空格或冒号，
+            # 避免把歌曲标题误读成音色。
             match = re.match(r"([^\s:：]+)[\s:：]+(.+)", query, flags=re.DOTALL)
             if match:
                 requested = match.group(1)
@@ -146,7 +201,8 @@ def parse_singing_command(
                     profile_id = matches[0] if len(matches) == 1 else None
                 if profile_id:
                     query = match.group(2).strip()
-            return SingingCommand("sing", query, profile_id)
+                    query, mode = _take_singing_mode(query, mode)
+            return SingingCommand("sing", query, profile_id, mode)
     return None
 
 
@@ -193,7 +249,7 @@ def _automatic_pitch_target(settings: Settings, profile_id: str) -> float | None
         for key, value in targets.items()
     ):
         raise SingingPipelineError("自动音区配置无效，请管理员检查。")
-    # An explicit manual value, including zero, takes precedence.
+    # 手动指定的音高优先，包括明确设置为 0 的情况。
     _voice_pitch_shift_for_profile(settings, profile_id)
     if profile_id in json.loads(settings.singing_semitone_shift_by_profile_json):
         return None
@@ -201,13 +257,17 @@ def _automatic_pitch_target(settings: Settings, profile_id: str) -> float | None
     return float(value) if value is not None else None
 
 
-def _vocal_mix_gain(report: dict, settings: Settings) -> float:
+def _vocal_mix_gain(report: dict, settings: Settings, background_rms: float = 0) -> float:
     rms = report.get("converted_rms")
     if isinstance(rms, bool) or not isinstance(rms, (int, float)) or not math.isfinite(rms) or rms <= 0:
         raise SingingPipelineError("歌声音量检查结果无效，已停止混音。")
-    # A constant gain keeps phrasing and dynamics; cap boosts for very quiet
-    # tracks rather than amplifying their noise without a bound.
-    return max(0.1, min(4.0, settings.singing_vocal_target_rms / rms))
+    # 伴奏保留原音量，弱人声才补增益，最多放大四倍。
+    target = max(
+        settings.singing_vocal_target_rms,
+        background_rms * settings.singing_accompaniment_gain
+        * 10 ** (settings.singing_vocal_background_gap_db / 20),
+    )
+    return max(1.0, min(4.0, target / rms))
 
 
 async def _plan_automatic_pitch(
@@ -252,8 +312,10 @@ def singing_voice_menu(settings: Settings, bot_self_id: str) -> str:
         "角色翻唱音色：" + "、".join(names)
         + "\n@我 唱歌 歌名：使用当前选定的角色"
         + "\n@我 翻唱 芳乃 歌名：临时指定音色"
+        + f"\n@我 翻唱片段 芳乃 歌名：唱约 {settings.singing_clip_seconds:g} 秒的几句歌词"
+        + "\n@我 翻唱完整 芳乃 歌名：唱整首"
         + "\n@我 唱歌状态 / 取消唱歌"
-        + "\n完整歌曲自动切为每段不超过 55 秒的语音。"
+        + "\n整首歌在句间停顿处分段，生成一段就发一段，每段不超过 115 秒。"
     )
 
 
@@ -270,7 +332,7 @@ def _checkpoint_for_profile(profile_id: str) -> tuple[Path, Path] | None:
         raise SingingPipelineError("唱歌音色配置无法读取，请管理员检查。") from exc
     if entry is None:
         return None
-    # Training candidates stay inactive until an operator accepts a sample.
+    # 训练候选模型在操作者验收样音前保持未启用状态。
     if not isinstance(entry, dict) or entry.get("accepted") is not True:
         raise SingingPipelineError("这个唱歌音色的训练结果尚未验收，请先验收后启用。")
     result = []
@@ -308,13 +370,18 @@ async def prepare_voice_reference(
     override = reference_overrides.get(profile_id)
     if override is not None and (not isinstance(override, str) or not override.strip()):
         raise SingingPipelineError("这个角色的翻唱参考录音路径无效。")
+    recorded = str(profile.get("ref_audio_path") or "")
+    if override is None and settings.singing_prefer_recorded_reference and recorded:
+        recorded_path = _project_path(recorded)
+        if recorded_path.is_file():
+            return recorded_path
     if (
         settings.singing_use_trained_tts_reference
         and profile_id not in real_reference_profiles
         and override is None
     ):
-        # The trained speech model produces the timbre reference only. The
-        # song's timing and pitch come from the original singing, never TTS.
+        # 训练好的语音模型只提供音色参考。
+        # 歌曲的节奏和音高仍来自原唱，不会使用 TTS。
         supported = profile.get("supported_languages") or ["zh"]
         language = "zh" if "zh" in supported else str(supported[0])
         phrase = {
@@ -364,6 +431,8 @@ async def convert_vocals(
         "--source", str(source), "--target", str(reference), "--output", str(output_dir),
         "--diffusion-steps", str(steps or settings.singing_diffusion_steps),
         "--inference-cfg-rate", str(settings.singing_inference_cfg_rate),
+        "--seed", str(settings.singing_seed),
+        "--repair-f0-spikes" if settings.singing_repair_f0_spikes else "--no-repair-f0-spikes",
         "--semitone-shift", str(semitone_shift),
     ]
     checkpoint = _checkpoint_for_profile(profile_id)
@@ -392,7 +461,13 @@ async def check_cover_quality(
         [python, PROJECT_ROOT / "scripts" / "check_singing_quality.py",
          "--seed-root", seed_root, "--source", source, "--converted", converted,
          "--reference", reference, "--output", output,
+         "--max-pitch-cents", str(settings.singing_max_pitch_error_cents),
+         "--min-voice-similarity", str(settings.singing_min_voice_similarity),
+         "--max-duration-error", "0.01",
          "--expected-semitone-shift", str(expected_semitone_shift),
+         "--min-voiced-recall", str(settings.singing_min_voiced_recall),
+         "--min-energy-recall", str(settings.singing_min_energy_recall),
+         "--max-missing-vocal-seconds", str(settings.singing_max_missing_vocal_seconds),
          *(["--offline"] if settings.singing_hf_offline else [])],
         cwd=seed_root, timeout_seconds=settings.singing_model_timeout_seconds,
     )
@@ -402,6 +477,10 @@ async def check_cover_quality(
     problems = quality_failures(
         report, max_pitch_median_cents=settings.singing_max_pitch_error_cents,
         min_voice_similarity=settings.singing_min_voice_similarity,
+        max_duration_error_ratio=0.01,
+        min_voiced_recall=settings.singing_min_voiced_recall,
+        min_energy_recall=settings.singing_min_energy_recall,
+        max_missing_vocal_seconds=settings.singing_max_missing_vocal_seconds,
     )
     if problems:
         raise SingingPipelineError("这次歌声未通过音准/音色检查：" + "；".join(problems))
@@ -418,8 +497,109 @@ async def _validate_model_audio(
     ))
     seconds = float(payload["format"]["duration"])
     if (not 0.1 <= seconds <= settings.singing_max_song_seconds + 1
-            or abs(seconds - expected_seconds) > max(1, expected_seconds * 0.03)):
+            or abs(seconds - expected_seconds) > max(0.15, expected_seconds * 0.005)):
         raise SingingPipelineError("模型生成的音频时长异常，已停止生成。")
+
+
+async def _render_singing_section(
+    vocals: Path, accompaniment: Path, reference: Path, directory: Path,
+    profile_id: str, seconds: float, voice_shift: int, settings: Settings,
+    ffmpeg: Path, ffprobe: Path, progress: Progress,
+    *, record_pause_seconds: float = 0,
+) -> tuple[Path, Path, dict]:
+    directory.mkdir(parents=True, exist_ok=True)
+    source_rms = await asyncio.to_thread(wav_rms, vocals)
+    background_rms = await asyncio.to_thread(wav_rms, accompaniment)
+    if source_rms < 0.0003:
+        # 纯伴奏段也保留，别让整首歌少一截。
+        converted = vocals
+        report = {"accepted": True, "kind": "instrumental", "converted_rms": 0.0}
+        vocal_gain = 1.0
+    else:
+        converted = await convert_vocals(
+            vocals, reference, directory / "converted", profile_id, settings,
+            semitone_shift=voice_shift,
+        )
+        await _validate_model_audio(converted, ffprobe, seconds, settings)
+        try:
+            report = await check_cover_quality(
+                vocals, converted, reference, directory / "quality.json", settings,
+                expected_semitone_shift=voice_shift,
+            )
+        except SingingPipelineError:
+            await progress("这一段有音准或人声缺失问题，正在提高精度重试")
+            converted = await convert_vocals(
+                vocals, reference, directory / "retry", profile_id, settings,
+                steps=min(80, settings.singing_diffusion_steps + 15),
+                semitone_shift=voice_shift,
+            )
+            await _validate_model_audio(converted, ffprobe, seconds, settings)
+            report = await check_cover_quality(
+                vocals, converted, reference, directory / "quality_retry.json", settings,
+                expected_semitone_shift=voice_shift,
+            )
+        vocal_gain = _vocal_mix_gain(report, settings, background_rms)
+    vocal_level = (
+        float(report["converted_rms"]) * vocal_gain
+        if source_rms >= 0.0003 else settings.singing_vocal_target_rms
+    )
+    background_gain = settings.singing_accompaniment_gain if background_rms > 0 else 0
+    accompaniment_shift = _accompaniment_pitch_shift(voice_shift)
+    if accompaniment_shift:
+        shifted = directory / "accompaniment_shifted.wav"
+        python, seed_root, _, _ = runtime_paths(settings)
+        await run_audio_command(
+            [python, PROJECT_ROOT / "scripts" / "transpose_singing_audio.py",
+             "--input", accompaniment, "--output", shifted,
+             "--semitones", str(accompaniment_shift)],
+            cwd=seed_root, timeout_seconds=settings.singing_model_timeout_seconds,
+        )
+        await _validate_model_audio(shifted, ffprobe, seconds, settings)
+        accompaniment = shifted
+    if directory.name == "001":
+        for input_audio, name in ((vocals, "vocal_before.wav"), (converted, "vocal_after.wav")):
+            await run_audio_command(
+                [ffmpeg, "-v", "error", "-nostdin", "-y", "-i", input_audio,
+                 "-t", "20", "-ar", "32000", "-ac", "1", "-c:a", "pcm_s16le",
+                 directory.parents[1] / name],
+            )
+    mixed = directory / "mixed.wav"
+    await run_audio_command(
+        [ffmpeg, "-v", "error", "-nostdin", "-y", "-i", converted, "-i", accompaniment,
+         "-filter_complex", vocal_forward_mix_filter(
+             vocal_gain, background_gain, settings.singing_master_gain, seconds,
+         ), "-t", f"{seconds:.6f}", "-fs", str(settings.singing_max_source_bytes * 2),
+         "-ar", "44100", "-ac", "2", "-c:a", "pcm_s16le", mixed],
+    )
+    await _validate_model_audio(mixed, ffprobe, seconds, settings)
+    record = directory / "record.wav"
+    record_seconds = seconds + record_pause_seconds
+    await run_audio_command(
+        [ffmpeg, "-v", "error", "-nostdin", "-y", "-i", mixed,
+         *(["-af", f"apad=pad_dur={record_pause_seconds:.6f}"] if record_pause_seconds else []),
+         "-t", f"{record_seconds:.6f}", "-ar", "32000", "-ac", "1", "-c:a", "pcm_s16le", record],
+    )
+    await _validate_model_audio(record, ffprobe, record_seconds, settings)
+    record_info = json.loads(await run_audio_command(
+        [ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "json", record]
+    ))
+    if float(record_info["format"]["duration"]) >= 120:
+        raise SingingPipelineError("这一段超过 QQ 两分钟上限，已停止发送。")
+    report.update({
+        "profile_id": profile_id, "voice_pitch_shift_semitones": voice_shift,
+        "accompaniment_pitch_shift_semitones": accompaniment_shift,
+        "vocal_mix_gain": vocal_gain, "accompaniment_mix_gain": background_gain,
+        "vocal_estimated_rms": vocal_level,
+        "accompaniment_rms": background_rms,
+        "vocal_target_rms": settings.singing_vocal_target_rms,
+        "vocal_background_gap_db": settings.singing_vocal_background_gap_db,
+        "master_gain": settings.singing_master_gain,
+        "record_pause_seconds": record_pause_seconds,
+    })
+    (directory / "report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8",
+    )
+    return mixed, record, report
 
 
 async def generate_singing_cover(
@@ -430,29 +610,90 @@ async def generate_singing_cover(
     progress: Progress,
     *,
     bot_self_id: str,
+    mode: Literal["full", "clip"] = "full",
+    on_chunk: ChunkDelivery | None = None,
 ) -> SingingCover:
+    """训练和翻唱轮流用显卡，避免同时生成时爆显存。"""
+    async with async_gpu_lock():
+        return await _generate_singing_cover_unlocked(
+            query, profile_id, job_id, settings, progress,
+            bot_self_id=bot_self_id, mode=mode, on_chunk=on_chunk,
+        )
+
+
+async def _generate_singing_cover_unlocked(
+    query: str,
+    profile_id: str,
+    job_id: str,
+    settings: Settings,
+    progress: Progress,
+    *,
+    bot_self_id: str,
+    mode: Literal["full", "clip"] = "full",
+    on_chunk: ChunkDelivery | None = None,
+) -> SingingCover:
+    if mode not in {"full", "clip"}:
+        raise SingingPipelineError("翻唱模式无效，请选择完整或片段。")
     voice_pitch_shift = _voice_pitch_shift_for_profile(settings, profile_id)
     pitch_target = _automatic_pitch_target(settings, profile_id)
     job_dir = singing_job_directory(job_id)
     python, seed_root, ffmpeg, ffprobe = runtime_paths(settings)
     job_dir.mkdir(parents=True, exist_ok=False)
+    delivered = 0
     try:
         await progress("正在查找原曲和歌词")
         song = await resolve_singing_song(query, settings)
         if song.track.duration_seconds > settings.singing_max_song_seconds:
             raise SingingPipelineError("歌曲超过当前唱歌时长上限，请选择更短的歌曲。")
         source = await download_singing_source(song, job_dir, settings)
-        # Decode with a hard limit before GPU work; reject, never silently clip.
+        # 先核对完整原曲，再按用户选的模式截取。
         info = json.loads(await run_audio_command(
             [ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "json", source]
         ))
         duration = float(info["format"]["duration"])
         if not 1 <= duration <= settings.singing_max_song_seconds:
             raise SingingPipelineError("歌曲实际时长超出范围，已停止生成。")
-        reference = await prepare_voice_reference(profile_id, job_dir, settings, bot_self_id)
+        expected = song.track.duration_seconds
+        if expected > 0 and abs(duration - expected) > max(2, expected * 0.03):
+            raise SingingPipelineError("原曲文件时长与歌曲信息不一致，已停止生成。")
+        selection = SingingExcerpt(0, duration, "完整歌曲")
+        if mode == "clip":
+            selection = select_singing_excerpt(
+                song.lyric_lines, duration, settings.singing_clip_seconds,
+                settings.singing_chunk_seconds,
+                ignore_texts=(song.track.title, *song.track.artists),
+                song_title=song.track.title,
+                song_artists=song.track.artists,
+            )
+            clipped = job_dir / "excerpt.wav"
+            await progress(f"已选出约 {selection.duration_seconds:.0f} 秒的几句歌词")
+            await run_audio_command(
+                [ffmpeg, "-v", "error", "-nostdin", "-y", "-i", source,
+                 "-ss", f"{selection.start_seconds:.6f}",
+                 "-t", f"{selection.duration_seconds:.6f}", "-ar", "44100", "-ac", "2",
+                 "-c:a", "pcm_s16le", clipped],
+            )
+            source = clipped
+            duration = selection.duration_seconds
+            lines = shift_excerpt_lyrics(song.lyric_lines, selection)
+            song = replace(song, lyric_lines=lines, lyrics_text=format_excerpt_lrc(lines))
+        (job_dir / "selection.json").write_text(json.dumps({
+            "mode": mode, "song_id": song.track.song_id, "profile_id": profile_id,
+            "source_start_seconds": selection.start_seconds,
+            "source_end_seconds": selection.end_seconds, "reason": selection.reason,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        raw_reference = await prepare_voice_reference(profile_id, job_dir, settings, bot_self_id)
+        reference = job_dir / "voice_reference.wav"
+        if raw_reference.resolve() == reference.resolve():
+            raw_reference = job_dir / "voice_reference_input.wav"
+            reference.rename(raw_reference)
+        await run_audio_command(
+            [ffmpeg, "-v", "error", "-nostdin", "-y", "-i", raw_reference,
+             "-t", "20", "-ar", "44100", "-ac", "1", "-c:a", "pcm_s16le", reference],
+        )
         await progress(f"已找到《{song.track.title}》，正在分离原唱人声和伴奏")
-        # Separate first, unload Demucs, then run the singing model. Only one
-        # GPU task is admitted by SingingJobManager, limiting laptop VRAM.
+        # 先分离音轨并卸载 Demucs，再运行翻唱模型。
+        # SingingJobManager 每次只允许一个 GPU 任务，减少笔记本显存压力。
         await run_audio_command(
             [python, PROJECT_ROOT / "scripts" / "run_singing_separation.py",
              "--ffmpeg", ffmpeg, "--source", source, "--output", job_dir / "separated",
@@ -465,6 +706,18 @@ async def generate_singing_cover(
             raise SingingPipelineError("歌曲的人声/伴奏分离失败。")
         for stem in (vocals, accompaniment):
             await _validate_model_audio(stem, ffprobe, duration, settings)
+        analysis = job_dir / "vocal_pauses.wav"
+        await run_audio_command(
+            [ffmpeg, "-v", "error", "-nostdin", "-y", "-i", vocals,
+             "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", analysis],
+        )
+        try:
+            sections = await asyncio.to_thread(
+                plan_paused_sections, analysis, song.lyric_lines,
+                duration, settings.singing_chunk_seconds,
+            )
+        except ValueError as exc:
+            raise SingingPipelineError(str(exc)) from exc
         pitch_plan = {"mode": "fixed", "expected_semitone_shift": voice_pitch_shift}
         if pitch_target is not None:
             await progress("正在为角色选择适合这首歌的音区")
@@ -472,83 +725,88 @@ async def generate_singing_cover(
                 vocals, pitch_target, job_dir / "pitch_plan.json", settings
             )
             voice_pitch_shift = pitch_plan["expected_semitone_shift"]
-        accompaniment_pitch_shift = _accompaniment_pitch_shift(voice_pitch_shift)
-        await progress("正在按原曲节奏和角色音区生成歌声")
-        converted = await convert_vocals(
-            vocals, reference, job_dir / "converted", profile_id, settings,
-            semitone_shift=voice_pitch_shift,
-        )
-        await _validate_model_audio(converted, ffprobe, duration, settings)
-        await progress("正在检查音准、音色和音频完整性")
-        quality_path = job_dir / "quality.json"
-        try:
-            report = await check_cover_quality(
-                vocals, converted, reference, quality_path, settings,
-                expected_semitone_shift=voice_pitch_shift,
+        label = str(voice_profiles(settings)[profile_id].get("label") or profile_id)
+        chunks: list[AudioChunk] = []
+        reports: list[dict] = []
+        mixes: list[Path] = []
+        record_dir = job_dir / "chunks"
+        record_dir.mkdir()
+        (job_dir / "lyrics.lrc").write_text(song.lyrics_text, encoding="utf-8")
+        report = {
+            "accepted": True, "mode": mode, "profile_id": profile_id,
+            "voice_pitch_shift_semitones": voice_pitch_shift,
+            "accompaniment_pitch_shift_semitones": _accompaniment_pitch_shift(voice_pitch_shift),
+            "pitch_plan": pitch_plan, "reference_audio": str(reference),
+            "has_timed_lyrics": bool(song.lyric_lines), "segments": reports,
+            "source_start_seconds": selection.start_seconds,
+            "source_end_seconds": selection.end_seconds,
+        }
+        for index, section in enumerate(sections, 1):
+            await progress(f"正在生成第 {index}/{len(sections)} 段，完成后立即发送")
+            directory = job_dir / "parts" / f"{index:03d}"
+            directory.mkdir(parents=True)
+            part_vocals, part_background = directory / "vocals.wav", directory / "background.wav"
+            # 人声和伴奏使用同一起止点，不丢失句间停顿。
+            for original, output, channels in (
+                (vocals, part_vocals, 1), (accompaniment, part_background, 2),
+            ):
+                await run_audio_command(
+                    [ffmpeg, "-v", "error", "-nostdin", "-y", "-i", original,
+                     "-ss", f"{section.start_seconds:.6f}",
+                     "-t", f"{section.duration_seconds:.6f}",
+                     "-af", "alimiter=limit=0.98:latency=1:level=false",
+                     "-ar", "44100", "-ac", str(channels), "-c:a", "pcm_s16le", output],
+                )
+                await _validate_model_audio(output, ffprobe, section.duration_seconds, settings)
+            mixed, record, part_report = await _render_singing_section(
+                part_vocals, part_background, reference, directory, profile_id,
+                section.duration_seconds, voice_pitch_shift, settings, ffmpeg, ffprobe, progress,
+                record_pause_seconds=getattr(section, "pause_seconds", 0),
             )
-        except SingingPipelineError:
-            await progress("正在用更高精度重试歌声转换")
-            converted = await convert_vocals(
-                vocals, reference, job_dir / "retry", profile_id, settings,
-                steps=min(80, settings.singing_diffusion_steps + 15),
-                semitone_shift=voice_pitch_shift,
+            saved_record = record_dir / f"{index:03d}.wav"
+            shutil.move(str(record), str(saved_record))
+            chunk = AudioChunk(
+                saved_record, selection.start_seconds + section.start_seconds,
+                selection.start_seconds + section.end_seconds,
+                section.duration_seconds + getattr(section, "pause_seconds", 0),
+                saved_record.stat().st_size,
             )
-            await _validate_model_audio(converted, ffprobe, duration, settings)
-            quality_path = job_dir / "quality_retry.json"
-            report = await check_cover_quality(
-                vocals, converted, reference, quality_path, settings,
-                expected_semitone_shift=voice_pitch_shift,
+            part_report.update({
+                "index": index, "source_start_seconds": chunk.start_seconds,
+                "source_end_seconds": chunk.end_seconds, "boundary_reason": section.reason,
+            })
+            reports.append(part_report)
+            mixes.append(mixed)
+            chunks.append(chunk)
+            (job_dir / "quality.json").write_text(
+                json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8",
             )
-        report["voice_pitch_shift_semitones"] = voice_pitch_shift
-        report["accompaniment_pitch_shift_semitones"] = accompaniment_pitch_shift
-        report["pitch_plan"] = pitch_plan
-        report["reference_audio"] = str(reference)
-        report["has_timed_lyrics"] = bool(song.lyric_lines)
-        vocal_gain = _vocal_mix_gain(report, settings)
-        report["vocal_mix_gain"] = vocal_gain
-        report["vocal_target_rms"] = settings.singing_vocal_target_rms
-        report["master_gain"] = settings.singing_master_gain
-        quality_path.write_text(
-            json.dumps(report, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        mix_accompaniment = accompaniment
-        if accompaniment_pitch_shift:
-            mix_accompaniment = job_dir / "accompaniment_pitch_shifted.wav"
-            await run_audio_command(
-                [python, PROJECT_ROOT / "scripts" / "transpose_singing_audio.py",
-                 "--input", accompaniment, "--output", mix_accompaniment,
-                 "--semitones", str(accompaniment_pitch_shift)],
-                cwd=seed_root, timeout_seconds=settings.singing_model_timeout_seconds,
-            )
-            await _validate_model_audio(mix_accompaniment, ffprobe, duration, settings)
+            if on_chunk is not None:
+                await on_chunk(SingingDelivery(
+                    song, label, chunk, index, len(sections), mode, voice_pitch_shift,
+                ))
+                delivered = index
+        # QQ 已逐段收到；合并文件只用于本地回听和归档。
+        concat = job_dir / "mixes.txt"
+        concat.write_text("".join(
+            f"file 'parts/{index:03d}/mixed.wav'\n" for index in range(1, len(mixes) + 1)
+        ), encoding="utf-8")
         full = job_dir / "cover.wav"
         await run_audio_command(
-            [ffmpeg, "-v", "error", "-nostdin", "-y", "-i", converted,
-             "-i", mix_accompaniment, "-filter_complex",
-             (f"[0:a]volume={vocal_gain:.10f}[v];[1:a]volume=0.85[b];"
-              "[v][b]amix=inputs=2:duration=longest:normalize=0,"
-              f"alimiter=limit=0.95:latency=1:level=false,volume={settings.singing_master_gain}"),
-             "-t", str(duration), "-fs", str(settings.singing_max_source_bytes * 2),
-             "-ar", "44100", "-c:a", "pcm_s16le", full],
-            timeout_seconds=120,
+            [ffmpeg, "-v", "error", "-nostdin", "-y", "-f", "concat", "-safe", "1",
+             "-i", concat, "-t", f"{duration:.6f}", "-ar", "44100", "-ac", "2",
+             "-c:a", "pcm_s16le", "-fs", str(settings.singing_max_source_bytes * 2), full],
         )
         await _validate_model_audio(full, ffprobe, duration, settings)
-        (job_dir / "lyrics.lrc").write_text(song.lyrics_text, encoding="utf-8")
-        await progress("正在按歌词/停顿切分 QQ 语音" if song.lyric_lines else "正在按停顿切分 QQ 语音")
-        chunks = await split_audio_for_qq(
-            full, job_dir / "chunks", ffmpeg_path=ffmpeg, ffprobe_path=ffprobe,
-            max_chunk_seconds=settings.singing_chunk_seconds,
-            max_total_seconds=settings.singing_max_song_seconds + 1,
-            max_input_bytes=settings.singing_max_source_bytes * 2,
-            preferred_boundaries=[line.time_seconds for line in song.lyric_lines],
-        )
-        label = str(voice_profiles(settings)[profile_id].get("label") or profile_id)
         return SingingCover(
             song, profile_id, label, full, tuple(chunks), report,
             pitch_shift_semitones=voice_pitch_shift,
+            mode=mode, source_start_seconds=selection.start_seconds,
+            source_end_seconds=selection.end_seconds,
         )
     except BaseException:
-        # All descendants are stopped by run_audio_command before cleanup.
+        if delivered:
+            with suppress(OSError, ValueError):
+                await asyncio.to_thread(archive_singing_job, job_id)
         await asyncio.to_thread(cleanup_singing_job, job_id)
         raise

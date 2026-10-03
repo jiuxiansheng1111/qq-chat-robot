@@ -1,10 +1,6 @@
-"""Opt-in importer for a Moegirl character category/search result.
+"""按需从萌娘百科角色分类或搜索结果导入条目。
 
-This is intentionally a command-line import rather than an automatic startup
-scraper. The operator must confirm they have permission for the deployment
-scenario, then choose the exact categories/search terms to import. The output
-is the existing ``app/data/anime_characters_extra.json`` format, so the bot's
-normal aliases, image validation and confirmation flow continue to apply.
+这是手动命令行导入，不会在启动时自动抓取。操作者必须确认部署场景已获许可，再选择准确的分类或搜索词。输出沿用 ``app/data/anime_characters_extra.json`` 格式，因此机器人原有别名、图片校验和确认流程仍可继续使用。
 """
 
 import argparse
