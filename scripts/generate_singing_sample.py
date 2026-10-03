@@ -52,6 +52,7 @@ async def generate(args: argparse.Namespace) -> None:
             "song": cover.song.track.title,
             "song_id": cover.song.track.song_id,
             "profile": cover.profile_id,
+            "pitch_shift_semitones": cover.pitch_shift_semitones,
             "quality": cover.quality,
             "chunks": [
                 {"file": chunk.path.name, "start_seconds": chunk.start_seconds,

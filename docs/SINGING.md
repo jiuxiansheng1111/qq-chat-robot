@@ -1,6 +1,6 @@
 # AI 翻唱（本地 Seed-VC）
 
-AI 翻唱走独立本地后端：Demucs `htdemucs_ft` 先从原曲分离人声，Seed-VC v1 的 F0 44.1 kHz 模型转换人声音色，保留输入旋律和音高后再与伴奏混合。现有 GPT-SoVITS 角色权重用于文字转语音，不能直接作为这个歌声转换模型。
+AI 翻唱走独立本地后端：Demucs `htdemucs_ft` 先从原曲分离人声，Seed-VC v1 的 F0 44.1 kHz 模型转换人声音色，保留旋律间隔和节奏，也可按角色调整整体音区，再与伴奏混合。现有 GPT-SoVITS 角色权重用于文字转语音，不能直接作为这个歌声转换模型。
 
 运行依赖、Seed-VC 源码、原始录音、训练集、检查点和候选登记都保存在 `data/singing/`。该目录受 Git 忽略；不要将源录音、模型检查点或拆分出的人声提交到 GitHub。旧 GPT-SoVITS 环境只提供 CUDA PyTorch 导入路径，安装脚本会把其它依赖放在单独的歌声运行环境中，不修改 `.env` 或旧环境。
 
@@ -52,6 +52,7 @@ flowchart TD
 | `SINGING_MAX_SOURCE_BYTES` | `104857600` | 本地或公开原曲大小上限（100 MiB） |
 | `SINGING_QUEUE_SIZE` / `SINGING_COOLDOWN_SECONDS` | `3` / `120` | 待处理队列和同一用户再次提交的冷却秒数 |
 | `SINGING_DIFFUSION_STEPS` / `SINGING_INFERENCE_CFG_RATE` | `35` / `0.7` | Seed-VC 初次转换参数 |
+| `SINGING_SEMITONE_SHIFT_BY_PROFILE_JSON` | `{}` | 角色到人声移调半音数的映射，整数 −12 到 +12；未配置角色使用原调 |
 | `SINGING_MODEL_TIMEOUT_SECONDS` / `SINGING_JOB_TIMEOUT_SECONDS` | `900` / `2400` | 单个模型子进程与整项任务的超时秒数 |
 | `SINGING_SEGMENT_PAUSE_SECONDS` | `1.5` | 相邻 QQ 语音段的发送间隔秒数 |
 
@@ -112,13 +113,13 @@ data\singing\runtime\.venv\Scripts\python.exe .\scripts\train_singing_voices.py 
 
 现有日语角色训练集约每角色 10–11 条、43–49 秒，爱弥斯约 15 条、85 秒；丛雨日语清单约 53 条。Seed-VC 官方训练说明建议训练音频尽量干净，单条 1–30 秒，并指出数据越多通常效果越好。这些短小的口语素材可能不足以稳定地提升歌声音色；多轮微调也可能过拟合、损伤辅音或改变音色。先用未微调的 Seed-VC 歌声模型与每角色现有参考录音做零样本对照，再逐轮听测候选。现有参考录音经本地解码检查为 4.68–7.73 秒，但“可解码”不代表唱腔音色或训练效果通过验收。
 
-转换时启用 F0 条件，`auto-f0-adjust=false`、半音偏移为 `0`，以保留原唱旋律。建议使用免人声版权风险的测试音频；实际群聊发送仍遵守本机器人现有语音权限和审听流程。
+转换时启用 F0 条件，`auto-f0-adjust=false`，默认半音偏移为 `0`。如果原曲音区不适合角色，可设置 `SINGING_SEMITONE_SHIFT_BY_PROFILE_JSON={"murasame":12}`：人声提高一个八度，保留旋律间隔和节奏，伴奏仍用原调。非八度移调时，伴奏自动移到等价的最近调号，例如人声 +3、伴奏 +3；人声 +9、伴奏 −3。伴奏移调用 CPU 上的 librosa 保持声道数和速度，模型仍从角色参考录音生成音色。QQ 发送前会说明人声音区的调整。
 
 转换后，`check_singing_quality.py` 用 RMVPE 比较原唱人声与转换人声的逐帧 F0（最多校正 100 毫秒固定延迟），用 CAMPPlus 比较多个 5–10 秒窗口的音色向量，并检查时长、音量和削波。默认验收阈值为音高中位偏差 **小于 100 cents**、一半音内比例至少 **0.70**、有声帧召回至少 **0.70**、时长误差不超过 **3%**、RMS 大于 **1e-4**、削波比例小于 **0.01**、目标音色余弦相似度至少 **0.35**。未通过时会增加 15 个 diffusion steps 重试一次；报告写入当前任务目录的 `quality.json` 或 `quality_retry.json`。`SINGING_MAX_PITCH_ERROR_CENTS` 与 `SINGING_MIN_VOICE_SIMILARITY` 可调整对应门槛，但不应靠调阈值掩盖走调。指标只能筛出明显问题，实际歌曲的自然度、咬字和音色仍需听辨。
 
 比较角色身份时，听审 CLI 可传 `--identity-reference` 指定另一条真实角色录音；报告的 `voice_similarity` 仍指生成时的参考，而 `identity_reference_similarity` 指这条独立录音。不同版本应使用相同的独立录音才能比较；独立于转换参考不等于训练未见，需另行核对训练清单。报告同时提供有声帧 precision、原唱及转换后的有声音高中位数，辅助检查额外出现的有声帧和音区差异；这些诊断指标不能证明声音像原角色。
 
-试听对照时，`run_singing_model.py --semitone-shift 3` 可显式升 3 个半音，允许范围为 −6 到 +6，默认 0。质量检查需同步传 `check_singing_quality.py --expected-semitone-shift 3`，混音前还需给伴奏做相同的变调并保持速度。当前群聊生成使用默认原调；此 CLI 参数不会自动改变机器人唱歌设置。
+试听对照时，`run_singing_model.py --semitone-shift 3` 可显式升 3 个半音，允许范围为 −12 到 +12，默认 0。质量检查需同步传 `check_singing_quality.py --expected-semitone-shift 3`。正式生成链会自动把同一角色设置传给转换、检查和伴奏处理，重试也保留该设置；报告分别记录人声和伴奏的半音偏移。旋律检查比较预期移调后的原唱 F0，不会把正常的角色音区调整误判为走调。
 
 一首完整歌曲会在本地混音后，按歌词时间点或低能量停顿连续切成最长 `SINGING_CHUNK_SECONDS`（默认且最高 55）秒的语音，按顺序发送，不截掉结尾。已发送任务最近 5 份 `cover.wav`、`lyrics.lrc` 和质量报告保存在 `data/singing/results/` 供本地听审；中间人声、伴奏和原曲下载文件会清理。
 

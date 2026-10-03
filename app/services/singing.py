@@ -104,6 +104,7 @@ class SingingCover:
     full_path: Path
     chunks: tuple[AudioChunk, ...]
     quality: dict
+    pitch_shift_semitones: int = 0
 
 
 def parse_singing_command(
@@ -151,6 +152,30 @@ def parse_singing_command(
 def _project_path(value: str) -> Path:
     path = Path(value).expanduser()
     return (PROJECT_ROOT / path).resolve() if not path.is_absolute() else path.resolve()
+
+
+def _voice_pitch_shift_for_profile(settings: Settings, profile_id: str) -> int:
+    raw = settings.singing_semitone_shift_by_profile_json
+    try:
+        shifts = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        raise SingingPipelineError("角色音区配置无效，请管理员检查。") from exc
+    if not isinstance(shifts, dict) or any(
+        not isinstance(key, str)
+        or type(value) is not int
+        or not -12 <= value <= 12
+        for key, value in shifts.items()
+    ):
+        raise SingingPipelineError("角色音区配置无效，请管理员检查。")
+    return shifts.get(profile_id, 0)
+
+
+def _accompaniment_pitch_shift(voice_shift: int) -> int:
+    if voice_shift > 6:
+        return voice_shift - 12
+    if voice_shift < -6:
+        return voice_shift + 12
+    return voice_shift
 
 
 def runtime_paths(settings: Settings) -> tuple[Path, Path, Path, Path]:
@@ -275,6 +300,7 @@ async def convert_vocals(
     settings: Settings,
     *,
     steps: int | None = None,
+    semitone_shift: int = 0,
 ) -> Path:
     python, seed_root, ffmpeg, _ = runtime_paths(settings)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -284,6 +310,7 @@ async def convert_vocals(
         "--source", str(source), "--target", str(reference), "--output", str(output_dir),
         "--diffusion-steps", str(steps or settings.singing_diffusion_steps),
         "--inference-cfg-rate", str(settings.singing_inference_cfg_rate),
+        "--semitone-shift", str(semitone_shift),
     ]
     checkpoint = _checkpoint_for_profile(profile_id)
     if settings.singing_hf_offline:
@@ -298,13 +325,20 @@ async def convert_vocals(
 
 
 async def check_cover_quality(
-    source: Path, converted: Path, reference: Path, output: Path, settings: Settings
+    source: Path,
+    converted: Path,
+    reference: Path,
+    output: Path,
+    settings: Settings,
+    *,
+    expected_semitone_shift: int = 0,
 ) -> dict:
     python, seed_root, _, _ = runtime_paths(settings)
     await run_audio_command(
         [python, PROJECT_ROOT / "scripts" / "check_singing_quality.py",
          "--seed-root", seed_root, "--source", source, "--converted", converted,
          "--reference", reference, "--output", output,
+         "--expected-semitone-shift", str(expected_semitone_shift),
          *(["--offline"] if settings.singing_hf_offline else [])],
         cwd=seed_root, timeout_seconds=settings.singing_model_timeout_seconds,
     )
@@ -343,6 +377,8 @@ async def generate_singing_cover(
     *,
     bot_self_id: str,
 ) -> SingingCover:
+    voice_pitch_shift = _voice_pitch_shift_for_profile(settings, profile_id)
+    accompaniment_pitch_shift = _accompaniment_pitch_shift(voice_pitch_shift)
     job_dir = singing_job_directory(job_id)
     python, seed_root, ffmpeg, ffprobe = runtime_paths(settings)
     job_dir.mkdir(parents=True, exist_ok=False)
@@ -375,24 +411,52 @@ async def generate_singing_cover(
             raise SingingPipelineError("歌曲的人声/伴奏分离失败。")
         for stem in (vocals, accompaniment):
             await _validate_model_audio(stem, ffprobe, duration, settings)
-        await progress("正在按原曲旋律生成角色歌声")
-        converted = await convert_vocals(vocals, reference, job_dir / "converted", profile_id, settings)
+        await progress("正在按原曲节奏和角色音区生成歌声")
+        converted = await convert_vocals(
+            vocals, reference, job_dir / "converted", profile_id, settings,
+            semitone_shift=voice_pitch_shift,
+        )
         await _validate_model_audio(converted, ffprobe, duration, settings)
         await progress("正在检查音准、音色和音频完整性")
+        quality_path = job_dir / "quality.json"
         try:
-            report = await check_cover_quality(vocals, converted, reference, job_dir / "quality.json", settings)
+            report = await check_cover_quality(
+                vocals, converted, reference, quality_path, settings,
+                expected_semitone_shift=voice_pitch_shift,
+            )
         except SingingPipelineError:
             await progress("正在用更高精度重试歌声转换")
             converted = await convert_vocals(
                 vocals, reference, job_dir / "retry", profile_id, settings,
                 steps=min(80, settings.singing_diffusion_steps + 15),
+                semitone_shift=voice_pitch_shift,
             )
             await _validate_model_audio(converted, ffprobe, duration, settings)
-            report = await check_cover_quality(vocals, converted, reference, job_dir / "quality_retry.json", settings)
+            quality_path = job_dir / "quality_retry.json"
+            report = await check_cover_quality(
+                vocals, converted, reference, quality_path, settings,
+                expected_semitone_shift=voice_pitch_shift,
+            )
+        report["voice_pitch_shift_semitones"] = voice_pitch_shift
+        report["accompaniment_pitch_shift_semitones"] = accompaniment_pitch_shift
+        quality_path.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        mix_accompaniment = accompaniment
+        if accompaniment_pitch_shift:
+            mix_accompaniment = job_dir / "accompaniment_pitch_shifted.wav"
+            await run_audio_command(
+                [python, PROJECT_ROOT / "scripts" / "transpose_singing_audio.py",
+                 "--input", accompaniment, "--output", mix_accompaniment,
+                 "--semitones", str(accompaniment_pitch_shift)],
+                cwd=seed_root, timeout_seconds=settings.singing_model_timeout_seconds,
+            )
+            await _validate_model_audio(mix_accompaniment, ffprobe, duration, settings)
         full = job_dir / "cover.wav"
         await run_audio_command(
             [ffmpeg, "-v", "error", "-nostdin", "-y", "-i", converted,
-             "-i", accompaniment, "-filter_complex",
+             "-i", mix_accompaniment, "-filter_complex",
              "[0:a]volume=1.0[v];[1:a]volume=0.85[b];[v][b]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.95:latency=1",
              "-t", str(duration), "-fs", str(settings.singing_max_source_bytes * 2),
              "-ar", "44100", "-c:a", "pcm_s16le", full],
@@ -409,7 +473,10 @@ async def generate_singing_cover(
             preferred_boundaries=[line.time_seconds for line in song.lyric_lines],
         )
         label = str(voice_profiles(settings)[profile_id].get("label") or profile_id)
-        return SingingCover(song, profile_id, label, full, tuple(chunks), report)
+        return SingingCover(
+            song, profile_id, label, full, tuple(chunks), report,
+            pitch_shift_semitones=voice_pitch_shift,
+        )
     except BaseException:
         # All descendants are stopped by run_audio_command before cleanup.
         await asyncio.to_thread(cleanup_singing_job, job_id)

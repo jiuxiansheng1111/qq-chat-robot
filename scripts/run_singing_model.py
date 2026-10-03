@@ -17,8 +17,8 @@ def _parse_args(argv=None):
     parser.add_argument("--diffusion-steps", type=int, default=35)
     parser.add_argument("--inference-cfg-rate", type=float, default=0.7)
     parser.add_argument(
-        "--semitone-shift", type=int, choices=range(-6, 7), default=0,
-        help="Experimental pitch shift from -6 to +6 semitones; default 0",
+        "--semitone-shift", type=int, choices=range(-12, 13), default=0,
+        help="Pitch shift from -12 to +12 semitones; default 0 (12 is one octave)",
     )
     parser.add_argument("--checkpoint")
     parser.add_argument("--config")

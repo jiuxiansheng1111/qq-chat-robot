@@ -2892,9 +2892,18 @@ async def _run_singing_job(job: SingingJob, profile_id: str, bot_self_id: str) -
                 job.query, profile_id, job.id, settings, progress, bot_self_id=bot_self_id
             )
             total = len(cover.chunks)
+            pitch_shift = getattr(cover, "pitch_shift_semitones", 0)
+            pitch_note = ""
+            if pitch_shift:
+                direction = "升高" if pitch_shift > 0 else "降低"
+                if abs(pitch_shift) == 12:
+                    pitch_note = f"人声{direction}一个八度，伴奏保持原调。\n"
+                else:
+                    pitch_note = f"已按角色音区调整歌声（{direction} {abs(pitch_shift)} 个半音）。\n"
             await send_group_message(
                 group_id,
                 f"🎤 {cover.label} · {cover.song.track.title}\n"
+                f"{pitch_note}"
                 f"共 {total} 段，按原曲顺序发送，每段不超过 55 秒。",
             )
             for index, chunk in enumerate(cover.chunks, 1):

@@ -1,18 +1,24 @@
 import asyncio
 import base64
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import numpy as np
 import pytest
 from pydantic import ValidationError
 
 from app.config import Settings
 from app.services.singing import (
+    SingingCover,
     SingingPipelineError,
+    _accompaniment_pitch_shift,
     _validate_model_audio,
+    _voice_pitch_shift_for_profile,
     archive_singing_job,
+    check_cover_quality,
     cleanup_singing_job,
     convert_vocals,
     generate_singing_cover,
@@ -21,6 +27,7 @@ from app.services.singing import (
     singing_job_directory,
 )
 from app.services.singing_jobs import SingingError, SingingJob, SingingJobManager
+from scripts.transpose_singing_audio import transpose_audio_file
 
 PROFILES = {"murasame": {"label": "小丛雨"}, "yoshino": {"label": "芳乃"}}
 
@@ -42,6 +49,45 @@ def test_qq_chunk_limit_is_validated_even_when_config_is_wrong():
         Settings(singing_chunk_seconds=60)
     with pytest.raises(ValidationError):
         Settings(singing_separation_model="../escape")
+
+
+@pytest.mark.parametrize(
+    ("voice_shift", "accompaniment_shift"),
+    [(0, 0), (3, 3), (9, -3), (12, 0), (-9, 3), (-12, 0)],
+)
+def test_accompaniment_shift_uses_nearest_equivalent_key(voice_shift, accompaniment_shift):
+    assert _accompaniment_pitch_shift(voice_shift) == accompaniment_shift
+
+
+def test_profile_pitch_shift_defaults_to_zero_for_other_roles_and_accepts_bounds():
+    settings = Settings(singing_semitone_shift_by_profile_json='{"murasame":-12,"yoshino":12}')
+    assert _voice_pitch_shift_for_profile(settings, "murasame") == -12
+    assert _voice_pitch_shift_for_profile(settings, "yoshino") == 12
+    assert _voice_pitch_shift_for_profile(settings, "other") == 0
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "invalid",
+        "[]",
+        "null",
+        '{"murasame":true}',
+        '{"murasame":3.0}',
+        '{"murasame":"3"}',
+        '{"murasame":13}',
+        '{"other":-13}',
+    ],
+)
+def test_invalid_profile_pitch_shift_config_raises_safe_error(value):
+    settings = Settings(singing_semitone_shift_by_profile_json=value)
+    with pytest.raises(SingingPipelineError, match="音区配置无效"):
+        _voice_pitch_shift_for_profile(settings, "murasame")
+
+
+def test_singing_cover_pitch_shift_defaults_to_original_pitch():
+    cover = SingingCover(None, "murasame", "丛雨", Path("cover.wav"), (), {})
+    assert cover.pitch_shift_semitones == 0
 
 
 @pytest.mark.asyncio
@@ -170,9 +216,226 @@ async def test_cached_model_mode_is_passed_only_to_the_singing_subprocess(tmp_pa
         return ""
 
     monkeypatch.setattr("app.services.singing.run_audio_command", run)
-    result = await convert_vocals(tmp_path / "source.wav", tmp_path / "reference.wav", tmp_path / "converted", "murasame", settings)
+    result = await convert_vocals(
+        tmp_path / "source.wav", tmp_path / "reference.wav",
+        tmp_path / "converted", "murasame", settings,
+    )
     assert result.name == "result.wav"
     assert "--offline" in arguments
+    assert arguments[arguments.index("--semitone-shift") + 1] == "0"
+
+
+@pytest.mark.asyncio
+async def test_convert_and_quality_commands_pass_profile_pitch_shift(tmp_path, monkeypatch):
+    settings = Settings()
+    seed_root = tmp_path / "seed"
+    seed_root.mkdir()
+    monkeypatch.setattr(
+        "app.services.singing.runtime_paths",
+        lambda _: (Path("python"), seed_root, Path("ffmpeg"), Path("ffprobe")),
+    )
+    monkeypatch.setattr("app.services.singing._checkpoint_for_profile", lambda _: None)
+    calls = []
+
+    async def run(args, **kwargs):
+        calls.append([str(item) for item in args])
+        if "run_singing_model.py" in calls[-1][1]:
+            output = tmp_path / "converted"
+            output.mkdir(exist_ok=True)
+            (output / "result.wav").write_bytes(b"a" * 2000)
+        else:
+            report = {
+                "accepted": True,
+                "failures": [],
+                "pitch_median_cents": 0,
+                "pitch_within_semitone_ratio": 1,
+                "voiced_recall": 1,
+                "voice_similarity": 1,
+                "duration_ratio": 1,
+                "source_voiced_frames": 200,
+                "converted_rms": 0.1,
+                "clipping_ratio": 0,
+            }
+            Path(calls[-1][calls[-1].index("--output") + 1]).write_text(
+                json.dumps(report), encoding="utf-8"
+            )
+        return ""
+
+    monkeypatch.setattr("app.services.singing.run_audio_command", run)
+    converted = await convert_vocals(
+        tmp_path / "source.wav", tmp_path / "reference.wav",
+        tmp_path / "converted", "murasame", settings, semitone_shift=3,
+    )
+    report = await check_cover_quality(
+        tmp_path / "source.wav", converted, tmp_path / "reference.wav",
+        tmp_path / "quality.json", settings, expected_semitone_shift=3,
+    )
+    assert report["accepted"] is True
+    model_args, quality_args = calls
+    assert model_args[model_args.index("--semitone-shift") + 1] == "3"
+    assert quality_args[quality_args.index("--expected-semitone-shift") + 1] == "3"
+
+
+def test_cpu_accompaniment_transposer_preserves_stereo_rate_and_exact_length(tmp_path, monkeypatch):
+    source = tmp_path / "stereo.wav"
+    source.write_bytes(b"input")
+    samples = np.arange(30, dtype=np.float32).reshape(15, 2) / 40
+    calls = []
+    written = {}
+
+    def pitch_shift(channel, **kwargs):
+        calls.append(kwargs)
+        return np.pad(channel + 0.01, (0, 2))
+
+    fake_librosa = SimpleNamespace(effects=SimpleNamespace(pitch_shift=pitch_shift))
+    fake_soundfile = SimpleNamespace(
+        read=lambda *args, **kwargs: (samples.copy(), 44100),
+        write=lambda path, data, rate, **kwargs: written.update(
+            path=Path(path), data=np.asarray(data).copy(), rate=rate, kwargs=kwargs
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "librosa", fake_librosa)
+    monkeypatch.setitem(sys.modules, "soundfile", fake_soundfile)
+    output = tmp_path / "out" / "stereo-shifted.wav"
+
+    transpose_audio_file(source, output, -3)
+
+    assert written["path"] == output
+    assert written["rate"] == 44100
+    assert written["kwargs"]["subtype"] == "PCM_16"
+    assert written["data"].shape == samples.shape
+    unscaled = samples + 0.01
+    gain = np.sqrt(np.mean(samples.astype(np.float64) ** 2)) / np.sqrt(
+        np.mean(unscaled.astype(np.float64) ** 2)
+    )
+    np.testing.assert_allclose(written["data"], unscaled * gain)
+    assert len(calls) == 2
+    assert all(call["sr"] == 44100 and call["n_steps"] == -3 for call in calls)
+    assert all(call["res_type"] == "soxr_hq" for call in calls)
+
+
+def test_cpu_accompaniment_transposer_uses_uniform_peak_guard(tmp_path, monkeypatch):
+    source = tmp_path / "stereo.wav"
+    source.write_bytes(b"input")
+    samples = np.full((4, 2), 0.5, dtype=np.float32)
+    written = {}
+    fake_librosa = SimpleNamespace(
+        effects=SimpleNamespace(
+            pitch_shift=lambda channel, **kwargs: np.array([1.0, 0.0, 0.0, 0.0])
+        )
+    )
+    fake_soundfile = SimpleNamespace(
+        read=lambda *args, **kwargs: (samples.copy(), 44100),
+        write=lambda path, data, rate, **kwargs: written.update(
+            data=np.asarray(data).copy(), rate=rate
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "librosa", fake_librosa)
+    monkeypatch.setitem(sys.modules, "soundfile", fake_soundfile)
+
+    transpose_audio_file(source, tmp_path / "shifted.wav", 2)
+
+    assert written["data"].shape == samples.shape
+    assert float(np.max(np.abs(written["data"]))) == pytest.approx(0.99)
+    assert written["data"][0, 0] == written["data"][0, 1]
+    assert np.count_nonzero(written["data"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_generation_retries_with_same_shift_and_mixes_equivalent_accompaniment(
+    tmp_path, monkeypatch,
+):
+    data_root = tmp_path / "singing-data"
+    monkeypatch.setattr("app.services.singing.SINGING_DATA_ROOT", data_root)
+    seed_root = tmp_path / "seed-vc"
+    seed_root.mkdir()
+    monkeypatch.setattr(
+        "app.services.singing.runtime_paths",
+        lambda _: (Path("python"), seed_root, Path("ffmpeg"), Path("ffprobe")),
+    )
+    song = SimpleNamespace(
+        track=SimpleNamespace(title="song", duration_seconds=1),
+        lyrics_text="[00:00.00]lyric",
+        lyric_lines=(),
+    )
+    async def download(_, job_dir, __):
+        source = job_dir / "song.mp3"
+        source.write_bytes(b"source" * 500)
+        return source
+
+    reference = tmp_path / "murasame-ja.wav"
+    reference.write_bytes(b"reference")
+    monkeypatch.setattr("app.services.singing.resolve_singing_song", AsyncMock(return_value=song))
+    monkeypatch.setattr("app.services.singing.download_singing_source", download)
+    monkeypatch.setattr(
+        "app.services.singing.prepare_voice_reference", AsyncMock(return_value=reference)
+    )
+    monkeypatch.setattr("app.services.singing.voice_profiles", lambda _: {"murasame": {"label": "丛雨"}})
+    monkeypatch.setattr("app.services.singing.split_audio_for_qq", AsyncMock(return_value=()))
+
+    model_shifts = []
+
+    async def convert(source, ref, output_dir, profile_id, settings, *, steps=None, semitone_shift=0):
+        model_shifts.append((steps, semitone_shift))
+        output_dir.mkdir(parents=True, exist_ok=True)
+        converted = output_dir / "vocals.wav"
+        converted.write_bytes(b"converted" * 250)
+        return converted
+
+    quality_shifts = []
+
+    async def check(source, converted, ref, output, settings, *, expected_semitone_shift=0):
+        quality_shifts.append((output.name, expected_semitone_shift))
+        if len(quality_shifts) == 1:
+            raise SingingPipelineError("first quality attempt requests retry")
+        return {"accepted": True, "failures": [], "pitch_median_cents": 0}
+
+    monkeypatch.setattr("app.services.singing.convert_vocals", convert)
+    monkeypatch.setattr("app.services.singing.check_cover_quality", check)
+    transposer_args = []
+    mix_accompaniments = []
+
+    async def run_command(args, **kwargs):
+        values = [str(value) for value in args]
+        if Path(values[0]).name == "ffprobe":
+            return '{"format":{"duration":"1.0"}}'
+        script = Path(values[1]).name if len(values) > 1 else ""
+        if script == "run_singing_separation.py":
+            output_dir = Path(values[values.index("--output") + 1])
+            stem_dir = output_dir / "htdemucs_ft" / "song"
+            stem_dir.mkdir(parents=True)
+            (stem_dir / "vocals.wav").write_bytes(b"v" * 2000)
+            (stem_dir / "no_vocals.wav").write_bytes(b"a" * 2000)
+        elif script == "transpose_singing_audio.py":
+            transposer_args.extend(values)
+            output = Path(values[values.index("--output") + 1])
+            output.write_bytes(b"shifted" * 300)
+        elif Path(values[0]).name == "ffmpeg":
+            input_indices = [index for index, value in enumerate(values) if value == "-i"]
+            mix_accompaniments.append(Path(values[input_indices[1] + 1]))
+            Path(values[-1]).write_bytes(b"cover" * 500)
+        else:
+            raise AssertionError(f"Unexpected audio command: {values}")
+        return ""
+
+    monkeypatch.setattr("app.services.singing.run_audio_command", run_command)
+    settings = Settings(singing_semitone_shift_by_profile_json='{"murasame":9}')
+    cover = await generate_singing_cover(
+        "song", "murasame", "a" * 32, settings, AsyncMock(), bot_self_id="bot"
+    )
+
+    assert model_shifts == [(None, 9), (50, 9)]
+    assert quality_shifts == [("quality.json", 9), ("quality_retry.json", 9)]
+    assert transposer_args[transposer_args.index("--semitones") + 1] == "-3"
+    assert mix_accompaniments == [data_root / "jobs" / ("a" * 32) / "accompaniment_pitch_shifted.wav"]
+    assert cover.pitch_shift_semitones == 9
+    assert cover.quality["voice_pitch_shift_semitones"] == 9
+    assert cover.quality["accompaniment_pitch_shift_semitones"] == -3
+    saved_report = json.loads(
+        (data_root / "jobs" / ("a" * 32) / "quality_retry.json").read_text(encoding="utf-8")
+    )
+    assert saved_report["voice_pitch_shift_semitones"] == 9
+    assert saved_report["accompaniment_pitch_shift_semitones"] == -3
 
 
 @pytest.mark.asyncio
@@ -218,8 +481,9 @@ async def test_command_admission_returns_before_long_gpu_work_and_cancel_stops_i
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reject_second", [False, True])
+@pytest.mark.parametrize("pitch_shift", [0, 12])
 async def test_worker_sends_segments_in_order_and_stops_after_qq_rejects(
-    tmp_path, monkeypatch, reject_second
+    tmp_path, monkeypatch, reject_second, pitch_shift
 ):
     from app import main
 
@@ -228,7 +492,10 @@ async def test_worker_sends_segments_in_order_and_stops_after_qq_rejects(
         path = tmp_path / f"chunk_{index}.wav"
         path.write_bytes(f"wave-{index}".encode())
         chunks.append(SimpleNamespace(path=path))
-    cover = SimpleNamespace(label="丛雨", song=SimpleNamespace(track=SimpleNamespace(title="歌曲")), chunks=chunks)
+    cover = SimpleNamespace(
+        label="丛雨", song=SimpleNamespace(track=SimpleNamespace(title="歌曲")),
+        chunks=chunks, pitch_shift_semitones=pitch_shift,
+    )
     monkeypatch.setattr(main, "generate_singing_cover", AsyncMock(return_value=cover))
     monkeypatch.setattr(main, "send_group_message", AsyncMock())
     records = AsyncMock(side_effect=[True, False] if reject_second else [True, True, True])
@@ -246,6 +513,8 @@ async def test_worker_sends_segments_in_order_and_stops_after_qq_rejects(
         await main._run_singing_job(job, "murasame", "bot")
     expected_count = 2 if reject_second else 3
     assert records.await_count == expected_count
+    first_message = main.send_group_message.await_args_list[0].args[1]
+    assert ("人声升高一个八度，伴奏保持原调" in first_message) == bool(pitch_shift)
     for index, call in enumerate(records.await_args_list):
         assert call.args[0] == "group"
         assert base64.b64decode(call.args[1].removeprefix("base64://")) == f"wave-{index}".encode()

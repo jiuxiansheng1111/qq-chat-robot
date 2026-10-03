@@ -30,7 +30,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True, help="JSON report path")
     parser.add_argument("--max-pitch-cents", type=float, default=100)
     parser.add_argument(
-        "--expected-semitone-shift", type=int, choices=range(-6, 7), default=0,
+        "--expected-semitone-shift", type=int, choices=range(-12, 13), default=0,
         help="Expected source-to-converted pitch shift for controlled transposition checks",
     )
     parser.add_argument("--min-within-semitone", type=float, default=0.70)
