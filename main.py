@@ -68,6 +68,9 @@ class QQChatPlugin(Star):
         )
         try:
             await runtime.initialize()
+            bind_models = getattr(runtime, "bind_astrbot_models", None)
+            if callable(bind_models):
+                await bind_models(self.context)
         except BaseException:
             # 清理半初始化的服务，保留原来的异常。
             with suppress(BaseException):

@@ -15,6 +15,7 @@ from typing import Any
 
 EXPECTED_ASTRBOT_VERSION = "4.28.2"
 INITIAL_PASSWORD_ENV = "ASTRBOT_DASHBOARD_INITIAL_PASSWORD"
+RESET_PASSWORD_ENV = "ASTRBOT_RESET_DASHBOARD_PASSWORD"
 PLATFORM_ID = "qq-chatrobot-local"
 WECHAT_PLATFORM_ID = "qq-chatrobot-wechat"
 WECHAT_PLATFORM_TYPE = "weixin_oc"
@@ -357,26 +358,35 @@ def configure_instance(
     get_px_schema_path = _find_get_px_schema(project_root, instance_root)
 
     prior_config = _read_existing_config(config_path)
-    if password_path.exists():
+    prior_dashboard = (prior_config or {}).get("dashboard", {})
+    if not isinstance(prior_dashboard, dict):
+        prior_dashboard = {}
+    preserve_existing_password = any(
+        isinstance(prior_dashboard.get(key), str)
+        and bool(prior_dashboard[key].strip())
+        for key in ("pbkdf2_password", "password")
+    )
+    if preserve_existing_password:
+        # 面板密码可能已改过，与首次密码文件不同。
+        # 保留当前密码散列，不依赖该文件。
+        password = None
+        password_is_new = False
+    elif password_path.exists():
         password = password_path.read_text(encoding="utf-8").rstrip("\r\n")
         password_is_new = False
         if not password:
             raise ConfigurationError("面板登录密码文件为空")
     else:
-        prior_dashboard = (prior_config or {}).get("dashboard", {})
-        if isinstance(prior_dashboard, dict) and (
-            prior_dashboard.get("password") or prior_dashboard.get("pbkdf2_password")
-        ):
-            raise ConfigurationError(
-                "已有面板密码但私有密码文件缺失；为避免覆盖，请先手动恢复该文件"
-            )
-        password = ""
+        password = None
         password_is_new = True
 
     old_root = os.environ.get("ASTRBOT_ROOT")
     old_password = os.environ.get(INITIAL_PASSWORD_ENV)
+    old_reset_password = os.environ.get(RESET_PASSWORD_ENV)
     try:
         os.environ["ASTRBOT_ROOT"] = str(instance_root)
+        if preserve_existing_password:
+            os.environ.pop(RESET_PASSWORD_ENV, None)
         if api is None:
             api = _load_astrbot_api()
         if api.version != EXPECTED_ASTRBOT_VERSION:
@@ -387,7 +397,10 @@ def configure_instance(
         if password_is_new:
             password = api.generate_dashboard_password()
             api.validate_dashboard_password(password)
-        os.environ[INITIAL_PASSWORD_ENV] = password
+        if password is None:
+            os.environ.pop(INITIAL_PASSWORD_ENV, None)
+        else:
+            os.environ[INITIAL_PASSWORD_ENV] = password
 
         config = api.config_class(config_path=str(config_path))
         if not isinstance(config, dict):
@@ -400,18 +413,19 @@ def configure_instance(
         dashboard["host"] = DASHBOARD_HOST
         dashboard["port"] = DASHBOARD_PORT
         dashboard.setdefault("username", "astrbot")
-        md5_hash = api.hash_md5_dashboard_password(password)
-        stored_pbkdf2 = dashboard.get("pbkdf2_password")
-        if not (
-            isinstance(stored_pbkdf2, str)
-            and stored_pbkdf2.startswith("pbkdf2_sha256$")
-            and api.verify_dashboard_password(stored_pbkdf2, password)
-        ):
-            dashboard["pbkdf2_password"] = api.hash_dashboard_password(password)
-        if dashboard.get("password") != md5_hash:
-            dashboard["password"] = md5_hash
-        dashboard["password_storage_upgraded"] = True
-        dashboard.setdefault("password_change_required", True)
+        if password is not None:
+            md5_hash = api.hash_md5_dashboard_password(password)
+            stored_pbkdf2 = dashboard.get("pbkdf2_password")
+            if not (
+                isinstance(stored_pbkdf2, str)
+                and stored_pbkdf2.startswith("pbkdf2_sha256$")
+                and api.verify_dashboard_password(stored_pbkdf2, password)
+            ):
+                dashboard["pbkdf2_password"] = api.hash_dashboard_password(password)
+            if dashboard.get("password") != md5_hash:
+                dashboard["password"] = md5_hash
+            dashboard["password_storage_upgraded"] = True
+            dashboard.setdefault("password_change_required", True)
 
         platform = _find_or_create_platform(
             config, token_factory or (lambda: secrets.token_urlsafe(32))
@@ -434,6 +448,10 @@ def configure_instance(
             os.environ.pop(INITIAL_PASSWORD_ENV, None)
         else:
             os.environ[INITIAL_PASSWORD_ENV] = old_password
+        if old_reset_password is None:
+            os.environ.pop(RESET_PASSWORD_ENV, None)
+        else:
+            os.environ[RESET_PASSWORD_ENV] = old_reset_password
 
     saved = _read_existing_config(config_path)
     assert saved is not None

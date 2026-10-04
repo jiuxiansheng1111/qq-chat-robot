@@ -58,7 +58,30 @@ scripts\run_astrbot.ps1 -Stop
 
 ## 消息与模型
 
-插件的 `legacy_chat` 默认开启：群消息继续走现有机器人和自然 @ 功能，不要求在消息前加 `/`；由旧运行时处理的消息会关闭 AstrBot 默认 LLM 流程，避免双重回复。首次部署的 AstrBot 没有配置模型提供方，不会替旧机器人环境复制密钥或触发模型调用。关闭 `legacy_chat` 后，未处理的普通群消息才交给 AstrBot 的模型提供方。
+插件的 `legacy_chat` 默认开启：群消息继续走现有机器人和自然 @ 功能，不要求在消息前加 `/`；由旧运行时处理的消息会关闭 AstrBot 默认 LLM 流程，避免双重回复。原角色、每个人的记忆开关、音色选择和业务数据继续由本插件管理。
+
+AstrBot 配好本地聊天模型后，本插件也会使用面板里的主模型和备用模型。修改模型、密钥或请求参数后，现有角色聊天会跟着使用新配置；原来的队列和并发限制保留。每条请求仍传原来的角色提示和对应用户的上下文，不会加入 AstrBot 普通聊天的群共享历史。启动时没有配置 AstrBot 模型，继续使用本项目 `.env`；已接通后不要清空默认模型，切换回旧配置需要重启。
+
+## 迁移原模型配置
+
+先停 AstrBot，再从仓库根目录预览或迁移：
+
+```powershell
+scripts\run_astrbot.ps1 -Stop
+data\astrbot\runtime\tool-envs\astrbot\Scripts\python.exe scripts\migrate_astrbot_config.py
+data\astrbot\runtime\tool-envs\astrbot\Scripts\python.exe scripts\migrate_astrbot_config.py --apply
+scripts\run_astrbot.ps1
+```
+
+迁移脚本读取本机 `.env`，导入智谱、Groq 的接口地址、密钥、模型、温度、输出长度和请求超时，设置主模型及备用模型。旧上下文按两条消息约一轮换算到 AstrBot，沿用截断方式。原角色提示和语气示例导入私有人格库；原角色切换仍在本插件里生效。
+
+第一次迁移前会在 `data/astrbot/config-backups/` 备份配置和 AstrBot 数据库。再次运行默认保留面板里改过的模型和人格；需要从 `.env` 重新同步本脚本创建的条目时，加 `--replace-owned`。这个选项会覆盖 `qqchat-*` 固定 ID 的对应条目，使用前先看预览。
+
+语音和翻唱继续使用原来的 GPT-SoVITS 服务、训练模型与每用户音色设置，不启用另一套会争用权重的 TTS。网易云登录、图鉴和收藏继续保存在原私有目录。
+
+启动配置器保留已经修改的面板密码；`dashboard-login.txt` 只记录首次生成的密码，改密后不再用它覆盖当前密码。
+
+## 消息入口
 
 NapCat 切换到 AstrBot 后，不要再把相同 OneBot 消息转发到旧 `/onebot/webhook`。同一事件走两条入口会导致重复处理。AstrBot 插件优先级为 `-100`；已经回复、停止或有更高优先级处理结果的事件会跳过。插件保留原始 OneBot 消息段，并通过 AstrBot 客户端执行发送动作。
 

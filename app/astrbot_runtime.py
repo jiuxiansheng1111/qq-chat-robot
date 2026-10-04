@@ -74,6 +74,14 @@ class ChatRuntime:
         self._installed_proxy = {key: os.environ.get(key) for key in _PROXY_KEYS}
         self._initialized = True
 
+    async def bind_astrbot_models(self, context: Any) -> bool:
+        """让现有角色聊天使用面板中的模型配置。"""
+        if not self._initialized or self._core is None:
+            raise RuntimeError("聊天机器人插件尚未初始化")
+        from app.astrbot_llm import bind_astrbot_models
+
+        return await bind_astrbot_models(self._core.app.state.llm, context)
+
     def _restore_proxy(self) -> None:
         for key, previous in self._previous_proxy.items():
             if os.environ.get(key) != self._installed_proxy.get(key):
