@@ -229,6 +229,12 @@ class QQChatPlugin(Star):
             return
         if getattr(event, "_has_send_oper", False):
             return
+        if self.runtime is None:
+            return
+        from app.astrbot_menu import _raw_event_for_reset
+
+        if not await self._legacy_event_allowed(_raw_event_for_reset(self, event)):
+            return
         from app.astrbot_plugin_images import forward_anime_image
 
         results = await forward_anime_image(event, self.context)

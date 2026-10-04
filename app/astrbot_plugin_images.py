@@ -65,6 +65,16 @@ async def forward_anime_image(event: Any, context: Any) -> AsyncIterator[Any] | 
     if registered is None or not getattr(registered, "activated", True):
         return None
 
+    from app.astrbot_menu import _active_commands
+
+    # 短句也要遵守面板中的平台、插件范围和指令权限。
+    if not any(
+        item["plugin_name"] == IMAGE_PLUGIN_NAME
+        and item.get("handler_name") == "cmd_p"
+        for item in _active_commands(context, event)
+    ):
+        return None
+
     # AstrBot 4.28.2 返回 StarMetadata，star_cls 是已实例化插件。
     plugin = getattr(registered, "star_cls", registered)
     handler = getattr(plugin, "cmd_p", None)

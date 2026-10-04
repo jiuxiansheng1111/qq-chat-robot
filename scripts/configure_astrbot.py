@@ -323,8 +323,9 @@ def _configure_get_px(
             raise ConfigurationError("get_px 私有配置根节点必须是对象")
     else:
         config = {}
-    config["checkin_enabled"] = False
-    config["auto_trigger_enabled"] = False
+    # 启动时补默认值，保留面板里已经选好的开关。
+    config.setdefault("checkin_enabled", True)
+    config.setdefault("auto_trigger_enabled", False)
     config.setdefault("pixiv_refresh_token", "")
     if (
         not config_path.exists()
@@ -492,6 +493,10 @@ def configure_instance(
     ):
         raise ConfigurationError("写入后的 AstrBot 配置校验失败")
 
+    get_px_config = (
+        json.loads(get_px_config_path.read_text(encoding="utf-8-sig"))
+        if get_px_config_path is not None else {}
+    )
     return {
         "config_path": str(config_path),
         "dashboard_url": f"http://{DASHBOARD_HOST}:{DASHBOARD_PORT}",
@@ -503,8 +508,8 @@ def configure_instance(
         "wechat_platform_created": wechat_platform_created,
         "get_px_plugin_installed": get_px_config_path is not None,
         "get_px_config_path": str(get_px_config_path) if get_px_config_path else None,
-        "get_px_checkin_enabled": False if get_px_config_path else None,
-        "get_px_auto_trigger_enabled": False if get_px_config_path else None,
+        "get_px_checkin_enabled": get_px_config.get("checkin_enabled"),
+        "get_px_auto_trigger_enabled": get_px_config.get("auto_trigger_enabled"),
         "onebot_host": ONEBOT_HOST,
         "onebot_port": ONEBOT_PORT,
         "dashboard_password_created": password_is_new,
@@ -537,7 +542,9 @@ def main(argv: list[str] | None = None) -> int:
         f"当前{'已启用' if result['platform_enabled'] else '未启用'}"
     )
     if result["get_px_plugin_installed"]:
-        print("get_px 签到与自动触发已关闭。")
+        checkin = "已开启" if result["get_px_checkin_enabled"] else "已关闭"
+        auto_trigger = "已开启" if result["get_px_auto_trigger_enabled"] else "已关闭"
+        print(f"画境拾珍：签到{checkin}，自然语言发图{auto_trigger}。")
     else:
         print("未安装可选 get_px，跳过插件配置。")
     return 0

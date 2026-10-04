@@ -31,7 +31,7 @@ _EXPLICIT_HELP_REQUESTS = frozenset({
 _NEGATION = re.compile(r"(?:不要|别|不想|不需要|不用|无需|先别|先不|不发|不看)")
 _TEXT_MENU_NAMES = frozenset({
     "文字版菜单", "文字菜单", "文字版帮助", "菜单文字版", "插件菜单", "插件命令",
-    "文字版功能", "纯文字菜单",
+    "文字版功能", "纯文字菜单", "画境拾珍菜单", "画境拾珍帮助",
 })
 _LOGGER = logging.getLogger(__name__)
 
@@ -253,6 +253,8 @@ def _active_commands(context: Any, event: Any) -> list[dict[str, Any]]:
                 "display_name": str(getattr(plugin, "display_name", "") or plugin_name),
                 "description": description,
                 "module_path": module_path,
+                "handler_name": str(getattr(handler, "handler_name", "") or ""),
+                "is_group": isinstance(current_filter, CommandGroupFilter),
                 "native_ids": native_ids,
                 "original_command_name": original_name,
             })
@@ -314,6 +316,128 @@ def _command_lines(items: Sequence[dict[str, Any]], *, image: bool) -> tuple[str
     return tuple(lines)
 
 
+def _command_path(value: Any) -> str:
+    return " ".join(str(value or "").strip().split()).casefold()
+
+
+def _plugin_menu_items(items: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """去掉没有任何当前用户可用叶命令的指令组父项。"""
+    leaves = [item for item in items if not item.get("is_group", False)]
+    output = []
+    for item in items:
+        if not item.get("is_group", False):
+            output.append(item)
+            continue
+        roots = tuple(_command_path(name) for name in item["names"])
+        has_visible_child = any(
+            child["module_path"] == item["module_path"]
+            and any(
+                _command_path(name).startswith(root + " ")
+                for name in child["names"]
+                for root in roots
+            )
+            for child in leaves
+        )
+        if has_visible_child:
+            output.append(item)
+    return output
+
+
+def _find_plugin_command(
+    items: Sequence[dict[str, Any]],
+    *,
+    handler_names: Sequence[str],
+    command_names: Sequence[str],
+) -> dict[str, Any] | None:
+    wanted_handlers = {name.casefold() for name in handler_names}
+    wanted_names = {_command_path(name) for name in command_names}
+    for item in items:
+        if item.get("handler_name", "").casefold() in wanted_handlers:
+            return item
+    return next(
+        (
+            item for item in items
+            if wanted_names.intersection(
+                {_command_path(item.get("original_command_name", "")),
+                 *(_command_path(name) for name in item["names"])}
+            )
+        ),
+        None,
+    )
+
+
+def _anime_plugin_image_lines(items: Sequence[dict[str, Any]]) -> tuple[str, ...]:
+    """按当前用户可用命令生成画境拾珍的图片菜单摘要。"""
+    search = _find_plugin_command(
+        items,
+        handler_names=("cmd_p",),
+        command_names=("p",),
+    )
+    checkin = _find_plugin_command(
+        items,
+        handler_names=("cmd_checkin",),
+        command_names=("签到",),
+    )
+    status = _find_plugin_command(
+        items,
+        handler_names=("cmd_checkin_status",),
+        command_names=("签到我的 状态",),
+    )
+    month_ranking = _find_plugin_command(
+        items,
+        handler_names=("cmd_checkin_ranking_month",),
+        command_names=("签到排行 月榜",),
+    )
+    shop = _find_plugin_command(
+        items,
+        handler_names=("cmd_checkin_shop",),
+        command_names=("签到商店 查看",),
+    )
+
+    lines = []
+    if search:
+        lines.append(f"搜图：/{search['primary']} [标签] [数量]")
+    checkin_parts = []
+    if checkin:
+        checkin_parts.append(f"签到：/{checkin['primary']}")
+    if status:
+        checkin_parts.append(f"状态：/{status['primary']}")
+    if checkin_parts:
+        lines.append("；".join(checkin_parts))
+    activity_parts = []
+    if month_ranking:
+        activity_parts.append(f"月榜：/{month_ranking['primary']}")
+    if shop:
+        activity_parts.append(f"商店：/{shop['primary']}")
+    if activity_parts:
+        lines.append("；".join(activity_parts))
+    return tuple(lines)
+
+
+def _auto_trigger_enabled(plugin: Any) -> bool:
+    config = getattr(plugin, "config", None)
+    if isinstance(config, Mapping):
+        return config.get("auto_trigger_enabled") is True
+    return getattr(config, "auto_trigger_enabled", False) is True
+
+
+def _complete_plugin_text_lines(items: Sequence[dict[str, Any]]) -> tuple[str, ...]:
+    """返回插件全部当前命令，不套用原生命令的行数上限。"""
+    lines = []
+    for item in items:
+        description = " ".join(str(item["description"]).split())
+        label = f"/{item['primary']}"
+        if description:
+            label += f"：{description}"
+        if (
+            item["plugin_name"] == "astrbot_plugin_get_px"
+            and item.get("handler_name") == "cmd_p"
+        ):
+            label += "；不填标签即随机发图"
+        lines.append(label)
+    return tuple(lines)
+
+
 def build_unified_menu_groups(
     context: Any,
     event: Any,
@@ -354,13 +478,41 @@ def build_unified_menu_groups(
         if not getattr(item["plugin"], "reserved", False)
         and not item["native_ids"]
     ]
-    plugin_items.sort(key=lambda item: (item["display_name"].casefold(), item["primary"].casefold()))
-    plugin_image_lines = list(_command_lines(plugin_items, image=True))
-    if not plugin_image_lines:
-        plugin_image_lines = ["当前平台暂无启用的插件命令。"]
-    plugin_text_lines = list(_command_lines(plugin_items, image=False))
-    if not plugin_text_lines:
-        plugin_text_lines = ["当前平台暂无启用的插件命令。"]
+    plugin_groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for item in plugin_items:
+        group_key = (
+            item["module_path"],
+            item["display_name"] or item["plugin_name"],
+        )
+        plugin_groups[group_key].append(item)
+
+    image_plugin_groups: list[tuple[str, tuple[str, ...], tuple[int, int, int]]] = []
+    text_plugin_groups: list[tuple[str, tuple[str, ...]]] = []
+    for (_, display_name), unsorted_items in sorted(
+        plugin_groups.items(),
+        key=lambda pair: (pair[0][1].casefold(), pair[0][0].casefold()),
+    ):
+        group_items = _plugin_menu_items(unsorted_items)
+        if not group_items:
+            continue
+        group_items.sort(key=lambda item: item["primary"].casefold())
+        is_anime_plugin = any(
+            item["plugin_name"] == "astrbot_plugin_get_px" for item in group_items
+        )
+        if is_anime_plugin:
+            image_lines = _anime_plugin_image_lines(group_items)
+            text_lines = list(_complete_plugin_text_lines(group_items))
+            if any(_auto_trigger_enabled(item["plugin"]) for item in group_items):
+                text_lines.append("自然语言发图：来一份图；来张风景图")
+        else:
+            image_lines = _command_lines(group_items, image=True)
+            text_lines = list(_complete_plugin_text_lines(group_items))
+        if image_lines:
+            image_plugin_groups.append(
+                (display_name, tuple(image_lines[:3]), (145, 117, 171))
+            )
+        if text_lines:
+            text_plugin_groups.append((display_name, tuple(text_lines)))
 
     is_admin = bool(getattr(event, "is_admin", lambda: False)())
     old_admin_image = _IMAGE_GROUPS[-1]
@@ -375,7 +527,7 @@ def build_unified_menu_groups(
     image_groups = (
         *tuple(_IMAGE_GROUPS[:5]),
         ("AstrBot 聊天", tuple(native_image_lines[:3]), (91, 145, 173)),
-        ("启用插件", tuple(plugin_image_lines[:3]), (145, 117, 171)),
+        *tuple(image_plugin_groups),
         management_image,
     )
     native_text_lines = tuple(
@@ -385,7 +537,7 @@ def build_unified_menu_groups(
     text_groups = (
         *tuple(_TEXT_GROUPS[:5]),
         ("AstrBot 聊天", native_text_lines),
-        ("启用插件", tuple(plugin_text_lines)),
+        *tuple(text_plugin_groups),
         management_text,
     )
     return image_groups, text_groups
