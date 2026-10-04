@@ -313,7 +313,9 @@ class WhisperTranscriber:
             raise ValueError("audio is empty")
         if len(audio) > 30 * 16000:
             raise ValueError("audio exceeds Whisper's 30 second input window")
-        inputs = self.processor(audio, sampling_rate=16000, return_tensors="pt")
+        inputs = self.processor(
+            audio, sampling_rate=16000, return_tensors="pt", return_attention_mask=True,
+        )
         features = inputs.input_features.to(self.device)
         prompt_builder = getattr(self.processor, "get_decoder_prompt_ids", None)
         if prompt_builder is None:
@@ -322,6 +324,7 @@ class WhisperTranscriber:
         with self.torch.inference_mode():
             predicted = self.model.generate(
                 features,
+                attention_mask=inputs.attention_mask.to(self.device),
                 forced_decoder_ids=forced_decoder_ids,
                 do_sample=False,
                 num_beams=1,
