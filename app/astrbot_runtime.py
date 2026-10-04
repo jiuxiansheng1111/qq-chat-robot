@@ -82,6 +82,14 @@ class ChatRuntime:
 
         return await bind_astrbot_models(self._core.app.state.llm, context)
 
+    def clear_chat_context(self, raw_event: dict) -> None:
+        """重开聊天时清掉当前用户的短上下文，收藏和保存的记忆保留。"""
+        if self._initialized and self._core is not None:
+            group_id = str(raw_event.get("group_id") or "")
+            user_id = str(raw_event.get("user_id") or "")
+            if group_id and user_id:
+                self._core.app.state.memory.clear(group_id, user_id)
+
     def _restore_proxy(self) -> None:
         for key, previous in self._previous_proxy.items():
             if os.environ.get(key) != self._installed_proxy.get(key):

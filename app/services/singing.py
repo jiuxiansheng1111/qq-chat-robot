@@ -21,6 +21,7 @@ from app.services.audio_chunks import (
     locate_audio_tool,
     run_audio_command,
 )
+from app.services.singing_diagnostics import save_failed_singing_diagnostics
 from app.services.singing_excerpt import (
     SingingExcerpt,
     format_excerpt_lrc,
@@ -152,6 +153,47 @@ def _take_singing_mode(query: str, mode: Literal["full", "clip"]) -> tuple[str, 
     return query[match.end():].strip(" ：:"), selected
 
 
+def _resolve_singing_profile_alias(
+    requested: str, profiles: Mapping[str, Mapping[str, object]]
+) -> str | None:
+    profile_id = resolve_voice_persona_alias(requested, profiles)
+    if profile_id is not None:
+        return profile_id
+    matches = [
+        profile_id for profile_id, profile in profiles.items()
+        if requested.casefold() in {
+            profile_id.casefold(), str(profile.get("label") or "").casefold()
+        }
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _take_singing_profile(
+    query: str, profiles: Mapping[str, Mapping[str, object]]
+) -> tuple[str | None, str]:
+    # 有分隔符时沿用原语法，音色名必须完整匹配。
+    separated = re.match(r"([^\s:：]+)[\s:：]+(.+)", query, flags=re.DOTALL)
+    if separated:
+        profile_id = _resolve_singing_profile_alias(separated.group(1), profiles)
+        if profile_id is not None:
+            return profile_id, separated.group(2).strip()
+
+    # 没有分隔符时只在命令开头找完整音色别名，最长别名优先。
+    # 短英文别名必须带空格或冒号，避免吞掉英文歌名的开头。
+    for end in range(len(query), 0, -1):
+        requested = query[:end]
+        profile_id = _resolve_singing_profile_alias(requested, profiles)
+        if profile_id is None:
+            continue
+        alias = requested.strip()
+        if alias.isascii() and len(alias) < 6:
+            continue
+        song = query[end:].strip(" ：:")
+        if song:
+            return profile_id, song
+    return None, query
+
+
 def parse_singing_command(
     text: str, profiles: Mapping[str, Mapping[str, object]], *, addressed: bool
 ) -> SingingCommand | None:
@@ -184,24 +226,9 @@ def parse_singing_command(
                 continue
             query = candidate[len(prefix):].strip(" ：:")[:160]
             query, mode = _take_singing_mode(query, mode)
-            profile_id = None
-            # 用户明确指定音色时，名称与歌名之间必须有空格或冒号，
-            # 避免把歌曲标题误读成音色。
-            match = re.match(r"([^\s:：]+)[\s:：]+(.+)", query, flags=re.DOTALL)
-            if match:
-                requested = match.group(1)
-                profile_id = resolve_voice_persona_alias(requested, profiles)
-                if profile_id is None:
-                    matches = [
-                        profile_id for profile_id, profile in profiles.items()
-                        if requested.casefold() in {
-                            profile_id.casefold(), str(profile.get("label") or "").casefold()
-                        }
-                    ]
-                    profile_id = matches[0] if len(matches) == 1 else None
-                if profile_id:
-                    query = match.group(2).strip()
-                    query, mode = _take_singing_mode(query, mode)
+            profile_id, query = _take_singing_profile(query, profiles)
+            if profile_id:
+                query, mode = _take_singing_mode(query, mode)
             return SingingCommand("sing", query, profile_id, mode)
     return None
 
@@ -483,7 +510,7 @@ async def check_cover_quality(
         max_missing_vocal_seconds=settings.singing_max_missing_vocal_seconds,
     )
     if problems:
-        raise SingingPipelineError("这次歌声未通过音准/音色检查：" + "；".join(problems))
+        raise SingingPipelineError("这次翻唱的人声检查没通过：" + "；".join(problems))
     return report
 
 
@@ -804,7 +831,11 @@ async def _generate_singing_cover_unlocked(
             mode=mode, source_start_seconds=selection.start_seconds,
             source_end_seconds=selection.end_seconds,
         )
-    except BaseException:
+    except BaseException as exc:
+        with suppress(OSError, ValueError):
+            await asyncio.to_thread(
+                save_failed_singing_diagnostics, job_id, job_dir, profile_id, type(exc).__name__,
+            )
         if delivered:
             with suppress(OSError, ValueError):
                 await asyncio.to_thread(archive_singing_job, job_id)

@@ -104,3 +104,12 @@ NapCat 切换到 AstrBot 后，不要再把相同 OneBot 消息转发到旧 `/on
 - [AstrBot CLI 启动参数](https://github.com/AstrBotDevs/AstrBot/blob/v4.28.2/astrbot/cli/commands/cmd_run.py)
 - [AstrBot 插件开发文档](https://docs.astrbot.app/dev/star/plugin-new.html)
 - [AstrBot OneBot/NapCat 文档](https://docs.astrbot.app/platform/aiocqhttp.html)
+
+
+## 统一菜单和会话模型
+
+群里 @机器人说“帮助”“给我看看菜单”会先发图片；说“发文字版菜单”再显示详细用法。原来的聊天、语音翻唱、点歌视频、工具、小游戏和图鉴放在同一张菜单里。AstrBot 原生命令和插件命令按当前平台、启用状态及用户权限列出；插件关闭的签到功能不会展示。
+
+原生命令改名后，菜单跟着显示注册名称。管理员用 `/provider` 切换会话模型时，旧聊天功能也会使用该选择；后台任务沿用发起请求的会话。`/reset` 或 `/new` 在 AstrBot 权限检查通过后，同时清掉原功能的当前用户短上下文，收藏与保存的记忆继续保留。`/stats` 只统计 AstrBot 原生会话用量，不包含旧业务的直接模型调用。
+
+帮助入口优先级为 100，清理上下文入口为 110；原业务入口仍为 -100。群开关和黑名单也作用于新菜单，避免默认帮助绕过原限制。图片背景继续使用本机菜单配置；插件更新后菜单会重新读取命令。

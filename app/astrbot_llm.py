@@ -4,16 +4,31 @@ from __future__ import annotations
 
 import copy
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from app.llm.providers import LLMError
 from app.llm.resilience import CircuitBreaker, ProviderStats
 
 logger = logging.getLogger(__name__)
+_session_origin: ContextVar[str | None] = ContextVar("astrbot_model_session", default=None)
+
+
+@contextmanager
+def model_session(umo: str | None) -> Iterator[None]:
+    """请求和它的后台任务使用同一会话模型，各群之间不串。"""
+    token = _session_origin.set(umo)
+    try:
+        yield
+    finally:
+        _session_origin.reset(token)
 
 
 def _model_config(context: Any) -> dict:
-    config = context.get_config()
+    umo = _session_origin.get()
+    config = context.get_config(umo) if umo else context.get_config()
     runner = config.get("agent_runner", {})
     if not isinstance(runner, dict):
         raise LLMError("AstrBot 聊天配置格式无效")
@@ -37,6 +52,12 @@ class AstrBotChatProvider:
     async def chat(self, messages: list[dict]) -> str:
         config = _model_config(self.context)
         primary = config.get("provider_id", "")
+        umo = _session_origin.get()
+        if umo:
+            try:
+                primary = await self.context.get_current_chat_provider_id(umo)
+            except Exception as exc:
+                raise LLMError("当前会话的 AstrBot 模型不可用") from exc
         if not isinstance(primary, str) or not primary.strip():
             raise LLMError("AstrBot 默认聊天模型未配置")
         fallbacks = config.get("fallback_provider_ids", []) or []

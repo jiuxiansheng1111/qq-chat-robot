@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from collections.abc import Mapping
 from contextlib import suppress
@@ -10,6 +11,8 @@ from typing import Any
 
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _find_project_root() -> Path:
@@ -87,6 +90,116 @@ class QQChatPlugin(Star):
         finally:
             self._wechat_bridges.clear()
 
+    async def _legacy_event_allowed(self, raw_event: Mapping[str, Any] | None) -> bool:
+        """沿用旧群开关和黑名单，避免高优先级菜单绕过限制。"""
+        if raw_event is None:
+            return False
+        if raw_event.get("message_type") != "group":
+            return True
+        group_id = str(raw_event.get("group_id") or "").strip()
+        user_id = str(raw_event.get("user_id") or "").strip()
+        core = getattr(self.runtime, "_core", None)
+        database = getattr(getattr(core, "app", None), "state", None)
+        database = getattr(database, "db", None)
+        if not group_id or not user_id or database is None:
+            return False
+        try:
+            if not await database.group_enabled(group_id):
+                return False
+            return not await database.is_blocked(group_id, user_id)
+        except Exception:
+            _LOGGER.exception("检查旧群开关或黑名单失败，暂不处理菜单请求")
+            return False
+
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=110)
+    async def on_native_context_reset(self, event: AstrMessageEvent) -> None:
+        """清除旧短上下文后让 AstrBot 继续处理 /reset 或 /new。"""
+        if self.runtime is None:
+            return
+
+        original = event.get_extra("astrbot_original_message_str", "") or ""
+        current = event.get_message_str()
+        from app.astrbot_menu import enabled_native_commands, native_reset_command
+
+        command = native_reset_command(self.context, event, original, current)
+        if command is None:
+            return
+
+        from astrbot.core.star.filter.permission import (
+            PermissionType,
+            PermissionTypeFilter,
+        )
+
+        config = self.context.get_config(getattr(event, "unified_msg_origin", None))
+        allowed = PermissionTypeFilter(
+            PermissionType.SHARED_GROUP_ADMIN,
+            raise_error=False,
+        ).filter(event, config)
+        if not allowed:
+            return
+
+        from app.astrbot_menu import _raw_event_for_reset
+
+        raw_event = _raw_event_for_reset(self, event)
+        if not await self._legacy_event_allowed(raw_event):
+            return
+
+        if command in enabled_native_commands(self.context, event):
+            self.runtime.clear_chat_context(raw_event)
+
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=100)
+    async def on_unified_help_menu(self, event: AstrMessageEvent):
+        """回复图片或文字菜单，并停止后续重复聊天。"""
+        if (
+            self.runtime is None
+            or _is_stopped(event)
+            or _result_has_reply(_get_result_or_none(event))
+            or getattr(event, "_has_send_oper", False)
+        ):
+            return
+
+        from app.astrbot_menu import build_unified_menu_groups, menu_request_kind
+
+        request_kind = menu_request_kind(event.get_message_str())
+        if request_kind is None:
+            request_kind = menu_request_kind(
+                event.get_extra("astrbot_original_message_str", "")
+            )
+        if request_kind is None:
+            return
+
+        from app.astrbot_menu import _raw_event_for_reset
+
+        raw_event = _raw_event_for_reset(self, event)
+        if not await self._legacy_event_allowed(raw_event):
+            # 即使被限制，也不要让后续 AstrBot 默认帮助处理器绕过旧规则。
+            event.should_call_llm(False)
+            event.stop_event()
+            return
+
+        image_groups, text_groups = build_unified_menu_groups(self.context, event)
+        from app.services.help_menu import concise_text_menu, render_help_menu
+
+        event.should_call_llm(False)
+        event.stop_event()
+        if request_kind == "text":
+            yield event.make_result().message(concise_text_menu(text_groups))
+            return
+
+        try:
+            encoded = await render_help_menu(
+                self.runtime._core.settings,
+                image_groups=image_groups,
+                text_groups=text_groups,
+            )
+            if encoded.startswith("base64://"):
+                encoded = encoded.removeprefix("base64://")
+            yield event.make_result().base64_image(encoded)
+        except Exception:
+            # 菜单图片不可用时仍返回同一份完整菜单内容。
+            _LOGGER.exception("绘制菜单图片失败，改用文字菜单")
+            yield event.make_result().message(concise_text_menu(text_groups))
+
     @filter.event_message_type(filter.EventMessageType.ALL, priority=-90)
     async def on_anime_image(self, event: AstrMessageEvent):
         """明确要随机图片时交给 AstrBot 图片插件。"""
@@ -138,7 +251,10 @@ class QQChatPlugin(Star):
             raise RuntimeError("聊天机器人插件尚未初始化")
         if self.legacy_chat:
             event.should_call_llm(False)
-        result = await self.runtime.handle_event(raw_event, bridge.action_call)
+        from app.astrbot_llm import model_session
+
+        with model_session(getattr(event, "unified_msg_origin", None)):
+            result = await self.runtime.handle_event(raw_event, bridge.action_call)
         if result.get("handled"):
             event.should_call_llm(False)
             event.stop_event()
@@ -190,7 +306,10 @@ class QQChatPlugin(Star):
                 params["self_id"] = str(self_id)
             return await bot_api.call_action(action, **params)
 
-        result = await self.runtime.handle_event(raw_event, action_call)
+        from app.astrbot_llm import model_session
+
+        with model_session(getattr(event, "unified_msg_origin", None)):
+            result = await self.runtime.handle_event(raw_event, action_call)
         if result.get("handled"):
             event.should_call_llm(False)
             event.stop_event()

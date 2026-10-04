@@ -7,6 +7,7 @@ import io
 import os
 import re
 import uuid
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -14,9 +15,13 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _BACKGROUND_DEFAULT = "assets/help-menu-background.png"
-_CANVAS_SIZE = (1080, 1480)
+_CANVAS_WIDTH = 1080
+_MIN_CANVAS_HEIGHT = 1480
 _MAX_ENCODED_BYTES = 4 * 1024 * 1024
-_CACHE_VERSION = "help-menu-v1"
+_CACHE_VERSION = "help-menu-v2"
+_MENU_TITLE = "聊天机器人 · 功能菜单"
+_IMAGE_MENU_SUBTITLE = "先 @我，再说想做什么；如“给我看看菜单”"
+_TEXT_MENU_SUBTITLE = "先 @我，再说想做什么。"
 _MENU_REQUEST_WORDS = (
     "给我看看", "让我看看", "帮我看看", "帮我看", "让我看", "给我看", "看看", "看一下", "查看", "想看", "要看",
     "想要", "我要", "给我", "发给我", "发我", "发一份", "发一张", "发张", "发一下",
@@ -114,6 +119,30 @@ _TEXT_GROUPS = (
 
 _TEXT_MENU_ALIASES = frozenset({"文字版菜单", "文字菜单", "文字版帮助", "菜单文字版"})
 
+
+def _normalize_image_groups(
+    groups: Sequence[tuple[str, Sequence[str], Sequence[int]]] | None,
+) -> tuple[tuple[str, tuple[str, ...], tuple[int, int, int]], ...]:
+    selected = _IMAGE_GROUPS if groups is None else groups
+    normalized = []
+    for heading, lines, accent in selected:
+        color = tuple(int(value) for value in accent)
+        if len(color) != 3:
+            raise ValueError("菜单卡片颜色应包含三个 RGB 分量")
+        normalized.append((str(heading), tuple(str(line) for line in lines), color))
+    return tuple(normalized)
+
+
+def _normalize_text_groups(
+    groups: Sequence[tuple[str, Sequence[str]]] | None,
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    selected = _TEXT_GROUPS if groups is None else groups
+    return tuple(
+        (str(heading), tuple(str(line) for line in lines))
+        for heading, lines in selected
+    )
+
+
 def _menu_request_text(text: str) -> str:
     value = " ".join(text.strip().split())
     if value.startswith("/"):
@@ -132,11 +161,16 @@ def _has_menu_request(value: str) -> bool:
     )
 
 
-def concise_text_menu() -> str:
+def concise_text_menu(
+    text_groups: Sequence[tuple[str, Sequence[str]]] | None = None,
+    *,
+    title: str | None = None,
+    subtitle: str | None = None,
+) -> str:
     """返回分组清楚的完整文字菜单。"""
-    sections = ["聊天机器人 · 功能菜单", "先 @我，再说想做什么。"]
-    for title, lines in _TEXT_GROUPS:
-        sections.append(f"\n【{title}】")
+    sections = [title or _MENU_TITLE, subtitle or _TEXT_MENU_SUBTITLE]
+    for heading, lines in _normalize_text_groups(text_groups):
+        sections.append(f"\n【{heading}】")
         sections.extend(f"- {line}" for line in lines)
     return "\n".join(sections)
 
@@ -220,9 +254,9 @@ def _background_path(settings: Any) -> Path:
     return path.resolve()
 
 
-def _gradient_background() -> Image.Image:
-    width, height = _CANVAS_SIZE
-    image = Image.new("RGB", _CANVAS_SIZE)
+def _gradient_background(size: tuple[int, int]) -> Image.Image:
+    width, height = size
+    image = Image.new("RGB", size)
     pixels = image.load()
     top = (246, 249, 247)
     bottom = (229, 241, 234)
@@ -232,22 +266,22 @@ def _gradient_background() -> Image.Image:
         for x in range(width):
             pixels[x, y] = color
     draw = ImageDraw.Draw(image, "RGBA")
-    draw.ellipse((-220, 1040, 450, 1710), fill=(208, 232, 221, 70))
+    draw.ellipse((-220, height - 440, 450, height + 230), fill=(208, 232, 221, 70))
     draw.ellipse((700, -260, 1340, 380), fill=(224, 237, 235, 90))
     return image
 
 
-def _load_background(path: Path) -> Image.Image:
+def _load_background(path: Path, size: tuple[int, int]) -> Image.Image:
     try:
         with Image.open(path) as source:
             return ImageOps.fit(
                 source.convert("RGB"),
-                _CANVAS_SIZE,
+                size,
                 method=Image.Resampling.LANCZOS,
                 centering=(0.5, 0.5),
             )
     except (OSError, ValueError):
-        return _gradient_background()
+        return _gradient_background(size)
 
 
 def _draw_centered(
@@ -275,29 +309,84 @@ def _fit_font(
     return _load_font(font_path, min_size)
 
 
-def _draw_menu(background_path: Path) -> Image.Image:
-    font_path = _find_font_path()
-    background = _load_background(background_path)
-    canvas = background.convert("RGBA")
-    draw = ImageDraw.Draw(canvas, "RGBA")
-    width, _ = _CANVAS_SIZE
+def _fit_wrapped_text(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font_path: Path,
+    max_width: int,
+    size: int = 25,
+    min_size: int = 19,
+) -> tuple[ImageFont.FreeTypeFont, tuple[str, ...]]:
+    for current_size in range(size, min_size - 1, -1):
+        font = _load_font(font_path, current_size)
+        if draw.textbbox((0, 0), text, font=font)[2] <= max_width:
+            return font, (text,)
 
-    title_font = _load_font(font_path, 49)
-    subtitle_font = _load_font(font_path, 29)
-    draw.text((58, 54), "聊天机器人 · 功能菜单", font=title_font, fill=(37, 54, 68, 255))
-    draw.text((61, 127), "先 @我，再说想做什么；如“给我看看菜单”", font=subtitle_font, fill=(80, 103, 108, 245))
-    draw.rounded_rectangle((59, 184, width - 59, 188), radius=2, fill=(91, 151, 132, 150))
+    font = _load_font(font_path, min_size)
+    lines: list[str] = []
+    current = ""
+    for char in text:
+        if char == "\n":
+            lines.append(current)
+            current = ""
+            continue
+        candidate = current + char
+        if current and draw.textbbox((0, 0), candidate, font=font)[2] > max_width:
+            lines.append(current)
+            current = char
+        else:
+            current = candidate
+    if current or not lines:
+        lines.append(current)
+    return font, tuple(lines)
+
+
+def _draw_menu(
+    background_path: Path,
+    image_groups: tuple[tuple[str, tuple[str, ...], tuple[int, int, int]], ...],
+    title: str,
+    subtitle: str,
+) -> Image.Image:
+    font_path = _find_font_path()
+    width = _CANVAS_WIDTH
 
     left = 56
     top = 215
     gap_x = 24
     gap_y = 22
     card_width = (width - 2 * left - gap_x) // 2
+    measure = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    prepared_groups = []
     card_height = 332
+    for heading, lines, accent in image_groups:
+        prepared_lines = []
+        content_height = 0
+        for line in lines:
+            font, wrapped = _fit_wrapped_text(
+                measure, line, font_path, card_width - 87,
+            )
+            prepared_lines.append((font, wrapped))
+            content_height += max(61, 30 * len(wrapped))
+        card_height = max(card_height, 105 + content_height + 25)
+        prepared_groups.append((heading, prepared_lines, accent))
+
+    rows = (len(prepared_groups) + 1) // 2
+    content_bottom = top + rows * (card_height + gap_y) - gap_y if rows else top
+    note_y = content_bottom + 70
+    footer_y = note_y + 47
+    canvas_height = max(_MIN_CANVAS_HEIGHT, footer_y + 79)
+    canvas = _load_background(background_path, (width, canvas_height)).convert("RGBA")
+    draw = ImageDraw.Draw(canvas, "RGBA")
+    title_font = _fit_font(draw, title, font_path, width - 116, size=49, min_size=32)
+    subtitle_font = _fit_font(draw, subtitle, font_path, width - 122, size=29, min_size=19)
+    draw.text((58, 54), title, font=title_font, fill=(37, 54, 68, 255))
+    draw.text((61, 127), subtitle, font=subtitle_font, fill=(80, 103, 108, 245))
+    draw.rounded_rectangle((59, 184, width - 59, 188), radius=2, fill=(91, 151, 132, 150))
+
     shadow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     shadow_draw = ImageDraw.Draw(shadow)
-    cards: list[tuple[int, int, str, tuple[str, ...], tuple[int, int, int]]] = []
-    for index, (heading, lines, accent) in enumerate(_IMAGE_GROUPS):
+    cards = []
+    for index, (heading, lines, accent) in enumerate(prepared_groups):
         row, column = divmod(index, 2)
         x = left + column * (card_width + gap_x)
         y = top + row * (card_height + gap_y)
@@ -322,14 +411,21 @@ def _draw_menu(background_path: Path) -> Image.Image:
         draw.ellipse((x + 27, y + 24, x + 68, y + 65), fill=(*accent, 255))
         number_font = _load_font(font_path, 18)
         _draw_centered(draw, (x + 47, y + 45), f"{index + 1:02d}", number_font, (255, 255, 255))
-        heading_font = _load_font(font_path, 32)
+        heading_font = _fit_font(
+            draw, heading, font_path, card_width - 120, size=32, min_size=21,
+        )
         draw.text((x + 82, y + 27), heading, font=heading_font, fill=(41, 55, 68, 255))
 
-        for line_index, line in enumerate(lines):
-            line_y = y + 105 + line_index * 61
+        line_offset = 0
+        for font, wrapped in lines:
+            line_y = y + 105 + line_offset
             draw.ellipse((x + 32, line_y + 10, x + 43, line_y + 21), fill=(*accent, 230))
-            font = _fit_font(draw, line, font_path, card_width - 87)
-            draw.text((x + 57, line_y), line, font=font, fill=(53, 67, 78, 255))
+            for wrapped_index, part in enumerate(wrapped):
+                draw.text(
+                    (x + 57, line_y + wrapped_index * 30), part,
+                    font=font, fill=(53, 67, 78, 255),
+                )
+            line_offset += max(61, 30 * len(wrapped))
 
     canvas = Image.alpha_composite(canvas, card_layer)
     draw = ImageDraw.Draw(canvas, "RGBA")
@@ -339,13 +435,13 @@ def _draw_menu(background_path: Path) -> Image.Image:
     note = "短版约 20 秒 · 整首逐段发送，每段不到 2 分钟"
     note_bbox = draw.textbbox((0, 0), note, font=note_font)
     draw.text(
-        ((width - (note_bbox[2] - note_bbox[0])) // 2, 1325), note,
+        ((width - (note_bbox[2] - note_bbox[0])) // 2, note_y), note,
         font=note_font, fill=(64, 83, 92, 255),
     )
     footer_text = "想看全部用法：@我 文字版菜单"
     footer_bbox = draw.textbbox((0, 0), footer_text, font=footer_font)
     draw.text(
-        ((width - (footer_bbox[2] - footer_bbox[0])) // 2, 1372),
+        ((width - (footer_bbox[2] - footer_bbox[0])) // 2, footer_y),
         footer_text,
         font=footer_font,
         fill=(50, 83, 76, 255),
@@ -353,7 +449,13 @@ def _draw_menu(background_path: Path) -> Image.Image:
     return canvas.convert("RGB")
 
 
-def _cache_key(background: Path) -> str:
+def _cache_key(
+    background: Path,
+    image_groups: tuple[tuple[str, tuple[str, ...], tuple[int, int, int]], ...],
+    text_groups: tuple[tuple[str, tuple[str, ...]], ...],
+    title: str,
+    subtitle: str,
+) -> str:
     info = "missing"
     try:
         stat = background.stat()
@@ -361,15 +463,39 @@ def _cache_key(background: Path) -> str:
     except OSError:
         pass
     source_mtime = Path(__file__).stat().st_mtime_ns
-    raw = "\n".join((_CACHE_VERSION, str(background), info, str(source_mtime), concise_text_menu()))
+    raw = "\n".join((
+        _CACHE_VERSION,
+        str(background),
+        info,
+        str(source_mtime),
+        concise_text_menu(text_groups, title=title, subtitle=subtitle),
+        repr(image_groups),
+    ))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
 
 
-def _render_help_menu_sync(settings: Any) -> str:
+def _render_help_menu_sync(
+    settings: Any,
+    image_groups: Sequence[tuple[str, Sequence[str], Sequence[int]]] | None = None,
+    text_groups: Sequence[tuple[str, Sequence[str]]] | None = None,
+    title: str | None = None,
+    subtitle: str | None = None,
+) -> str:
+    normalized_image_groups = _normalize_image_groups(image_groups)
+    normalized_text_groups = _normalize_text_groups(text_groups)
+    resolved_title = title or _MENU_TITLE
+    resolved_subtitle = subtitle or _IMAGE_MENU_SUBTITLE
     background_path = _background_path(settings)
     cache_dir = _PROJECT_ROOT / "data" / "help_menu"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_path = cache_dir / f"menu_{_cache_key(background_path)}.png"
+    cache_key = _cache_key(
+        background_path,
+        normalized_image_groups,
+        normalized_text_groups,
+        resolved_title,
+        resolved_subtitle,
+    )
+    cache_path = cache_dir / f"menu_{cache_key}.png"
     try:
         if cache_path.is_file():
             cached = cache_path.read_bytes()
@@ -382,7 +508,9 @@ def _render_help_menu_sync(settings: Any) -> str:
     except OSError:
         pass
 
-    rendered = _draw_menu(background_path)
+    rendered = _draw_menu(
+        background_path, normalized_image_groups, resolved_title, resolved_subtitle,
+    )
     png_bytes = b""
     for color_count in (256, 192, 128, 96, 64, 32):
         output = io.BytesIO()
@@ -403,6 +531,15 @@ def _render_help_menu_sync(settings: Any) -> str:
     return "base64://" + encoded.decode("ascii")
 
 
-async def render_help_menu(settings: Any) -> str:
+async def render_help_menu(
+    settings: Any,
+    *,
+    image_groups: Sequence[tuple[str, Sequence[str], Sequence[int]]] | None = None,
+    text_groups: Sequence[tuple[str, Sequence[str]]] | None = None,
+    title: str | None = None,
+    subtitle: str | None = None,
+) -> str:
     """在线程中绘制或读取缓存，返回 OneBot base64 图片地址。"""
-    return await asyncio.to_thread(_render_help_menu_sync, settings)
+    return await asyncio.to_thread(
+        _render_help_menu_sync, settings, image_groups, text_groups, title, subtitle,
+    )

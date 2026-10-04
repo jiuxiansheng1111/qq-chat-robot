@@ -66,6 +66,36 @@ function Wait-LocalPort {
     return $false
 }
 
+function ConvertTo-NativeArgument {
+    param([Parameter(Mandatory = $true)][string]$Value)
+
+    $builder = [System.Text.StringBuilder]::new()
+    [void]$builder.Append([char]34)
+    $backslashCount = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq [char]92) {
+            $backslashCount++
+            continue
+        }
+        if ($character -eq [char]34) {
+            [void]$builder.Append([string]::new([char]92, (2 * $backslashCount) + 1))
+            [void]$builder.Append([char]34)
+            $backslashCount = 0
+            continue
+        }
+        if ($backslashCount -gt 0) {
+            [void]$builder.Append([string]::new([char]92, $backslashCount))
+            $backslashCount = 0
+        }
+        [void]$builder.Append($character)
+    }
+    if ($backslashCount -gt 0) {
+        [void]$builder.Append([string]::new([char]92, 2 * $backslashCount))
+    }
+    [void]$builder.Append([char]34)
+    return $builder.ToString()
+}
+
 function Get-DotEnvValues {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -205,6 +235,7 @@ function Start-GptSovitsSidecar {
         [System.IO.Path]::GetFullPath((Join-Path $projectRoot $rootValue))
     }
     $apiScript = Join-Path $gptRoot "api_v2.py"
+    $launcherScript = Join-Path $PSScriptRoot "run_gpt_sovits.py"
     $configValue = ([string]$Settings["GPT_SOVITS_TTS_CONFIG"]).Trim()
     if (-not $configValue) {
         $configValue = "GPT_SoVITS\configs\tts_infer.yaml"
@@ -221,6 +252,10 @@ function Start-GptSovitsSidecar {
     }
     if (-not (Test-Path -LiteralPath $apiScript -PathType Leaf)) {
         Write-Host "[VOICE] api_v2.py not found: $apiScript" -ForegroundColor Yellow
+        return $false
+    }
+    if (-not (Test-Path -LiteralPath $launcherScript -PathType Leaf)) {
+        Write-Host "[VOICE] GPT-SoVITS memory launcher not found: $launcherScript" -ForegroundColor Yellow
         return $false
     }
     if (-not (Test-Path -LiteralPath $ttsConfig -PathType Leaf)) {
@@ -284,9 +319,18 @@ function Start-GptSovitsSidecar {
         try {
             $env:TEMP = $voiceTempRoot
             $env:TMP = $voiceTempRoot
+            $voiceArgumentValues = @(
+                $launcherScript,
+                "--gpt-root", $gptRoot,
+                "--api-script", $apiScript,
+                "--", "-a", $voiceHost, "-p", [string]$voicePort, "-c", $ttsConfig
+            )
+            $voiceArgumentList = ($voiceArgumentValues | ForEach-Object {
+                ConvertTo-NativeArgument -Value ([string]$_)
+            }) -join " "
             Start-Process `
                 -FilePath $gptPython `
-                -ArgumentList @("api_v2.py", "-a", $voiceHost, "-p", [string]$voicePort, "-c", $ttsConfig) `
+                -ArgumentList $voiceArgumentList `
                 -WorkingDirectory $gptRoot `
                 -RedirectStandardOutput $voiceOutLog `
                 -RedirectStandardError $voiceErrorLog `
