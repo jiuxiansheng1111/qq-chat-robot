@@ -510,7 +510,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--resume", action="store_true",
         help="warm-start weights from this run's latest checkpoint; optimizer and step count reset",
     )
-    parser.add_argument("--max-steps", type=int, choices=(100, 300, 1000), default=100)
+    parser.add_argument("--max-steps", type=int, choices=(100, 300, 500, 1000), default=100)
     parser.add_argument("--batch-size", type=int, choices=(1,), default=1)
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--python", type=Path, default=Path(sys.executable), help="isolated singing runtime Python")

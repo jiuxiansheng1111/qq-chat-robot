@@ -4,12 +4,48 @@ param()
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
+$startupHasher = [Security.Cryptography.SHA256]::Create()
+try {
+    $startupMutexHash = [BitConverter]::ToString($startupHasher.ComputeHash(
+        [Text.Encoding]::UTF8.GetBytes([IO.Path]::GetFullPath($projectRoot).ToLowerInvariant())
+    )).Replace('-', '')
+}
+finally {
+    $startupHasher.Dispose()
+}
+$script:startupMutex = [Threading.Mutex]::new($false, "Local\QQChatRobot.StartAll.$startupMutexHash")
+$script:startupMutexHeld = $false
+try {
+    $script:startupMutexHeld = $script:startupMutex.WaitOne(0)
+}
+catch [Threading.AbandonedMutexException] {
+    $script:startupMutexHeld = $true
+}
+function Release-StartAllMutex {
+    if ($script:startupMutex) {
+        try {
+            if ($script:startupMutexHeld) {
+                $script:startupMutex.ReleaseMutex()
+                $script:startupMutexHeld = $false
+            }
+        }
+        finally {
+            $script:startupMutex.Dispose()
+            $script:startupMutex = $null
+        }
+    }
+}
+if (-not $script:startupMutexHeld) {
+    Write-Host '[启动] 已有启动或训练维护任务正在进行，本次不重复启动。' -ForegroundColor Cyan
+    Release-StartAllMutex
+    exit 0
+}
 $desktopRoot = Split-Path -Parent $projectRoot
 $envPath = Join-Path $projectRoot ".env"
 $pythonPath = Join-Path $projectRoot ".venv\Scripts\python.exe"
 $bootstrapScript = Join-Path $PSScriptRoot "bootstrap_windows.ps1"
 $lifecycleScript = Join-Path $PSScriptRoot "run_bot.ps1"
-$logRoot = Join-Path $projectRoot "logs"
+$logRoot = Join-Path $projectRoot "data\logs"
 $botOutputLog = Join-Path $logRoot "bot.out.log"
 $botErrorLog = Join-Path $logRoot "bot.error.log"
 $napCatDesktop = "C:\Program Files\NapCatQQ Desktop\NapCatQQ-Desktop.exe"
@@ -64,6 +100,26 @@ function Wait-LocalPort {
         Start-Sleep -Seconds 1
     }
     return $false
+}
+
+function Get-LoopbackListenerOwnerId {
+    param([Parameter(Mandatory = $true)][int]$Port)
+
+    if (-not (Get-Command -Name Get-NetTCPConnection -ErrorAction SilentlyContinue)) {
+        throw "无法核对端口 $Port 的监听进程（Get-NetTCPConnection 不可用）。"
+    }
+    try {
+        $owners = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop |
+            Where-Object { $_.LocalAddress -in @('127.0.0.1', '::1') } |
+            Select-Object -ExpandProperty OwningProcess -Unique)
+    }
+    catch {
+        throw "无法核对端口 $Port 的监听进程：$($_.Exception.Message)"
+    }
+    if ($owners.Count -ne 1) {
+        throw "端口 $Port 没有唯一的本机监听进程，详情请查看启动日志。"
+    }
+    return [int]$owners[0]
 }
 
 function ConvertTo-NativeArgument {
@@ -427,14 +483,13 @@ try {
         throw "ONEBOT_SELF_ID is invalid in .env."
     }
 
-    $voiceSidecarReady = Start-GptSovitsSidecar -Settings $settings
-
     $napCatWebReady = Test-LocalPort -Port 6099
     $oneBotReady = Test-LocalPort -Port 3000
     $botReady = Test-LocalPort -Port 8000
 
     if (-not $useNapCatDesktop -and -not $napCatWebReady -and -not (Test-IsAdministrator)) {
         Write-Host "Administrator access is required. Requesting UAC confirmation..." -ForegroundColor Yellow
+        Release-StartAllMutex
         Request-Elevation
         exit 0
     }
@@ -451,7 +506,6 @@ try {
         else {
             Write-Host "[RUNNING] NapCatQQ Desktop" -ForegroundColor Green
         }
-        Write-Host "[ACCOUNT] Expected bot QQ: $qqId" -ForegroundColor Cyan
     }
     else {
         if ($napCatWebReady) {
@@ -477,16 +531,38 @@ try {
         Write-Host "[READY] OneBot HTTP: 3000" -ForegroundColor Green
     }
     else {
-        Write-Host "[SETUP REQUIRED] OneBot 3000 is not ready. Add/login QQ $qqId in NapCatQQ Desktop and enable HTTP Server port 3000." -ForegroundColor Yellow
+        Write-Host "[需登录] OneBot HTTP 3000 尚未就绪。请在 NapCatQQ Desktop 添加并登录机器人 QQ 账号，并启用 HTTP Server 端口 3000。" -ForegroundColor Yellow
     }
 
     . (Join-Path $PSScriptRoot 'bot_runtime_mode.ps1')
     if ((Get-QQChatRobotRuntime -ProjectRoot $projectRoot) -eq 'astrbot') {
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'run_astrbot.ps1')
         if ($LASTEXITCODE -ne 0) { throw 'AstrBot 启动失败，请检查 data/astrbot/logs。' }
-        Write-Host '聊天机器人已通过 AstrBot 启动。面板：http://127.0.0.1:6185'
+        if (-not (Wait-LocalPort -Port 6185 -TimeoutSeconds 5)) {
+            throw 'AstrBot 面板端口 6185 未就绪，请检查 data/astrbot/logs。'
+        }
+        if (-not (Wait-LocalPort -Port 6199 -TimeoutSeconds 30)) {
+            throw 'AstrBot OneBot 反向 WS 端口 6199 未就绪，请检查 data/astrbot/logs。'
+        }
+        $dashboardOwner = Get-LoopbackListenerOwnerId -Port 6185
+        $reverseWsOwner = Get-LoopbackListenerOwnerId -Port 6199
+        if ($dashboardOwner -ne $reverseWsOwner) {
+            throw 'AstrBot 面板 6185 与 OneBot 反向 WS 6199 不属于同一进程，请检查 data/astrbot/logs。'
+        }
+        Write-Host '[READY] AstrBot 面板已就绪：http://127.0.0.1:6185' -ForegroundColor Green
+        Write-Host '[READY] AstrBot OneBot 反向 WS 已就绪：127.0.0.1:6199' -ForegroundColor Green
+        try {
+            $voiceSidecarReady = Start-GptSovitsSidecar -Settings $settings
+        }
+        catch {
+            Write-Host "[语音] GPT-SoVITS 启动失败：$($_.Exception.Message)。AstrBot 已正常启动。日志：$logRoot\gpt_sovits.error.log" -ForegroundColor Yellow
+        }
+        Release-StartAllMutex
         exit 0
     }
+
+    # 先启动 QQ 和聊天机器人，再等待首次加载较慢的语音模型。
+    $voiceSidecarReady = Start-GptSovitsSidecar -Settings $settings
 
     if (-not (Test-Path -LiteralPath $lifecycleScript)) {
         throw "Bot lifecycle supervisor was not found: $lifecycleScript"
@@ -543,8 +619,11 @@ try {
 }
 catch {
     Write-Host ""
-    Write-Host ("Startup failed: {0}" -f $_.Exception.Message) -ForegroundColor Red
-    Write-Host "Press Enter to close this window."
-    Read-Host | Out-Null
+    Write-Host ("[启动失败] {0}" -f $_.Exception.Message) -ForegroundColor Red
+    Write-Host "日志目录：$logRoot；AstrBot 日志目录：$(Join-Path $projectRoot 'data\astrbot\logs')"
+    Release-StartAllMutex
     exit 1
+}
+finally {
+    Release-StartAllMutex
 }
