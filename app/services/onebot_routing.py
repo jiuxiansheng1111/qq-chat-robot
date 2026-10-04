@@ -190,6 +190,10 @@ def onebot_client(settings, *, self_id: str | None = None, **httpx_client_kwargs
         except TimeoutError as exc:
             raise httpx.TimeoutException("AstrBot OneBot action timed out", request=request) from exc
         except Exception as exc:
+            if _action_sends_reply(action) and "timeout: ntevent" in str(exc).casefold():
+                raise httpx.TimeoutException(
+                    "QQ message delivery confirmation timed out", request=request
+                ) from exc
             raise httpx.RequestError("AstrBot OneBot action failed", request=request) from exc
 
     kwargs = dict(httpx_client_kwargs)

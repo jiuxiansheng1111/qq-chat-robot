@@ -111,6 +111,22 @@ class QQChatPlugin(Star):
             _LOGGER.exception("检查旧群开关或黑名单失败，暂不处理菜单请求")
             return False
 
+    @filter.on_decorating_result()
+    async def filter_qq_source_links(self, event: AstrMessageEvent) -> None:
+        """插件和原生回复里的国外链接也改成文字来源。"""
+        get_name = getattr(event, "get_platform_name", None)
+        platform = str(get_name() if callable(get_name) else "").casefold()
+        if not any(tag in platform for tag in ("qq", "aiocqhttp", "onebot")):
+            return
+        from astrbot.api.message_components import Plain
+
+        from app.services.outbound_links import sanitize_qq_source_links
+
+        result = event.get_result()
+        for component in getattr(result, "chain", ()) or ():
+            if isinstance(component, Plain):
+                component.text = sanitize_qq_source_links(component.text)
+
     @filter.event_message_type(filter.EventMessageType.ALL, priority=110)
     async def on_native_context_reset(self, event: AstrMessageEvent) -> None:
         """清除旧短上下文后让 AstrBot 继续处理 /reset 或 /new。"""
@@ -192,13 +208,19 @@ class QQChatPlugin(Star):
                 image_groups=image_groups,
                 text_groups=text_groups,
             )
-            if encoded.startswith("base64://"):
-                encoded = encoded.removeprefix("base64://")
-            yield event.make_result().base64_image(encoded)
         except Exception:
-            # 菜单图片不可用时仍返回同一份完整菜单内容。
-            _LOGGER.exception("绘制菜单图片失败，改用文字菜单")
-            yield event.make_result().message(concise_text_menu(text_groups))
+            _LOGGER.exception("绘制菜单图片失败")
+            yield event.make_result().message("菜单图片暂时生成不了，可以发“文字版菜单”。")
+            return
+
+        normalized = self.runtime._core._qq_safe_image_variant(encoded) or encoded
+        normalized = normalized.removeprefix("base64://")
+        try:
+            # 直接等发送结果，才能接住协议端超时；yield 的发送发生在函数外。
+            await event.send(event.make_result().base64_image(normalized))
+        except Exception as exc:  # noqa: BLE001 -- 各平台的发送错误类型不同。
+            _LOGGER.warning("菜单图片发送未完成（%s）", type(exc).__name__)
+            yield event.make_result().message("菜单图片发送失败或超时，可以发“文字版菜单”。")
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=-90)
     async def on_anime_image(self, event: AstrMessageEvent):

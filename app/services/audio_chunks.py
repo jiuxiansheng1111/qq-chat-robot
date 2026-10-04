@@ -115,7 +115,8 @@ async def _stop_process_tree(process: asyncio.subprocess.Process) -> None:
 
 
 async def _run_process(
-    args: Sequence[str | Path], timeout_seconds: float, cwd: str | Path | None = None
+    args: Sequence[str | Path], timeout_seconds: float, cwd: str | Path | None = None,
+    env: dict[str, str] | None = None,
 ) -> bytes:
     if not args or timeout_seconds <= 0:
         raise ValueError("args must be nonempty and timeout_seconds positive")
@@ -123,6 +124,7 @@ async def _run_process(
         process = await asyncio.create_subprocess_exec(
             *(str(arg) for arg in args),
             cwd=str(cwd) if cwd is not None else None,
+            env=env,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -167,10 +169,11 @@ async def _run_process(
 
 
 async def run_audio_command(
-    args: Sequence[str | Path], *, cwd: str | Path | None = None, timeout_seconds: float = 120.0
+    args: Sequence[str | Path], *, cwd: str | Path | None = None, timeout_seconds: float = 120.0,
+    env: dict[str, str] | None = None,
 ) -> str:
     """安全运行本地音频命令，最多返回 8 KiB 标准输出。"""
-    return (await _run_process(args, timeout_seconds, cwd)).decode("utf-8", errors="replace")
+    return (await _run_process(args, timeout_seconds, cwd, env)).decode("utf-8", errors="replace")
 
 
 async def _probe_seconds(path: Path, ffprobe: str, timeout_seconds: float) -> float:

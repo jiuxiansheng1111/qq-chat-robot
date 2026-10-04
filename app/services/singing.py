@@ -7,6 +7,7 @@ import base64
 import json
 import logging
 import math
+import os
 import re
 import shutil
 from collections.abc import Awaitable, Callable, Mapping
@@ -19,7 +20,9 @@ from app.config import Settings
 from app.services.audio_chunks import (
     AudioChunk,
     locate_audio_tool,
-    run_audio_command,
+)
+from app.services.audio_chunks import (
+    run_audio_command as _run_audio_command,
 )
 from app.services.singing_diagnostics import save_failed_singing_diagnostics
 from app.services.singing_excerpt import (
@@ -30,6 +33,7 @@ from app.services.singing_excerpt import (
 )
 from app.services.singing_gpu import async_gpu_lock
 from app.services.singing_mix import vocal_clarity_filter, vocal_forward_mix_filter, wav_rms
+from app.services.singing_resources import singing_resource_problem
 from app.services.singing_sections import plan_paused_sections
 from app.services.singing_sources import (
     SINGING_DATA_ROOT,
@@ -106,6 +110,32 @@ def archive_singing_job(job_id: str, *, keep: int = 5) -> None:
 
 class SingingPipelineError(RuntimeError):
     """可安全展示给群成员的明确错误提示。"""
+
+
+async def run_audio_command(args, *, cwd=None, timeout_seconds=120.0) -> str:
+    """翻唱子进程按两线程运行，内存紧张时取消本次生成。"""
+    issue = singing_resource_problem(PROJECT_ROOT)
+    if issue:
+        raise SingingPipelineError(issue)
+    environment = dict(os.environ)
+    environment.update({key: "2" for key in (
+        "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS",
+    )})
+    task = asyncio.create_task(_run_audio_command(
+        args, cwd=cwd, timeout_seconds=timeout_seconds, env=environment,
+    ))
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=1)
+            if done:
+                return await task
+            issue = singing_resource_problem(PROJECT_ROOT)
+            if issue:
+                raise SingingPipelineError(issue)
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 @dataclass(frozen=True)
@@ -695,6 +725,9 @@ async def generate_singing_cover(
 ) -> SingingCover:
     """训练和翻唱轮流用显卡，避免同时生成时爆显存。"""
     async with async_gpu_lock():
+        issue = singing_resource_problem(PROJECT_ROOT, starting=True)
+        if issue:
+            raise SingingPipelineError(issue)
         return await _generate_singing_cover_unlocked(
             query, profile_id, job_id, settings, progress,
             bot_self_id=bot_self_id, mode=mode, on_chunk=on_chunk,

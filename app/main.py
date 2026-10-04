@@ -113,6 +113,7 @@ from app.services.onebot_routing import (
     onebot_route,
     set_current_onebot_self_id,
 )
+from app.services.outbound_links import sanitize_qq_source_links
 from app.services.possession_style import (
     fetch_group_context,
     fetch_member_recall_samples,
@@ -1771,6 +1772,7 @@ def webhook_token_valid(
 
 
 async def send_group_message(group_id: str, message: str) -> None:
+    message = sanitize_qq_source_links(message)
     route = onebot_route(settings)
     if not route.api_base:
         logger.info("[dry-run] bot=%s group=%s message=%s", route.self_id, group_id, message)
@@ -2619,6 +2621,9 @@ async def send_group_image(group_id: str, image_file: str, caption: str = "") ->
                 except (RuntimeError, httpx.HTTPError) as exc:
                     logger.warning("image caption send failed after image success: %s", exc)
             return
+        except httpx.TimeoutException as exc:
+            # 可能已经送达，确认超时后不要换格式再发一遍。
+            raise RuntimeError("图片发送确认超时，请稍后重试。") from exc
         except (RuntimeError, httpx.HTTPError) as exc:
             last_error = exc
             logger.warning(
@@ -3994,7 +3999,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
             await send_group_image(group_id, menu)
         except (OSError, ValueError, RuntimeError) as exc:
             logger.warning("help image unavailable (%s)", type(exc).__name__)
-            await send_group_message(group_id, "菜单图片暂时打不开，可以 @我 文字版菜单。")
+            await send_group_message(group_id, "菜单图片发送失败或超时，可以 @我 文字版菜单。")
     elif text in VOICE_ON_COMMANDS:
         await request.app.state.db.set_voice_mode(group_id, user_id, True)
         if not settings.voice_enabled:
