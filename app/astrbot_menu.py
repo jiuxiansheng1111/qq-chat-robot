@@ -40,10 +40,11 @@ def menu_request_kind(text: str) -> str | None:
     """只识别短而明确的菜单请求。"""
     if not isinstance(text, str):
         return None
+    from app.services.music_selection import parse_music_action
     from app.services.story_generation import parse_story_request
 
-    # 故事素材里也可能出现“给我菜单”，留给故事入口处理。
-    if parse_story_request(text) is not None:
+    # 歌名和故事素材也可能含菜单词，先留给各自入口。
+    if parse_story_request(text) is not None or parse_music_action(text) is not None:
         return None
     value = " ".join(text.strip().split())
     if value.startswith("/"):

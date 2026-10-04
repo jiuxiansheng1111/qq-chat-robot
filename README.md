@@ -632,7 +632,7 @@ B站网页搜索存在风控，代码会先访问 B站首页获取匿名 Cookie�
 - [插件开发](docs/PLUGIN_DEVELOPMENT.md)
 - [自动化测试](docs/TESTING.md)
 - [夺舍模式说明](docs/POSSESSION.md)
-- [音乐点歌](docs/MUSIC.md)
+- [网易云点歌、选歌与歌词](docs/MUSIC.md)
 - [丛雨图片、表情和语音素材](docs/MURASAME_MEDIA.md)
 - [Docker 部署](docs/DOCKER_DEPLOYMENT.md)
 

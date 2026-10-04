@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.config import Settings
+from app.services.bounded_http import request_json
 
 
 @dataclass(frozen=True)
@@ -134,29 +135,37 @@ def parse_netease_tracks(payload: dict) -> list[NeteaseTrack]:
         if not isinstance(item, dict):
             continue
         artist_items = item.get("artists") or item.get("ar") or []
+        if not isinstance(artist_items, list):
+            continue
         artists = tuple(
-            str(artist.get("name", "")).strip()
-            for artist in artist_items
+            str(artist.get("name", "")).strip()[:120]
+            for artist in artist_items[:16]
             if isinstance(artist, dict) and str(artist.get("name", "")).strip()
         )
         album_data = item.get("album") or item.get("al") or {}
+        if not isinstance(album_data, dict):
+            album_data = {}
         song_id = str(item.get("id") or "").strip()
         title = str(item.get("name") or "").strip()
-        if not song_id.isdigit() or not title or not artists:
+        if not re.fullmatch(r"[0-9]{1,20}", song_id) or not title or not artists:
             continue
+        try:
+            duration = max(0, int(item.get("duration") or item.get("dt") or 0) // 1000)
+        except (ValueError, TypeError, OverflowError):
+            duration = 0
         tracks.append(
             NeteaseTrack(
                 song_id=song_id,
                 title=title[:120],
                 artists=artists,
                 album=str(album_data.get("name") or "")[:120],
-                cover_url=_https_url(album_data.get("picUrl"), ("music.126.net",)),
-                duration_seconds=max(
-                    0, int(item.get("duration") or item.get("dt") or 0) // 1000
+                cover_url=_https_url(
+                    album_data.get("picUrl"), ("music.126.net",), allow_upgrade=True,
                 ),
+                duration_seconds=duration,
                 title_aliases=_music_aliases(item, "alias", "alia", "tns", "transNames"),
                 artist_aliases=tuple(dict.fromkeys(
-                    alias for artist in artist_items if isinstance(artist, dict)
+                    alias for artist in artist_items[:16] if isinstance(artist, dict)
                     for alias in _music_aliases(artist, "alias", "tns", "trans", "transNames")
                 ))[:32],
             )
@@ -167,6 +176,13 @@ def parse_netease_tracks(payload: dict) -> list[NeteaseTrack]:
 def choose_netease_track(
     query: str, tracks: list[NeteaseTrack], expected_artist: str = "", expected_title: str = ""
 ) -> NeteaseTrack | None:
+    ranked = rank_netease_tracks(query, tracks, expected_artist, expected_title)
+    return ranked[0] if ranked else None
+
+
+def rank_netease_tracks(
+    query: str, tracks: list[NeteaseTrack], expected_artist: str = "", expected_title: str = ""
+) -> list[NeteaseTrack]:
     """稳定选择目标歌曲；除非用户明确点名版本，否则排除翻唱。"""
     query_norm = normalize_music_text(query)
     artist_norm = normalize_music_text(expected_artist)
@@ -204,7 +220,7 @@ def choose_netease_track(
             stable_id,
         )
         ranked.append((score, track))
-    return min(ranked, key=lambda item: item[0])[1] if ranked else None
+    return [item[1] for item in sorted(ranked, key=lambda item: item[0])]
 
 
 def netease_track_matches_query(query: str, track: NeteaseTrack) -> bool:
@@ -220,13 +236,27 @@ def netease_track_matches_query(query: str, track: NeteaseTrack) -> bool:
     )
 
 
-def _https_url(value: object, allowed_suffixes: tuple[str, ...]) -> str:
+def _https_url(
+    value: object, allowed_suffixes: tuple[str, ...], *, allow_upgrade: bool = False,
+) -> str:
     url = str(value or "").strip()
-    parsed = urlparse(url)
-    host = (parsed.hostname or "").lower()
-    if parsed.scheme != "https" or not any(
-        host == suffix or host.endswith("." + suffix) for suffix in allowed_suffixes
-    ):
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        valid_host = any(
+            host == suffix or host.endswith("." + suffix) for suffix in allowed_suffixes
+        )
+        if (
+            len(url) > 2048 or not valid_host or parsed.username or parsed.password
+            or parsed.fragment or parsed.port not in (None, 443)
+        ):
+            return ""
+        # 网易云旧接口有时返回 HTTP 封面，同一 CDN 只用 HTTPS 读取。
+        if allow_upgrade and parsed.scheme == "http":
+            return parsed._replace(scheme="https").geturl()
+        if parsed.scheme != "https":
+            return ""
+    except ValueError:
         return ""
     return url
 
@@ -299,8 +329,8 @@ async def search_netease_music(query: str, settings: Settings) -> list[NeteaseTr
         "total": "true",
     }
     async with httpx.AsyncClient(timeout=settings.music_timeout_seconds) as client:
-        response = await client.post(
-            settings.netease_music_api_url, data=data, headers=headers
+        payload = await request_json(
+            client, "POST", settings.netease_music_api_url, data=data, headers=headers,
+            timeout_seconds=max(1, settings.music_timeout_seconds),
         )
-        response.raise_for_status()
-        return parse_netease_tracks(response.json())
+        return parse_netease_tracks(payload)

@@ -4,15 +4,27 @@ from collections import defaultdict, deque
 
 
 class LocalRateLimiter:
-    def __init__(self, limit: int = 5, window_seconds: int = 60):
+    def __init__(
+        self, limit: int = 5, window_seconds: int = 60, *, max_keys: int | None = None,
+    ):
         self.limit = limit
         self.window_seconds = window_seconds
+        self.max_keys = max_keys
         self.events: dict[str, deque[float]] = defaultdict(deque)
         self.lock = asyncio.Lock()
 
     async def allow(self, key: str) -> bool:
         async with self.lock:
             now = time.monotonic()
+            if self.max_keys and key not in self.events and len(self.events) >= self.max_keys:
+                expired = [
+                    existing for existing, values in self.events.items()
+                    if not values or now - values[-1] > self.window_seconds
+                ]
+                for existing in expired:
+                    self.events.pop(existing, None)
+                if len(self.events) >= self.max_keys:
+                    self.events.pop(next(iter(self.events)))
             events = self.events[key]
             while events and now - events[0] > self.window_seconds:
                 events.popleft()

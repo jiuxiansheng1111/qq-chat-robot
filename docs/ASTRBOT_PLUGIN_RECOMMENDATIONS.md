@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | 随机二次元图片 | 继续使用已安装的 `astrbot_plugin_get_px` | 已有转发入口和动态菜单，保留角色图鉴、抽取和收藏 |
 | 图片与 GIF 处理 | [图片工具箱](https://github.com/lirundong093-glitch/astrbot_plugin_pic_toolbox) | 可补翻转、调速、摸头等功能；声明支持 OneBot，微信待验证；先核图片大小、帧数与并发限制 |
-| 点歌、歌词、歌单 | [Zhalslar 点歌插件](https://github.com/Zhalslar/astrbot_plugin_music) | 复用候选列表等交互，搜索与会员音源接本机桥；保留歌曲别名，不直接覆盖现有音源逻辑 |
+| 点歌、歌词、歌单 | 已接入网易云候选与歌词流程，复用 [Zhalslar 点歌插件](https://github.com/Zhalslar/astrbot_plugin_music) 的 MIT 渲染代码 | 固定版本见 `third_party/astrbot_plugin_music/NOTICE.md`；QQ群发音乐卡片，微信发页面链接。保留别名匹配，公开歌单展示前 5 首；没有安装完整上游播放器 |
 | 游戏资料 | [Steam 查价](https://github.com/penguin-madagascar/astrbot_plugin_steam_price_heybox) | 可选的查价、史低、地区比价；不替代现有角色图鉴和收藏 |
 | 重复命令 | [anti_repeat](https://github.com/yuanshen-scaramouche/star) | 备选；先核处理顺序与现有限流，避免两次拦截；平台未明确声明 |
 

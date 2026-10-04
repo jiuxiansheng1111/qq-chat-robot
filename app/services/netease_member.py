@@ -1,5 +1,6 @@
 """从本地网易云会员桥接读取当前账号有权限访问的歌曲 URL。"""
 
+import json
 import re
 from pathlib import Path
 from urllib.parse import urlparse
@@ -7,6 +8,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.config import Settings
+from app.services.bounded_http import ResponseTooLarge, request_bytes
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -58,24 +60,26 @@ async def get_member_song_payload(
         raise NeteaseMemberError("网易云歌曲 ID 无效。")
     url, token = _bridge_connection(settings)
     try:
-        response = await client.post(
-            f"{url}/api/song/url",
+        data = await request_bytes(
+            client, "POST", f"{url}/api/song/url",
             headers={"Authorization": f"Bearer {token}"},
             json={"song_id": song_id},
-            timeout=max(40, settings.music_timeout_seconds),
-            follow_redirects=False,
+            timeout_seconds=max(40, settings.music_timeout_seconds),
+            max_bytes=256 * 1024,
         )
-    except httpx.HTTPError as exc:
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 401:
+            raise NeteaseMemberError(
+                "网易云账号尚未登录或登录已过期，请在本机会员连接页面重新扫码。"
+            ) from exc
+        raise NeteaseMemberError("网易云会员音源暂时无法读取，请检查本机登录状态。") from exc
+    except ResponseTooLarge as exc:
+        raise NeteaseMemberError("网易云会员音源返回内容过大。") from exc
+    except (httpx.HTTPError, TimeoutError) as exc:
         raise NeteaseMemberError("网易云会员本机连接不可用，请运行 start_netease_member.ps1。") from exc
-    if response.status_code == 401:
-        raise NeteaseMemberError("网易云账号尚未登录或登录已过期，请在本机会员连接页面重新扫码。")
-    if response.status_code != 200:
-        raise NeteaseMemberError("网易云会员音源暂时无法读取，请稍后重试或检查本机登录状态。")
-    if len(response.content) > 256 * 1024:
-        raise NeteaseMemberError("网易云会员音源返回内容过大。")
     try:
-        payload = response.json()
-    except ValueError as exc:
+        payload = json.loads(data)
+    except (ValueError, UnicodeError) as exc:
         raise NeteaseMemberError("网易云会员连接返回格式无效。") from exc
     if (
         not isinstance(payload, dict)

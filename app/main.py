@@ -96,18 +96,17 @@ from app.services.image_resolution import (
     append_image_attribution,
     coerce_image_resolution,
 )
+from app.services.media_cache import cache_outgoing_image
 from app.services.menu_intent import normalize_menu_intent
 from app.services.murasame_media import asset_help, random_asset
 from app.services.music import (
     MusicIdentity,
     MusicTrack,
     NeteaseTrack,
-    choose_netease_track,
-    music_query_suffixes,
-    netease_track_matches_query,
     parse_music_identity,
-    search_netease_music,
 )
+from app.services.music_selection import MusicSelectionKey, parse_music_action
+from app.services.music_workflow import MusicWorkflow
 from app.services.onebot_routing import (
     current_onebot_self_id,
     onebot_client,
@@ -649,6 +648,8 @@ async def initialize_runtime(app: FastAPI):
     app.state.pending_character_confirmations = {}
     app.state.last_murasame_replies = {}
     app.state.translation_cache = {}
+    app.state.music_workflow = MusicWorkflow(settings)
+    app.state.music_action_limiter = LocalRateLimiter(limit=8, window_seconds=60, max_keys=256)
     app.state.singing_jobs = SingingJobManager(
         max_pending=settings.singing_queue_size,
         cooldown_seconds=settings.singing_cooldown_seconds,
@@ -740,6 +741,9 @@ async def initialize_runtime(app: FastAPI):
 
 
 async def close_runtime(app: FastAPI):
+    music = getattr(app.state, "music_workflow", None)
+    if music is not None:
+        await music.aclose()
     manager = getattr(app.state, "singing_jobs", None)
     if manager is not None:
         await manager.aclose()
@@ -1166,18 +1170,10 @@ def extract_weather_location(event: dict, text: str) -> str | None:
 
 
 def extract_music_query(event: dict, text: str) -> str | None:
-    for prefix in ("/点歌", "/music"):
-        if text.lower() == prefix.lower():
-            return ""
-        if text.lower().startswith(prefix.lower()):
-            return text[len(prefix) :].strip(" ：:")[:120]
-    if bot_mentioned(event):
-        for prefix in ("点歌", "来首", "播放"):
-            if text == prefix:
-                return ""
-            if text.startswith(prefix):
-                return text[len(prefix) :].strip(" ：:")[:120]
-    return None
+    if not (event.get("wechat_private") or bot_mentioned(event) or text.startswith("/")):
+        return None
+    action = parse_music_action(text)
+    return action.query if action is not None and action.action == "search" else None
 
 
 def extract_translation_query(event: dict, text: str) -> str | None:
@@ -2527,15 +2523,9 @@ def _persist_outgoing_image(image_file: str) -> str | None:
         return None
     try:
         raw = base64.b64decode(image_file.removeprefix("base64://"), validate=True)
-        digest = hashlib.sha256(raw).hexdigest()[:20]
         base_dir = Path(settings.database_path).expanduser().resolve().parent
-        media_dir = base_dir / "outgoing_media"
-        media_dir.mkdir(parents=True, exist_ok=True)
-        suffix = ".gif" if raw.startswith((b"GIF87a", b"GIF89a")) else ".jpg"
-        path = media_dir / f"{digest}{suffix}"
-        if not path.exists():
-            path.write_bytes(raw)
-        return path.as_uri()
+        path = cache_outgoing_image(raw, base_dir)
+        return path.as_uri() if path is not None else None
     except (ValueError, OSError):
         return None
 
@@ -2601,13 +2591,14 @@ async def send_group_image(group_id: str, image_file: str, caption: str = "") ->
         # 标准 baseline JPEG base64 先发；NapCat 若确实拒绝，再退到 file://。
         # 避免 file:// 被 OneBot 接口表面接受、QQ 客户端却没有真正显示图片。
         candidates.append(normalized)
-        file_uri = _persist_outgoing_image(normalized)
-        if file_uri:
-            candidates.append(file_uri)
     candidates.append(image_file)
+    candidates = list(dict.fromkeys(candidates))
 
     last_error: Exception | None = None
-    for index, candidate in enumerate(dict.fromkeys(candidates), start=1):
+    index = 0
+    while index < len(candidates):
+        candidate = candidates[index]
+        index += 1
         try:
             await _send_group_image_once(
                 group_id,
@@ -2636,6 +2627,11 @@ async def send_group_image(group_id: str, image_file: str, caption: str = "") ->
                 len(candidates),
                 exc,
             )
+            if candidate == normalized:
+                # 只有 base64 发送失败时才落盘，缓存清理在工作线程中做。
+                file_uri = await asyncio.to_thread(_persist_outgoing_image, normalized)
+                if file_uri and file_uri not in candidates:
+                    candidates.insert(index, file_uri)
             if index < len(candidates):
                 await asyncio.sleep(0.35 * index)
 
@@ -3175,19 +3171,24 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
         return {"ok": True, "ignored": True}
 
     text = message_text(event)
-    story_request = (
-        parse_story_request(text)
-        if event.get("wechat_private") or bot_mentioned(event) or text.startswith("/")
-        else None
-    )
-    if not story_request:
+    addressed = bool(event.get("wechat_private") or bot_mentioned(event) or text.startswith("/"))
+    story_request = parse_story_request(text) if addressed else None
+    music_action = parse_music_action(text) if not story_request else None
+    if music_action is not None and not addressed and music_action.action not in {
+        "select", "lyrics_candidate", "cancel",
+    }:
+        music_action = None
+    direct_request = story_request is not None or music_action is not None
+    if not direct_request:
         if bot_mentioned(event) or text.startswith("/"):
             text = normalize_menu_intent(text)
         text = canonicalize_short_command(
             text,
             addressed=bot_mentioned(event) or text.startswith("/"),
         )
-    music_query = extract_music_query(event, text)
+        if addressed:
+            music_action = parse_music_action(text)
+            direct_request = music_action is not None
     translation_query = extract_translation_query(event, text)
     bilibili_query = extract_bilibili_video_query(event, text)
     weather_location = extract_weather_location(event, text)
@@ -3204,7 +3205,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
         return {"ok": True, "ignored": True}
     display_name = sender_display_name(event)
     if (
-        not story_request
+        not direct_request
         and text
         and user_id != event_bot_self_id(event)
         and not text.startswith(("/", "http://", "https://"))
@@ -3217,7 +3218,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
         if compact_text:
             group_cache.append(f"{display_name}：{compact_text}")
     image_refs = image_references_from_message(event.get("message"))
-    if image_refs and not story_request:
+    if image_refs and not direct_request:
         image_pool = request.app.state.recent_member_images.setdefault(
             (group_id, user_id), deque(maxlen=8)
         )
@@ -3230,7 +3231,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
         return {"ok": True, "ignored": True, "reason": "group_disabled"}
     if await request.app.state.db.is_blocked(group_id, user_id):
         return {"ok": True, "ignored": True, "reason": "user_blocked"}
-    if await _handle_pending_character_confirmation(
+    if not direct_request and await _handle_pending_character_confirmation(
         request,
         group_id,
         user_id,
@@ -3238,7 +3239,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
     ):
         return {"ok": True, "source": "character_confirmation"}
     today = datetime.now().astimezone().date().isoformat()
-    if not story_request:
+    if not direct_request:
         await request.app.state.db.record_group_activity(
             group_id, user_id, display_name, text, today
         )
@@ -3284,6 +3285,34 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
     if story_request:
         await _handle_story_request(request, group_id, user_id, story_request)
         return {"ok": True, "source": "story"}
+
+    if music_action is not None:
+        if not incoming_self_id or not user_id:
+            return {"ok": True, "ignored": True, "reason": "missing_music_identity"}
+        music_key = MusicSelectionKey(incoming_self_id, group_id, user_id)
+        limit_key = json.dumps([incoming_self_id, group_id, user_id])
+        if music_action.action != "cancel" and not await request.app.state.music_action_limiter.allow(limit_key):
+            await notify_rate_limited(
+                request, group_id, user_id, scope="music",
+                message="点歌请求有点多，等一会儿再试。",
+            )
+            return {"ok": True, "ignored": True, "reason": "music_rate_limited"}
+
+        async def music_text(value: str) -> None:
+            await send_group_long_message(group_id, value)
+
+        async def music_image(value: str) -> None:
+            await send_group_image(group_id, value)
+
+        async def music_card(track: NeteaseTrack) -> None:
+            await send_group_netease_card(group_id, track)
+
+        await request.app.state.music_workflow.handle(
+            music_action, music_key,
+            send_text=music_text, send_image=music_image, send_card=music_card,
+            link_only=group_id.startswith("wechat:"),
+        )
+        return {"ok": True, "source": "music", "handled": True}
 
     romance_mode = await request.app.state.db.romance_mode(group_id, user_id)
     # 迁移或管理员查看时仍可读取旧值，但日常聊天不要修改；
@@ -4658,126 +4687,6 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
             except (LLMError, httpx.HTTPError) as exc:
                 logger.warning("translation failed: %s", exc)
                 await send_group_message(group_id, "翻译服务暂时不可用，稍后再试一下吧。")
-    elif music_query is not None:
-        if not music_query:
-            await send_group_message(
-                group_id, "想听什么？例如：@我 点歌 ZUTOMAYO TAIDADA"
-            )
-        else:
-            try:
-                tracks = await search_netease_music(music_query, settings)
-                track = choose_netease_track(music_query, tracks)
-                identity = None
-                web_results: list[SearchResult] = []
-                exact_title_fallback = False
-                if not track or not netease_track_matches_query(music_query, track):
-                    track = None
-                    for title_candidate in music_query_suffixes(music_query):
-                        candidate_tracks = await search_netease_music(
-                            title_candidate, settings
-                        )
-                        track = choose_netease_track(
-                            title_candidate,
-                            candidate_tracks,
-                            expected_title=title_candidate,
-                        )
-                        if track:
-                            exact_title_fallback = True
-                            break
-                if not exact_title_fallback and (
-                    not track or not netease_track_matches_query(music_query, track)
-                ):
-                    translation_aliases: list[str] = []
-                    if needs_translation(music_query):
-                        try:
-                            translated_query = await cached_translation(
-                                request, music_query, purpose="music"
-                            )
-                            translation_aliases = translated_query.query_variants(
-                                music_query
-                            )
-                        except (LLMError, httpx.HTTPError) as exc:
-                            logger.info("music translation hints unavailable: %s", exc)
-                    identity, web_results = await resolve_music_identity(
-                        music_query,
-                        request.app.state.llm,
-                        translation_aliases,
-                    )
-                    if identity:
-                        resolved_tracks = await search_netease_music(
-                            identity.search_query, settings
-                        )
-                        track = choose_netease_track(
-                            identity.search_query,
-                            resolved_tracks,
-                            expected_artist=identity.artist,
-                            expected_title=identity.title,
-                        )
-                        if not track:
-                            track = choose_netease_track(
-                                identity.search_query,
-                                resolved_tracks,
-                                expected_title=identity.title,
-                            )
-                if not track:
-                    if identity:
-                        reply = (
-                            f"查到原曲是 {identity.artist} - {identity.title}，"
-                            "但网易云里没找到可信的原唱版本，我就不乱发翻唱了。"
-                        )
-                    else:
-                        reply = "没确认到可靠的原唱版本，我就不随机发翻唱了。"
-                    if web_results:
-                        reply += "\n\n联网结果：\n" + format_search_sources(web_results[:3])
-                    await send_group_message(group_id, reply[:2000])
-                else:
-                    try:
-                        await send_group_netease_card(group_id, track)
-                        await send_group_message(
-                            group_id,
-                            f"QQ 卡片不能播放时可打开网易云：{track.page_url}",
-                        )
-                    except (RuntimeError, ValueError, httpx.HTTPError) as exc:
-                        logger.warning("NetEase music card failed: %s", exc)
-                        fallback = MusicTrack(
-                            title=track.title,
-                            artist=track.artist,
-                            album=track.album,
-                            page_url=track.page_url,
-                            preview_url=(
-                                "https://music.163.com/song/media/outer/url"
-                                f"?id={track.song_id}.mp3"
-                            ),
-                            cover_url=track.cover_url,
-                            duration_seconds=track.duration_seconds,
-                        )
-                        try:
-                            await send_group_music_card(group_id, fallback)
-                        except (RuntimeError, ValueError, httpx.HTTPError):
-                            await send_group_message(
-                                group_id,
-                                f"{track.artist} - {track.title}\n网易云：{track.page_url}",
-                            )
-            except (RuntimeError, ValueError, httpx.HTTPError) as exc:
-                logger.warning("music search failed: %s", exc)
-                fallback = await llm_web_fallback_answer(
-                    request,
-                    f"歌曲“{music_query}”的原唱和官方/主流音乐页面是什么？",
-                    search_query=f"{music_query} 歌曲 原唱 网易云 官方",
-                    affection_score=current_affection,
-                    romance_mode=romance_mode,
-                    voice_profile_id=await selected_voice_profile_id(
-                        request, group_id, user_id
-                    ),
-                    guidance=(
-                        "优先确认歌曲名和原唱；点歌接口失败时提供可核对的网页结果，"
-                        "不要冒充已经成功发出音乐卡片。"
-                    ),
-                )
-                await send_group_message(
-                    group_id,
-                    fallback or "点歌接口和联网兜底都暂时不可用。",
-                )
     elif (search_query := extract_search_query(event, text)) is not None:
         if not search_query:
             await send_group_message(group_id, "想搜什么？例如：@我 搜索 Python 3.13 新特性")
