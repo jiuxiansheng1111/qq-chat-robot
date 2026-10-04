@@ -11,6 +11,7 @@ import re
 import socket
 import stat
 import sys
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -69,6 +70,16 @@ class ConnectPlan:
     port_8000_listening: bool
 
 
+@dataclass(frozen=True)
+class DesktopConfigPlan:
+    path: Path
+    source_bytes: bytes = field(repr=False)
+    source_sha256: str = field(repr=False)
+    original: dict[str, Any] = field(repr=False)
+    updated: dict[str, Any] = field(repr=False)
+    changed: bool
+
+
 def _full_path(path: Path) -> Path:
     return Path(os.path.abspath(os.fspath(path)))
 
@@ -81,6 +92,39 @@ def _has_reparse_point(path: Path) -> bool:
     return stat.S_ISLNK(info.st_mode) or bool(
         getattr(info, "st_file_attributes", 0) & 0x400
     )
+
+
+def _checked_absolute_path(
+    path: Path, *, kind: str, label: str
+) -> Path:
+    """逐级检查路径组件，不跟随重解析点。"""
+    expanded = path.expanduser()
+    if ".." in expanded.parts:
+        raise ConnectError(f"{label}路径不得包含父目录引用。")
+    candidate = _full_path(expanded)
+    cursor = Path(candidate.anchor)
+    parts = candidate.parts[1:]
+    if not parts:
+        raise ConnectError(f"{label}路径格式不正确。")
+    for index, part in enumerate(parts):
+        cursor /= part
+        try:
+            info = cursor.lstat()
+        except OSError:
+            raise ConnectError(f"{label}路径不存在或无法读取。") from None
+        if stat.S_ISLNK(info.st_mode) or bool(
+            getattr(info, "st_file_attributes", 0) & 0x400
+        ):
+            raise ConnectError(f"{label}路径包含链接或重解析点。")
+        is_leaf = index == len(parts) - 1
+        if not is_leaf and not stat.S_ISDIR(info.st_mode):
+            raise ConnectError(f"{label}父路径不是目录。")
+    leaf_info = cursor.lstat()
+    if kind == "file" and not stat.S_ISREG(leaf_info.st_mode):
+        raise ConnectError(f"{label}不是普通文件。")
+    if kind == "directory" and not stat.S_ISDIR(leaf_info.st_mode):
+        raise ConnectError(f"{label}不是目录。")
+    return candidate
 
 
 def _assert_project_private_path(project_root: Path, path: Path) -> None:
@@ -576,9 +620,9 @@ def preflight(
 ) -> ConnectPlan:
     """只读核对并生成变更预览；本函数不写配置、不发送消息。"""
     root = project_root.resolve()
-    config_dir = napcat_config_dir.expanduser().resolve()
-    if not config_dir.is_dir() or _has_reparse_point(napcat_config_dir):
-        raise ConnectError("NapCat 配置目录不存在或包含链接路径。")
+    config_dir = _checked_absolute_path(
+        napcat_config_dir, kind="directory", label="NapCat 配置目录"
+    )
     port_6199 = port_probe("127.0.0.1", ASTRBOT_WS_PORT)
     port_8000 = port_probe("127.0.0.1", OLD_WEBHOOK_PORT)
     if not port_6199:
@@ -625,6 +669,112 @@ def preflight(
     )
 
 
+DESKTOP_CONNECT_KEYS = (
+    "httpServers",
+    "httpSseServers",
+    "httpClients",
+    "websocketServers",
+    "websocketClients",
+    "plugins",
+)
+
+
+def _read_json_bytes(path: Path, label: str) -> tuple[bytes, dict[str, Any]]:
+    checked = _checked_absolute_path(path, kind="file", label=label)
+    try:
+        source = checked.read_bytes()
+        value = json.loads(source.decode("utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        raise ConnectError(f"无法读取{label}文件。") from None
+    if not isinstance(value, dict):
+        raise ConnectError(f"{label}文件根节点格式不正确。")
+    return source, value
+
+
+def _desktop_config_path(
+    napcat_config_dir: Path, requested_path: Path
+) -> Path:
+    parts = tuple(part.casefold() for part in napcat_config_dir.parts[-4:])
+    if parts != ("napcatqq desktop", "components", "napcatqq", "config"):
+        raise ConnectError(
+            "Desktop bot.json 只适用于 components/NapCatQQ/config 布局。"
+        )
+    expected = napcat_config_dir.parents[2] / "config" / "bot.json"
+    checked = _checked_absolute_path(
+        requested_path, kind="file", label="NapCat Desktop bot.json"
+    )
+    if os.path.normcase(os.fspath(checked)) != os.path.normcase(
+        os.fspath(_full_path(expected))
+    ):
+        raise ConnectError(
+            "NapCat Desktop bot.json 必须与所选 components/NapCatQQ/config 目录对应。"
+        )
+    return checked
+
+
+def _plan_desktop_config(
+    plan: ConnectPlan, requested_path: Path
+) -> DesktopConfigPlan:
+    path = _desktop_config_path(plan.napcat_config_dir, requested_path)
+    source_bytes, original = _read_json_bytes(path, "NapCat Desktop bot.json")
+    bots = original.get("bots")
+    if not isinstance(bots, list):
+        raise ConnectError("NapCat Desktop bot.json 的 bots 结构无法识别。")
+
+    matches: list[int] = []
+    for index, item in enumerate(bots):
+        if not isinstance(item, dict) or not isinstance(item.get("bot"), dict):
+            raise ConnectError("NapCat Desktop bot.json 包含未知账号结构。")
+        bot = item["bot"]
+        qqid = bot.get("QQID")
+        if isinstance(qqid, str):
+            normalized_qqid = qqid if re.fullmatch(r"[0-9]+", qqid) else None
+        elif type(qqid) is int and qqid >= 0:
+            normalized_qqid = str(qqid)
+        else:
+            normalized_qqid = None
+        if normalized_qqid is None:
+            raise ConnectError("NapCat Desktop bot.json 包含无效账号标识。")
+        if normalized_qqid == plan.self_id:
+            matches.append(index)
+    if len(matches) != 1:
+        raise ConnectError("NapCat Desktop bot.json 未唯一匹配当前登录账号。")
+
+    connect = bots[matches[0]].get("connect")
+    if not isinstance(connect, dict) or any(
+        key not in connect for key in DESKTOP_CONNECT_KEYS
+    ):
+        raise ConnectError("NapCat Desktop connect 网络配置结构无法识别。")
+    network = copy.deepcopy(connect)
+    updated_config, _summary = build_napcat_config(
+        {"network": network}, _plan_astrbot_token(plan)
+    )
+    updated = copy.deepcopy(original)
+    updated_match = updated["bots"][matches[0]]
+    updated_match["connect"] = updated_config["network"]
+    return DesktopConfigPlan(
+        path=path,
+        source_bytes=source_bytes,
+        source_sha256=hashlib.sha256(source_bytes).hexdigest(),
+        original=original,
+        updated=updated,
+        changed=not _same_json(original, updated),
+    )
+
+
+def _plan_astrbot_token(plan: ConnectPlan) -> str:
+    network = plan.new_config.get("network")
+    if not isinstance(network, dict):
+        raise ConnectError("AstrBot WebSocket 配置缺少 network 对象。")
+    clients = network.get("websocketClients")
+    if not isinstance(clients, list):
+        raise ConnectError("AstrBot WebSocket 客户端配置无法识别。")
+    marked = [item for item in clients if isinstance(item, dict) and item.get("name") == NAPCAT_MARKER]
+    if len(marked) != 1 or not isinstance(marked[0].get("token"), str) or not marked[0]["token"].strip():
+        raise ConnectError("AstrBot WebSocket token 无法从预检配置读取。")
+    return marked[0]["token"]
+
+
 def _new_backup_dir(project_root: Path) -> Path:
     parent = project_root / "data" / "astrbot" / "napcat-backups"
     _ensure_private_dir(project_root, parent)
@@ -662,6 +812,107 @@ def _write_json_private(
             temporary.unlink()
         except FileNotFoundError:
             pass
+
+
+def _write_private_bytes(project_root: Path, path: Path, value: bytes) -> None:
+    _assert_project_private_path(project_root, path)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with temporary.open("xb") as stream:
+            stream.write(value)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.chmod(temporary, stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:
+            pass
+        _assert_project_private_path(project_root, path)
+        if path.exists():
+            raise ConnectError("私有备份文件已存在，拒绝覆盖。")
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _serialize_desktop_config(source: bytes, value: dict[str, Any]) -> bytes:
+    newline = "\r\n" if b"\r\n" in source else "\n"
+    text = json.dumps(value, ensure_ascii=False, indent=2).replace("\n", newline)
+    text += newline
+    encoded = text.encode("utf-8")
+    if source.startswith(b"\xef\xbb\xbf"):
+        return b"\xef\xbb\xbf" + encoded
+    return encoded
+
+
+def _apply_desktop_config(
+    connect_plan: ConnectPlan, desktop_plan: DesktopConfigPlan
+) -> bool:
+    """同步 Desktop 配置，写前核对原文件。"""
+    try:
+        current_bytes, _current = _read_json_bytes(
+            desktop_plan.path, "NapCat Desktop bot.json"
+        )
+        if hashlib.sha256(current_bytes).hexdigest() != desktop_plan.source_sha256:
+            raise ConnectError("bot.json 在预检后已变化，请重新预检。")
+        if not desktop_plan.changed:
+            return False
+
+        backup_dir = _new_backup_dir(connect_plan.project_root)
+        backup_path = backup_dir / "desktop-bot-config.json"
+        _write_private_bytes(
+            connect_plan.project_root, backup_path, desktop_plan.source_bytes
+        )
+
+        encoded = _serialize_desktop_config(
+            desktop_plan.source_bytes, desktop_plan.updated
+        )
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{desktop_plan.path.name}.{os.getpid()}.",
+            suffix=".tmp",
+            dir=desktop_plan.path.parent,
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+
+            current_bytes, _current = _read_json_bytes(
+                desktop_plan.path, "NapCat Desktop bot.json"
+            )
+            if hashlib.sha256(current_bytes).hexdigest() != desktop_plan.source_sha256:
+                raise ConnectError(
+                    "bot.json 在写入前已变化；未覆盖新内容。"
+                )
+            os.replace(temporary, desktop_plan.path)
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+
+        _readback_bytes, readback = _read_json_bytes(
+            desktop_plan.path, "NapCat Desktop bot.json"
+        )
+        if not _same_json(readback, desktop_plan.updated):
+            raise ConnectError(
+                "NapCat Desktop bot.json 写入后读回不一致；请检查当前配置。"
+            )
+        return True
+    except ConnectError as exc:
+        raise ConnectError(
+            "运行时连接配置已正确应用，但 NapCat Desktop 持久化未完成："
+            f"{exc}"
+        ) from None
+    except Exception:  # noqa: BLE001 - 不暴露配置或凭据内容。
+        raise ConnectError(
+            "运行时连接配置已正确应用，但 NapCat Desktop 持久化未完成；"
+            "bot.json 可能正在被 Desktop 并发写入，请重新预检。"
+        ) from None
 
 
 def _active_mode_path(project_root: Path) -> Path:
@@ -811,12 +1062,15 @@ def apply_plan(
         ) from None
 
 
-def _print_preview(plan: ConnectPlan) -> None:
+def _print_preview(plan: ConnectPlan, *, apply: bool = False) -> None:
     ws_action = "新增" if plan.websocket_client_added else "复用"
     print("预检通过：AstrBot 端口监听、NapCat 本机 WebUI 与登录身份均已确认。")
     print(f"计划：禁用旧 webhook 客户端 {plan.http_clients_disabled} 项；{ws_action} AstrBot WebSocket 客户端 1 项。")
     print(f"端口：6199 已监听；8000 {'仍在监听' if plan.port_8000_listening else '未监听'}。")
-    print("只预览，不会写配置或发送消息；QQ 身份和任何 token 均不显示。")
+    if apply:
+        print("已请求应用预览配置；不会发送消息，QQ 身份和 token 不显示。")
+    else:
+        print("只预览，不会写配置或发送消息；QQ 身份和 token 不显示。")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -827,6 +1081,11 @@ def main(argv: list[str] | None = None) -> int:
         "--project-root", type=Path, default=Path(__file__).resolve().parents[1]
     )
     parser.add_argument("--napcat-config-dir", type=Path, default=NAPCAT_CONFIG_DEFAULT)
+    parser.add_argument(
+        "--napcat-desktop-config",
+        type=Path,
+        help="同时同步匹配的 NapCat Desktop config/bot.json",
+    )
     parser.add_argument("--account", choices=("auto", "primary", "secondary"), default="auto")
     parser.add_argument("--apply", action="store_true", help="应用预览配置并写私有备份")
     args = parser.parse_args(argv)
@@ -836,7 +1095,15 @@ def main(argv: list[str] | None = None) -> int:
             args.napcat_config_dir,
             account=args.account,
         )
-        _print_preview(plan)
+        desktop_plan = (
+            _plan_desktop_config(plan, args.napcat_desktop_config)
+            if args.napcat_desktop_config
+            else None
+        )
+        _print_preview(plan, apply=args.apply)
+        if desktop_plan:
+            desktop_status = "需要同步" if desktop_plan.changed else "已一致"
+            print(f"NapCat Desktop 持久配置：{desktop_status}。")
         if not args.apply:
             if plan.port_8000_listening:
                 print("8000 仍在监听；停旧服务后再运行 --apply。", file=sys.stderr)
@@ -845,18 +1112,39 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if plan.port_8000_listening:
             raise ConnectError("旧 webhook 端口 8000 仍在监听；没有应用更改。")
-        report = apply_plan(plan)
+        runtime_unchanged = _same_json(plan.old_config, plan.new_config)
+        if runtime_unchanged:
+            _write_active_mode(plan.project_root)
+            report = None
+            print("NapCat WebUI 连接配置已正确，复用现有配置。")
+        else:
+            report = apply_plan(plan)
     except (OSError, ValueError, ConnectError) as exc:
         print(f"切换未执行：{exc}", file=sys.stderr)
         return 1
-    print(
-        "切换完成："
-        f"旧 webhook 停用 {report['http_clients_disabled']} 项；"
-        f"配置已验证={report['config_verified']}；"
-        f"回滚尝试={report['rollback_attempted']}。"
-    )
+    if report:
+        print(
+            "NapCat WebUI 切换完成："
+            f"旧 webhook 停用 {report['http_clients_disabled']} 项；"
+            f"配置已验证={report['config_verified']}；"
+            f"回滚尝试={report['rollback_attempted']}。"
+        )
+    if desktop_plan:
+        try:
+            desktop_written = _apply_desktop_config(plan, desktop_plan)
+        except ConnectError as exc:
+            print(f"切换未完成：{exc}", file=sys.stderr)
+            return 1
+        if desktop_written:
+            print(
+                "NapCat Desktop 持久配置已同步并读回验证；"
+                "原文件字节已保存在私有备份目录。"
+            )
+        else:
+            print("NapCat Desktop 持久配置已一致，无需重写或备份。")
     print("AstrBot 私有启动模式标记已更新。")
-    print("私有备份与仅含状态计数的报告保存在 data/astrbot/napcat-backups。")
+    if report or (desktop_plan and desktop_plan.changed):
+        print("私有备份与状态报告保存在 data/astrbot/napcat-backups。")
     return 0
 
 

@@ -1,5 +1,5 @@
 ﻿[CmdletBinding()]
-param()
+param([string]$NapCatConfigDirectory = "")
 
 $ErrorActionPreference = "Stop"
 
@@ -209,7 +209,11 @@ function Request-Elevation {
         "-File"
         ('"{0}"' -f $PSCommandPath)
     )
-    Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -Verb RunAs
+    if ($NapCatConfigDirectory) {
+        $arguments += '-NapCatConfigDirectory'
+        $arguments += ('"{0}"' -f (Join-Path ([IO.Path]::GetFullPath($NapCatConfigDirectory)) '.'))
+    }
+    Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden
 }
 
 function Start-GptSovitsSidecar {
@@ -551,6 +555,50 @@ try {
         }
         Write-Host '[READY] AstrBot 面板已就绪：http://127.0.0.1:6185' -ForegroundColor Green
         Write-Host '[READY] AstrBot OneBot 反向 WS 已就绪：127.0.0.1:6199' -ForegroundColor Green
+
+        # QQ 登录后，检查它是否还在向旧端口上报消息。
+        $napcatConnectionScript = Join-Path $PSScriptRoot 'connect_astrbot_qq.py'
+        if ($NapCatConfigDirectory) {
+            $napcatConfigDir = $NapCatConfigDirectory
+        }
+        elseif ($useNapCatDesktop) {
+            $napcatConfigDir = Join-Path $env:ProgramData 'NapCatQQ Desktop\components\NapCatQQ\config'
+        }
+        else {
+            $napcatConfigDir = ''
+        }
+        $napcatWebuiConfig = if ($napcatConfigDir) { Join-Path $napcatConfigDir 'webui.json' } else { '' }
+        if ($napcatWebuiConfig -and (Test-LocalPort -Port 3000) -and (Test-LocalPort -Port 6099) -and
+            (Test-Path -LiteralPath $napcatWebuiConfig -PathType Leaf)) {
+            try {
+                $connectionArguments = @('--project-root', $projectRoot, '--napcat-config-dir', $napcatConfigDir, '--apply')
+                if ($useNapCatDesktop) {
+                    $desktopConfigRoot = ([IO.DirectoryInfo]$napcatConfigDir).Parent.Parent.Parent.FullName
+                    $desktopBotConfig = Join-Path $desktopConfigRoot 'config\bot.json'
+                    if (Test-Path -LiteralPath $desktopBotConfig -PathType Leaf) {
+                        $connectionArguments += @('--napcat-desktop-config', $desktopBotConfig)
+                    }
+                    else {
+                        Write-Host '[QQ] 未找到桌面版账号配置，本次仅恢复正在运行的连接。' -ForegroundColor Yellow
+                    }
+                }
+                & $pythonPath $napcatConnectionScript @connectionArguments
+                if ($LASTEXITCODE -ne 0) { throw 'QQ 连接配置未通过校验。' }
+                Write-Host '[READY] QQ 消息上报配置已确认。' -ForegroundColor Green
+            }
+            catch {
+                Write-Host '[QQ] 自动恢复连接失败，请查看上方原因；AstrBot 已启动。' -ForegroundColor Yellow
+            }
+        }
+        else {
+            if (-not $napcatConfigDir) {
+                Write-Host '[QQ] 旧版 NapCat 需用 -NapCatConfigDirectory 指定配置目录后再恢复连接。' -ForegroundColor Yellow
+            }
+            else {
+                Write-Host '[QQ] 等待 NapCat 登录后，重新点击启动入口可恢复消息连接。' -ForegroundColor Yellow
+            }
+        }
+
         try {
             $voiceSidecarReady = Start-GptSovitsSidecar -Settings $settings
         }

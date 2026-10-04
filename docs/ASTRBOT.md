@@ -122,9 +122,14 @@ NapCat 切换到 AstrBot 后，不要再把相同 OneBot 消息转发到旧 `/on
 - 先启动 QQ 连接和 AstrBot，再等待语音模型加载；首次加载慢时，文字聊天和菜单先可用。
 - 重复点击会复用已运行的服务；已有启动或训练维护任务时，本次不重复启动。
 - 启动会检查面板 6185 和 QQ 反向连接 6199，由同一个 AstrBot 进程监听后才显示就绪。
+- QQ 登录后会核对消息上报：备份并停用旧 8000 webhook，连接到 AstrBot；配置已经正确时复用现有连接。
 - 语音启动失败会显示警告，已经启动的 AstrBot 继续运行。
 - 启动日志在本地 `data/logs/`，AstrBot 日志在 `data/astrbot/logs/`，均不提交到 GitHub。
 
 QQ 日志出现 `ECONNREFUSED 127.0.0.1:6199` 时，说明当时 AstrBot 尚未监听该端口。重新双击启动入口，看到 6199 就绪后，QQ 会自动重连。
 
 统一菜单保留原业务和图鉴，并显示当前会话可用的 AstrBot 原生命令、已启用插件命令。向机器人请求“帮助”或“菜单”发送图片；请求“文字版菜单”发送文字。不同平台和权限看到的命令可能不同。
+
+QQ 日志出现 `ECONNREFUSED 127.0.0.1:8000` 时，通常是 NapCat 仍保留旧机器人的 HTTP 上报。AstrBot 模式下重新点击启动入口，会备份并修正本项目对应的上报配置。其他消息客户端保留；QQ 未登录时会提示稍后重试。
+
+NapCatQQ Desktop 还会保存一份账号网络设置。一键启动会同步这份本地配置，避免桌面程序下次启动恢复旧的 8000 上报；修改前会在 `data/astrbot/napcat-backups/` 备份。旧版 NapCat.Shell 的配置目录请通过 `scripts/start_all.ps1 -NapCatConfigDirectory "配置目录"` 指定。
