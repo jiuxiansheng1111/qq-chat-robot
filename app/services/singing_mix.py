@@ -61,12 +61,22 @@ def accompaniment_mix_gain(
     return gain
 
 
+def vocal_clarity_filter() -> str:
+    """先整理人声，再测电平和补音量。"""
+    return (
+        "highpass=f=60,equalizer=f=2400:t=q:w=0.8:g=2,"
+        "acompressor=threshold=0.16:ratio=1.5:attack=15:release=120:makeup=1"
+    )
+
+
 def vocal_forward_mix_filter(
     vocal_gain: float,
     background_gain: float,
     master_gain: float,
     duration_seconds: float,
     fade_seconds: float = 0,
+    *,
+    prepared_vocal: bool = False,
 ) -> str:
     """保留伴奏，只提高人声，并限制峰值。"""
     values = (vocal_gain, background_gain, master_gain, duration_seconds, fade_seconds)
@@ -77,10 +87,14 @@ def vocal_forward_mix_filter(
     if duration_seconds <= 0 or fade_seconds < 0 or fade_seconds * 2 > duration_seconds:
         raise ValueError("混音时长或淡化时长无效")
 
+    if type(prepared_vocal) is not bool:
+        raise ValueError("人声处理标志必须是布尔值")
+    vocal_filter = "" if prepared_vocal else vocal_clarity_filter() + ","
+    # 已整理的人声是单声道；直接复制，避免自动上混削弱 3 dB。
+    channels = "pan=stereo|c0=c0|c1=c0" if prepared_vocal else "aformat=channel_layouts=stereo"
     filters = (
-        f"[0:a]aformat=channel_layouts=stereo,highpass=f=60,"
-        f"volume={vocal_gain:.10f},"
-        "acompressor=threshold=0.32:ratio=1.5:attack=20:release=120:makeup=1[vocal];"
+        f"[0:a]{channels},{vocal_filter}"
+        f"volume={vocal_gain:.10f}[vocal];"
         f"[1:a]aformat=channel_layouts=stereo,volume={background_gain:.10f}[background];"
         f"[vocal][background]amix=inputs=2:duration=longest:normalize=0,"
         f"volume={master_gain:.10f},alimiter=limit=0.95:latency=1:level=false"

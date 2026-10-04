@@ -29,7 +29,7 @@ from app.services.singing_excerpt import (
     shift_excerpt_lyrics,
 )
 from app.services.singing_gpu import async_gpu_lock
-from app.services.singing_mix import vocal_forward_mix_filter, wav_rms
+from app.services.singing_mix import vocal_clarity_filter, vocal_forward_mix_filter, wav_rms
 from app.services.singing_sections import plan_paused_sections
 from app.services.singing_sources import (
     SINGING_DATA_ROOT,
@@ -285,7 +285,7 @@ def _automatic_pitch_target(settings: Settings, profile_id: str) -> float | None
 
 
 def _vocal_mix_gain(report: dict, settings: Settings, background_rms: float = 0) -> float:
-    rms = report.get("converted_rms")
+    rms = report.get("vocal_mix_input_rms", report.get("converted_rms"))
     if isinstance(rms, bool) or not isinstance(rms, (int, float)) or not math.isfinite(rms) or rms <= 0:
         raise SingingPipelineError("歌声音量检查结果无效，已停止混音。")
     # 伴奏保留原音量，弱人声才补增益，最多放大四倍。
@@ -346,6 +346,14 @@ def singing_voice_menu(settings: Settings, bot_self_id: str) -> str:
     )
 
 
+def uses_base_singing_model(profile_id: str, settings: Settings) -> bool:
+    """个别角色可以回到基础模型，无需删除微调权重。"""
+    return profile_id in {
+        value.strip() for value in settings.singing_base_model_profile_ids.split(",")
+        if value.strip()
+    }
+
+
 def _checkpoint_for_profile(profile_id: str) -> tuple[Path, Path] | None:
     manifest = SINGING_DATA_ROOT / "voices.json"
     if not manifest.exists():
@@ -372,6 +380,11 @@ def _checkpoint_for_profile(profile_id: str) -> tuple[Path, Path] | None:
             raise SingingPipelineError("这个角色的唱歌模型文件暂不可用。")
         result.append(path)
     return result[0], result[1]
+
+
+def singing_checkpoint(profile_id: str, settings: Settings) -> tuple[Path, Path] | None:
+    """返回这次实际使用的权重；空值表示基础模型。"""
+    return None if uses_base_singing_model(profile_id, settings) else _checkpoint_for_profile(profile_id)
 
 
 async def prepare_voice_reference(
@@ -462,7 +475,7 @@ async def convert_vocals(
         "--repair-f0-spikes" if settings.singing_repair_f0_spikes else "--no-repair-f0-spikes",
         "--semitone-shift", str(semitone_shift),
     ]
-    checkpoint = _checkpoint_for_profile(profile_id)
+    checkpoint = singing_checkpoint(profile_id, settings)
     if settings.singing_hf_offline:
         args += ["--offline"]
     if checkpoint:
@@ -565,11 +578,19 @@ async def _render_singing_section(
                 vocals, converted, reference, directory / "quality_retry.json", settings,
                 expected_semitone_shift=voice_shift,
             )
-        vocal_gain = _vocal_mix_gain(report, settings, background_rms)
-    vocal_level = (
-        float(report["converted_rms"]) * vocal_gain
-        if source_rms >= 0.0003 else settings.singing_vocal_target_rms
+    # 原转换结果保留给音准检查；混音单独处理，不再压缩放大后的人声。
+    mix_vocal = directory / "vocal_mix_input.wav"
+    await run_audio_command(
+        [ffmpeg, "-v", "error", "-nostdin", "-y", "-i", converted,
+         "-af", vocal_clarity_filter(), "-ar", "44100", "-ac", "1",
+         "-c:a", "pcm_s16le", mix_vocal],
     )
+    await _validate_model_audio(mix_vocal, ffprobe, seconds, settings)
+    mix_vocal_rms = await asyncio.to_thread(wav_rms, mix_vocal)
+    report["vocal_mix_input_rms"] = mix_vocal_rms
+    if source_rms >= 0.0003:
+        vocal_gain = _vocal_mix_gain(report, settings, background_rms)
+    vocal_level = mix_vocal_rms * vocal_gain
     background_gain = settings.singing_accompaniment_gain if background_rms > 0 else 0
     accompaniment_shift = _accompaniment_pitch_shift(voice_shift)
     if accompaniment_shift:
@@ -592,19 +613,27 @@ async def _render_singing_section(
             )
     mixed = directory / "mixed.wav"
     await run_audio_command(
-        [ffmpeg, "-v", "error", "-nostdin", "-y", "-i", converted, "-i", accompaniment,
+        [ffmpeg, "-v", "error", "-nostdin", "-y", "-i", mix_vocal, "-i", accompaniment,
          "-filter_complex", vocal_forward_mix_filter(
              vocal_gain, background_gain, settings.singing_master_gain, seconds,
+             prepared_vocal=True,
          ), "-t", f"{seconds:.6f}", "-fs", str(settings.singing_max_source_bytes * 2),
          "-ar", "44100", "-ac", "2", "-c:a", "pcm_s16le", mixed],
     )
     await _validate_model_audio(mixed, ffprobe, seconds, settings)
     record = directory / "record.wav"
     record_seconds = seconds + record_pause_seconds
+    # 先重采样再限幅，避免转成 QQ 格式时出现新的尖峰。
+    record_filter = (
+        "aresample=32000,pan=mono|c0=0.5*c0+0.5*c1,"
+        "alimiter=limit=0.95:latency=1:level=false"
+    )
+    if record_pause_seconds:
+        record_filter += f",apad=pad_dur={record_pause_seconds:.6f}"
     await run_audio_command(
         [ffmpeg, "-v", "error", "-nostdin", "-y", "-i", mixed,
-         *(["-af", f"apad=pad_dur={record_pause_seconds:.6f}"] if record_pause_seconds else []),
-         "-t", f"{record_seconds:.6f}", "-ar", "32000", "-ac", "1", "-c:a", "pcm_s16le", record],
+         "-af", record_filter, "-t", f"{record_seconds:.6f}",
+         "-ar", "32000", "-ac", "1", "-c:a", "pcm_s16le", record],
     )
     await _validate_model_audio(record, ffprobe, record_seconds, settings)
     record_info = json.loads(await run_audio_command(
@@ -617,6 +646,11 @@ async def _render_singing_section(
         "accompaniment_pitch_shift_semitones": accompaniment_shift,
         "vocal_mix_gain": vocal_gain, "accompaniment_mix_gain": background_gain,
         "vocal_estimated_rms": vocal_level,
+        "vocal_clarity_filter": vocal_clarity_filter(),
+        "singing_model_backend": (
+            "instrumental" if source_rms < 0.0003 else
+            "base" if singing_checkpoint(profile_id, settings) is None else "profile"
+        ),
         "accompaniment_rms": background_rms,
         "vocal_target_rms": settings.singing_vocal_target_rms,
         "vocal_background_gap_db": settings.singing_vocal_background_gap_db,
@@ -716,7 +750,8 @@ async def _generate_singing_cover_unlocked(
             reference.rename(raw_reference)
         await run_audio_command(
             [ffmpeg, "-v", "error", "-nostdin", "-y", "-i", raw_reference,
-             "-t", "20", "-ar", "44100", "-ac", "1", "-c:a", "pcm_s16le", reference],
+             "-t", str(settings.singing_reference_max_seconds), "-ar", "44100",
+             "-ac", "1", "-c:a", "pcm_s16le", reference],
         )
         await progress(f"已找到《{song.track.title}》，正在分离原唱人声和伴奏")
         # 先分离音轨并卸载 Demucs，再运行翻唱模型。

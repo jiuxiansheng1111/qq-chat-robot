@@ -170,6 +170,9 @@ class Settings(BaseSettings):
     # 翻唱参考音频与日常 TTS 参考音频分开配置。审核过的翻唱录音可覆盖角色的原说话参考音频。
     singing_real_reference_profile_ids: str = "murasame"
     singing_reference_audio_by_profile_json: str = "{}"
+    singing_reference_max_seconds: float = Field(default=8, ge=3, le=20)
+    # 填角色 ID 时使用基础模型，原微调权重仍保留。
+    singing_base_model_profile_ids: str = ""
     singing_semitone_shift_by_profile_json: str = "{}"
     singing_target_median_f0_by_profile_json: str = "{}"
     singing_vocal_target_rms: float = Field(default=0.20, ge=0.01, le=0.3)

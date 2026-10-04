@@ -642,16 +642,27 @@ async def _make_reference(
         and metadata.get("settings_based_reference") is True
         and metadata.get("normalized_audio") == _relative(output)
         and isinstance(metadata.get("source_audio"), str)
+        and metadata.get("max_seconds") == settings.singing_reference_max_seconds
+        and metadata.get("reference_settings") == {
+            "overrides": settings.singing_reference_audio_by_profile_json,
+            "profiles": settings.voice_profiles_json,
+            "prefer_recorded": settings.singing_prefer_recorded_reference,
+            "use_trained_tts": settings.singing_use_trained_tts_reference,
+            "real_reference_ids": settings.singing_real_reference_profile_ids,
+        }
     ):
         source_value = Path(metadata["source_audio"])
         source = source_value if source_value.is_absolute() else PROJECT_ROOT / source_value
-        return output, source
+        if source.is_file() and metadata.get("source_size") == source.stat().st_size \
+                and metadata.get("source_mtime_ns") == source.stat().st_mtime_ns:
+            return output, source
     raw = await singing.prepare_voice_reference(
         profile_id, profile_directory / "reference_work", settings, settings.onebot_self_id
     )
     await singing.run_audio_command(
         [ffmpeg, "-v", "error", "-nostdin", "-y", "-i", raw,
-         "-t", "20", "-ar", "44100", "-ac", "1", "-c:a", "pcm_s16le", output],
+         "-t", str(settings.singing_reference_max_seconds), "-ar", "44100",
+         "-ac", "1", "-c:a", "pcm_s16le", output],
     )
     if not _valid_audio(output):
         raise RecheckError("角色参考音频未生成或大小异常")
@@ -659,6 +670,16 @@ async def _make_reference(
         "source_audio": _relative(raw),
         "normalized_audio": _relative(output),
         "settings_based_reference": True,
+        "max_seconds": settings.singing_reference_max_seconds,
+        "source_size": raw.stat().st_size,
+        "source_mtime_ns": raw.stat().st_mtime_ns,
+        "reference_settings": {
+            "overrides": settings.singing_reference_audio_by_profile_json,
+            "profiles": settings.voice_profiles_json,
+            "prefer_recorded": settings.singing_prefer_recorded_reference,
+            "use_trained_tts": settings.singing_use_trained_tts_reference,
+            "real_reference_ids": settings.singing_real_reference_profile_ids,
+        },
     })
     return output, raw
 
@@ -1079,11 +1100,19 @@ async def _run_phase_impl(args: argparse.Namespace, settings: Settings) -> Path:
         profile_directory.mkdir(parents=True, exist_ok=True)
         checkpoint: tuple[Path, Path] | None = None
         checkpoint_error: BaseException | None = None
+        model_settings = settings
         try:
             if args.phase == "candidate":
                 checkpoint = _load_candidate_entry(candidate_registry, profile_id)
+                # 候选复验必须使用候选权重，不能被基础模型选项跳过。
+                model_settings = settings.model_copy(update={
+                    "singing_base_model_profile_ids": ",".join(
+                        value.strip() for value in settings.singing_base_model_profile_ids.split(",")
+                        if value.strip() and value.strip() != profile_id
+                    ),
+                })
             else:
-                checkpoint = singing._checkpoint_for_profile(profile_id)
+                checkpoint = singing.singing_checkpoint(profile_id, settings)
         except Exception as exc:  # noqa: BLE001 - 各 profile 独立失败并继续。
             checkpoint_error = exc
 
@@ -1172,7 +1201,7 @@ async def _run_phase_impl(args: argparse.Namespace, settings: Settings) -> Path:
                 report = await _run_item(
                     profile_id, language, result_source, profile_directory, reference,
                     reference_source or reference,
-                    checkpoint, settings, ffmpeg, ffprobe, args.steps,
+                    checkpoint, model_settings, ffmpeg, ffprobe, args.steps,
                 )
             if language in refresh_languages:
                 report["source_reprepared"] = True

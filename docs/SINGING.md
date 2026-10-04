@@ -46,7 +46,7 @@ flowchart TD
 | `convert_vocals` | 根据原唱人声的旋律转换音色 | 启动本地 Seed-VC 子进程；已验收微调权重作为可选输入 |
 | `check_cover_quality` | 检查音高、音色、时长与音量，失败时可重试一次 | 启动本地 RMVPE/CAMPPlus 检查脚本，读取 JSON 报告 |
 | `select_singing_excerpt` / `plan_paused_sections` | 选几句歌词 / 在人声停顿处分段 | 在本机分析时间轴和低能量停顿；连续覆盖选定范围，单段最多 115 秒 |
-| `vocal_forward_mix_filter` | 人声优先混音 | 伴奏按人声音量调低，有人声时进一步压低；不用噪声门删弱音 |
+| `vocal_clarity_filter` / `vocal_forward_mix_filter` | 整理人声 / 混音 | 先轻微提亮、压缩，再测实际电平补人声增益；伴奏固定增益，没有侧链压低或噪声门 |
 | `send_group_record` | 按顺序发送各段语音 | 机器人向 NapCat OneBot HTTP Server 发请求 |
 
 ## 启用与群聊用法
@@ -55,7 +55,9 @@ flowchart TD
 
 丛雨默认以真实游戏录音作为翻唱参考，由 `SINGING_REAL_REFERENCE_PROFILE_IDS=murasame` 指定。其它角色仍遵循上述 TTS 参考设置。为翻唱单独选择录音时，可设置 `SINGING_REFERENCE_AUDIO_BY_PROFILE_JSON`，例如 `{"murasame":"data/singing/acceptance/cute-references/murasame_soft_affection_0055_mono44k.wav"}`；路径相对项目根目录，此设置仅供翻唱使用。
 
-本机用户已选 B 版：500 步模型 + 视频中分离的歌唱干声参考。已选录音复制到独立版本目录，通过上述参考映射启用，未加入原游戏训练清单。每首歌沿用这个歌唱音色，替换完整原曲人声和旋律，不需要逐首重新训练或调用聊天大模型。其他角色可配置各自听审后的歌唱录音，不会共用丛雨的参考。
+参考尽量选干净的原录音，别把上次转换的歌声重新用作参考，免得失真一轮轮累积。默认只取前 8 秒；较短的参考也能给转换保留更多歌曲上下文。每个角色使用自己的参考，歌曲无需逐首训练。
+
+微调后咬字变差时，可在 `SINGING_BASE_MODEL_PROFILE_IDS` 填对应角色 ID（逗号分隔），直接使用基础模型加原录音。已验收权重仍留在原处，移除此项即可恢复；新候选不会自动替换它。建议同一段歌声比较基础模型和微调模型，再决定用哪版。
 
 | 主要 `.env` 项 | 默认值 | 作用 |
 | --- | --- | --- |
@@ -63,6 +65,8 @@ flowchart TD
 | `NETEASE_MEMBER_ENABLED` | `false` | `true` 时对未登记本地原曲的歌曲使用本机网易云会员桥；桥接登录或完整播放权限不可用时会报错，不改用第三方音源 |
 | `SINGING_CHUNK_SECONDS` | `115` | 优先在原唱停顿处分段；没有停顿时用上限前最后一个歌词换句位置，段尾补短停顿 |
 | `SINGING_CLIP_SECONDS` | `20` | 片段目标时长，优先取开头几句有效歌词，通常约 15–25 秒 |
+| `SINGING_REFERENCE_MAX_SECONDS` | `8` | 参考录音最多取 8 秒，可设置 3–20 秒 |
+| `SINGING_BASE_MODEL_PROFILE_IDS` | 空 | 指定角色使用基础转换模型；逗号分隔，原微调权重不删除 |
 | `SINGING_PREFER_RECORDED_REFERENCE` | `true` | 优先角色原始录音，减少聊天 TTS 失真传入翻唱；已配置的翻唱专用参考仍优先 |
 | `SINGING_ACCOMPANIMENT_GAIN` / `SINGING_VOCAL_BACKGROUND_GAP_DB` | `0.85` / `3` | 伴奏保持正常音量，人声目标根据伴奏电平提高；没有侧链压低乐器 |
 | `SINGING_MIN_VOICED_RECALL` / `SINGING_MIN_ENERGY_RECALL` / `SINGING_MAX_MISSING_VOCAL_SECONDS` | `0.88` / `0.90` / `1.2` | 有声帧、活跃能量覆盖与局部近静音缺失检查；失败仅重试当前段 |
@@ -72,7 +76,7 @@ flowchart TD
 | `SINGING_DIFFUSION_STEPS` / `SINGING_INFERENCE_CFG_RATE` | `35` / `0.7` | Seed-VC 初次转换参数 |
 | `SINGING_SEMITONE_SHIFT_BY_PROFILE_JSON` | `{}` | 角色到人声移调半音数的映射，整数 −12 到 +12；未配置且无自动目标时使用原调 |
 | `SINGING_TARGET_MEDIAN_F0_BY_PROFILE_JSON` | `{}` | 自动音区目标，例如 `{"murasame":400}`；依据全曲原唱有声音高中位数选 −12/0/+12 半音，手动设置优先 |
-| `SINGING_VOCAL_TARGET_RMS` / `SINGING_MASTER_GAIN` | `0.20` / `0.93` | 弱人声补到目标电平，强人声不压低；人声最多放大 4 倍，混音峰值限幅 |
+| `SINGING_VOCAL_TARGET_RMS` / `SINGING_MASTER_GAIN` | `0.20` / `0.93` | 整理后按实际 RMS 补音量，最多放大 4 倍；伴奏固定增益，最后限制混音峰值 |
 | `SINGING_MODEL_TIMEOUT_SECONDS` / `SINGING_JOB_TIMEOUT_SECONDS` | `900` / `2400` | 单个模型子进程与整项任务的超时秒数 |
 | `SINGING_SEGMENT_PAUSE_SECONDS` | `1.5` | 相邻 QQ 语音段的发送间隔秒数 |
 
@@ -133,6 +137,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup_singing.ps1
 
 若机器全局配置的 Hugging Face 镜像不可用，训练子进程默认直连官方 `https://huggingface.co`，不会改动全局设置。需要指定镜像时可设置 `SINGING_HF_ENDPOINT`。
 
+## 清晰度优先
+
+咬字糊时，先用基础模型和干净原录音对照。可以试 `SINGING_DIFFUSION_STEPS=50`、`SINGING_INFERENCE_CFG_RATE=0`，并保留原调；较弱的转换引导不一定对每个角色都更好。人声先轻微提亮和压缩，再按实际 RMS 补音量；单声道人声复制到左右声道，避免上混损失 3 dB。QQ 输出在 32 kHz 重采样、声道平均之后再限幅。伴奏仍用固定增益，不随人声压低。
+
+音准和能量检查只能排除部分问题。歌词识别会受唱法、伴奏残留和文字表记影响，分数更低也不能证明每个字都唱对。建议先听约 20 秒的片段，再生成整首。
+
 ## 每角色训练
 
 先查看会读取的角色清单和参考录音：
@@ -149,7 +159,7 @@ data\singing\runtime\.venv\Scripts\python.exe .\scripts\train_singing_voices.py 
 
 首轮训练读取与当前 Seed-VC 推理相同的 Hugging Face 配置和 `...ema_v2.pth` 预训练权重（优先复用 `data/singing/runtime/seed-vc/checkpoints/` 中的本地缓存），并检查 F0、44.1 kHz 与关键张量形状；缺少或不匹配时会停止，不从随机权重开始。仓库内同名的旧 preset 只补足 `timbre_shifter` 等训练专用字段，不决定模型宽度或 Whisper 版本。
 
-检查损失和候选模型后，可用相同 run name 与 `--resume` 从该 run 最新权重再训一轮。Seed-VC 上游训练器固定以 `load_only_params=True` 载入权重，因此这属于**权重热启动**：优化器、epoch 和步数都会重置；`--max-steps 100` 表示本轮再运行 100 步，并不会接续上轮的累计步数或学习率状态。数据集、模型和检查点按角色和 run name 隔离；每轮的 `--max-steps` 可选 `100`、`300` 或 `1000`。旧架构的 run config 会被拒绝，应使用新的 run name。
+检查损失和候选模型后，可用相同 run name 与 `--resume` 从该 run 最新权重再训一轮。Seed-VC 上游训练器固定以 `load_only_params=True` 载入权重，因此这属于**权重热启动**：优化器、epoch 和步数都会重置；`--max-steps 100` 表示本轮再运行 100 步，并不会接续上轮的累计步数或学习率状态。数据集、模型和检查点按角色和 run name 隔离；每轮的 `--max-steps` 可选 `100`、`300`、`500` 或 `1000`。旧架构的 run config 会被拒绝，应使用新的 run name。
 
 ```powershell
 data\singing\runtime\.venv\Scripts\python.exe .\scripts\train_singing_voices.py --profile yoshino --run-name yoshino-svc-round1 --max-steps 300 --resume
