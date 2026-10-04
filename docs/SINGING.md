@@ -78,6 +78,7 @@ flowchart TD
 | `SINGING_MAX_SOURCE_BYTES` | `104857600` | 本地或网易云原曲大小上限（100 MiB） |
 | `SINGING_QUEUE_SIZE` / `SINGING_COOLDOWN_SECONDS` | `3` / `120` | 待处理队列和同一用户再次提交的冷却秒数 |
 | `SINGING_DIFFUSION_STEPS` / `SINGING_INFERENCE_CFG_RATE` | `35` / `0.7` | Seed-VC 初次转换参数 |
+| `SINGING_INFERENCE_CFG_RATE_BY_PROFILE_JSON` | `{}` | 按角色覆盖引导强度，数值范围0–2；未填的角色沿用通用值 |
 | `SINGING_SEMITONE_SHIFT_BY_PROFILE_JSON` | `{}` | 角色到人声移调半音数的映射，整数 −12 到 +12；未配置且无自动目标时使用原调 |
 | `SINGING_TARGET_MEDIAN_F0_BY_PROFILE_JSON` | `{}` | 自动音区目标，例如 `{"murasame":400}`；依据全曲原唱有声音高中位数选 −12/0/+12 半音，手动设置优先 |
 | `SINGING_VOCAL_TARGET_RMS` / `SINGING_MASTER_GAIN` | `0.20` / `0.93` | 整理后按实际 RMS 补音量，最多放大 4 倍；伴奏固定增益，最后限制混音峰值 |
@@ -144,6 +145,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup_singing.ps1
 ## 清晰度优先
 
 咬字糊时，先用基础模型和干净原录音对照。可以试 `SINGING_DIFFUSION_STEPS=50`、`SINGING_INFERENCE_CFG_RATE=0`，并保留原调；较弱的转换引导不一定对每个角色都更好。人声先轻微提亮和压缩，再按实际 RMS 补音量；单声道人声复制到左右声道，避免上混损失 3 dB。QQ 输出在 32 kHz 重采样、声道平均之后再限幅。伴奏仍用固定增益，不随人声压低。
+
+不同角色可以用不同引导强度。例如通用值为0，设置 `SINGING_INFERENCE_CFG_RATE_BY_PROFILE_JSON={"aimisi":0.7}`，就只让爱弥斯用0.7。角色参考由 `SINGING_REFERENCE_AUDIO_BY_PROFILE_JSON` 单独指定。参考录音的语言、配音演员和说话风格会影响听感，换成角色日语录音应当作另一种声线版本试听。其他部署者需要准备自己的参考录音，本项目不附带私人素材。
+
+基础模型加合适参考录音也可以作为最终方案。微调步数和音准检查不能代表唱腔自然；先听同一段歌声，确认长音、气息、字音和角色声线，再检查其他语言及完整歌曲。一个日语片段满意，只能确认这一段。
 
 音准和能量检查只能排除部分问题。歌词识别会受唱法、伴奏残留和文字表记影响，分数更低也不能证明每个字都唱对。建议先听约 20 秒的片段，再生成整首。
 

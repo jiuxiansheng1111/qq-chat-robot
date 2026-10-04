@@ -387,6 +387,24 @@ def singing_checkpoint(profile_id: str, settings: Settings) -> tuple[Path, Path]
     return None if uses_base_singing_model(profile_id, settings) else _checkpoint_for_profile(profile_id)
 
 
+def inference_cfg_rate_for_profile(profile_id: str, settings: Settings) -> float:
+    """先用角色单独配置，没填就沿用通用值。"""
+    raw = settings.singing_inference_cfg_rate_by_profile_json
+    try:
+        if len(raw) > 8192:
+            raise ValueError("配置过长")
+        rates = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        raise SingingPipelineError("角色翻唱引导参数无效，请管理员检查。") from exc
+    if not isinstance(rates, dict) or any(
+        not isinstance(key, str) or not key
+        or type(value) not in (int, float) or not 0 <= value <= 2
+        for key, value in rates.items()
+    ):
+        raise SingingPipelineError("角色翻唱引导参数无效，请管理员检查。")
+    return float(rates.get(profile_id, settings.singing_inference_cfg_rate))
+
+
 async def prepare_voice_reference(
     profile_id: str, job_dir: Path, settings: Settings, bot_self_id: str
 ) -> Path:
@@ -470,7 +488,7 @@ async def convert_vocals(
         "--seed-root", str(seed_root), "--ffmpeg", str(ffmpeg),
         "--source", str(source), "--target", str(reference), "--output", str(output_dir),
         "--diffusion-steps", str(steps or settings.singing_diffusion_steps),
-        "--inference-cfg-rate", str(settings.singing_inference_cfg_rate),
+        "--inference-cfg-rate", str(inference_cfg_rate_for_profile(profile_id, settings)),
         "--seed", str(settings.singing_seed),
         "--repair-f0-spikes" if settings.singing_repair_f0_spikes else "--no-repair-f0-spikes",
         "--semitone-shift", str(semitone_shift),
@@ -647,6 +665,7 @@ async def _render_singing_section(
         "vocal_mix_gain": vocal_gain, "accompaniment_mix_gain": background_gain,
         "vocal_estimated_rms": vocal_level,
         "vocal_clarity_filter": vocal_clarity_filter(),
+        "inference_cfg_rate": inference_cfg_rate_for_profile(profile_id, settings),
         "singing_model_backend": (
             "instrumental" if source_rms < 0.0003 else
             "base" if singing_checkpoint(profile_id, settings) is None else "profile"

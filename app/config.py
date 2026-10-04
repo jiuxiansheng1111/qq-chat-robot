@@ -196,6 +196,8 @@ class Settings(BaseSettings):
     singing_seed: int = Field(default=20261004, ge=0, le=4294967295)
     singing_repair_f0_spikes: bool = False
     singing_inference_cfg_rate: float = Field(default=0.7, ge=0, le=2)
+    # 每个角色可以单独调引导强度，没填的仍用上面的值。
+    singing_inference_cfg_rate_by_profile_json: str = Field(default="{}", max_length=8192)
     singing_separation_model: str = Field(default="htdemucs_ft", pattern=r"^htdemucs(_ft)?$")
     singing_max_pitch_error_cents: float = Field(default=100, gt=0, le=200)
     singing_min_voice_similarity: float = Field(default=0.35, ge=0, le=1)
