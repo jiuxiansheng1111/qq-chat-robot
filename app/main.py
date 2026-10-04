@@ -140,6 +140,14 @@ from app.services.singing import (
 from app.services.singing_jobs import QueueError, SingingError, SingingJob, SingingJobManager
 from app.services.singing_sources import SingingSourceError
 from app.services.slang import classify_unknown_slang
+from app.services.story_generation import (
+    StoryGenerationError,
+    StoryInputError,
+    StoryRequest,
+    generate_story,
+    parse_story_request,
+    validate_story_request,
+)
 from app.services.translation import (
     TranslationResult,
     format_translation_reply,
@@ -1834,6 +1842,69 @@ async def send_group_long_message(group_id: str, message: str) -> None:
         await send_group_message(group_id, chunk)
 
 
+async def _handle_story_request(
+    request, group_id: str, user_id: str, story_request: StoryRequest,
+) -> None:
+    state = request.app.state
+    try:
+        validate_story_request(story_request)
+    except StoryInputError as exc:
+        await send_group_message(group_id, str(exc))
+        return
+
+    active_groups = getattr(state, "story_active_groups", None)
+    if active_groups is None:
+        active_groups = set()
+        state.story_active_groups = active_groups
+    story_semaphore = getattr(state, "story_semaphore", None)
+    if story_semaphore is None:
+        story_semaphore = asyncio.Semaphore(2)
+        state.story_semaphore = story_semaphore
+
+    if group_id in active_groups or story_semaphore.locked():
+        await send_group_message(group_id, "故事创作现在有点忙，请稍后再试。")
+        return
+    if not await state.llm_limiter.allow(f"llm-user:{user_id}"):
+        await notify_rate_limited(
+            request, group_id, user_id, scope="llm-user",
+            message="刚才聊得有点快，给我几秒整理一下再问吧～",
+        )
+        return
+    if not await state.llm_group_limiter.allow(f"llm-group:{group_id}"):
+        await notify_rate_limited(
+            request, group_id, user_id, scope="llm-group",
+            message="群里同时问我的人有点多，稍等几秒再叫我吧～",
+        )
+        return
+
+    if group_id in active_groups or story_semaphore.locked():
+        await send_group_message(group_id, "故事创作现在有点忙，请稍后再试。")
+        return
+    await story_semaphore.acquire()
+    if group_id in active_groups:
+        story_semaphore.release()
+        await send_group_message(group_id, "本群正在写故事，请稍后再试。")
+        return
+    active_groups.add(group_id)
+    try:
+        story = await generate_story(state.llm, story_request)
+    except StoryGenerationError as exc:
+        await send_group_message(group_id, str(exc))
+        return
+    except (LLMError, httpx.HTTPError, ValueError):
+        logger.warning("story generation failed")
+        await send_group_message(group_id, "故事暂时没有生成成功，稍后再试吧。")
+        return
+    except Exception:
+        logger.exception("story generation failed unexpectedly")
+        await send_group_message(group_id, "故事暂时没有生成成功，稍后再试吧。")
+        return
+    finally:
+        active_groups.discard(group_id)
+        story_semaphore.release()
+    await send_group_long_message(group_id, story)
+
+
 async def notify_rate_limited(
     request: Request,
     group_id: str,
@@ -3104,12 +3175,18 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
         return {"ok": True, "ignored": True}
 
     text = message_text(event)
-    if bot_mentioned(event) or text.startswith("/"):
-        text = normalize_menu_intent(text)
-    text = canonicalize_short_command(
-        text,
-        addressed=bot_mentioned(event) or text.startswith("/"),
+    story_request = (
+        parse_story_request(text)
+        if event.get("wechat_private") or bot_mentioned(event) or text.startswith("/")
+        else None
     )
+    if not story_request:
+        if bot_mentioned(event) or text.startswith("/"):
+            text = normalize_menu_intent(text)
+        text = canonicalize_short_command(
+            text,
+            addressed=bot_mentioned(event) or text.startswith("/"),
+        )
     music_query = extract_music_query(event, text)
     translation_query = extract_translation_query(event, text)
     bilibili_query = extract_bilibili_video_query(event, text)
@@ -3127,7 +3204,8 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
         return {"ok": True, "ignored": True}
     display_name = sender_display_name(event)
     if (
-        text
+        not story_request
+        and text
         and user_id != event_bot_self_id(event)
         and not text.startswith(("/", "http://", "https://"))
     ):
@@ -3139,7 +3217,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
         if compact_text:
             group_cache.append(f"{display_name}：{compact_text}")
     image_refs = image_references_from_message(event.get("message"))
-    if image_refs:
+    if image_refs and not story_request:
         image_pool = request.app.state.recent_member_images.setdefault(
             (group_id, user_id), deque(maxlen=8)
         )
@@ -3160,29 +3238,30 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
     ):
         return {"ok": True, "source": "character_confirmation"}
     today = datetime.now().astimezone().date().isoformat()
-    await request.app.state.db.record_group_activity(
-        group_id, user_id, display_name, text, today
-    )
-    if 2 <= len(text) <= 200 and not text.startswith(("/", "http://", "https://")):
-        sample_key = (group_id, user_id)
-        samples = request.app.state.recent_member_messages.setdefault(
-            sample_key,
-            deque(maxlen=max(8, min(settings.possession_style_sample_limit, 200))),
+    if not story_request:
+        await request.app.state.db.record_group_activity(
+            group_id, user_id, display_name, text, today
         )
-        samples.append(text)
-    if (
-        text
-        and len(text) <= 500
-        and not text.startswith(("/", "http://", "https://"))
-    ):
-        await request.app.state.db.add_possession_style_message(
-            group_id,
-            user_id,
-            display_name,
-            text,
-            has_image=bool(image_refs),
-            max_messages=max(100, min(settings.possession_recall_history_count, 200)),
-        )
+        if 2 <= len(text) <= 200 and not text.startswith(("/", "http://", "https://")):
+            sample_key = (group_id, user_id)
+            samples = request.app.state.recent_member_messages.setdefault(
+                sample_key,
+                deque(maxlen=max(8, min(settings.possession_style_sample_limit, 200))),
+            )
+            samples.append(text)
+        if (
+            text
+            and len(text) <= 500
+            and not text.startswith(("/", "http://", "https://"))
+        ):
+            await request.app.state.db.add_possession_style_message(
+                group_id,
+                user_id,
+                display_name,
+                text,
+                has_image=bool(image_refs),
+                max_messages=max(100, min(settings.possession_recall_history_count, 200)),
+            )
     if not await request.app.state.ingress_limiter.allow(f"user:{user_id}"):
         await notify_rate_limited(
             request,
@@ -3201,6 +3280,10 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
             message="这个群刚才消息有点多，等几秒再试一下吧～",
         )
         return {"ok": True, "ignored": True, "reason": "group_ingress_rate_limited"}
+
+    if story_request:
+        await _handle_story_request(request, group_id, user_id, story_request)
+        return {"ok": True, "source": "story"}
 
     romance_mode = await request.app.state.db.romance_mode(group_id, user_id)
     # 迁移或管理员查看时仍可读取旧值，但日常聊天不要修改；
