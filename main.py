@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 from collections.abc import Mapping
@@ -50,6 +51,8 @@ class QQChatPlugin(Star):
         self.legacy_chat = bool(self.config.get("legacy_chat", True))
         self.runtime: Any | None = None
         self._wechat_bridges: dict[tuple[str, str], Any] = {}
+        self._menu_ready = False
+        self._menu_prepare_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
         """初始化现有服务，不启动旧 Web 服务。"""
@@ -81,8 +84,36 @@ class QQChatPlugin(Star):
             raise
         self.runtime = runtime
 
+    async def _prepare_local_menus(self) -> None:
+        if self.runtime is None:
+            return
+        from app.astrbot_menu_files import prepare_default_menu_files
+
+        async with self._menu_prepare_lock:
+            try:
+                count = await prepare_default_menu_files(self.context, self.runtime._core.settings)
+                _LOGGER.info("本地菜单 JPG 已准备（%s 个平台/权限版本）", count)
+            except Exception as exc:  # noqa: BLE001 -- 外部插件的菜单错误不影响启动。
+                _LOGGER.warning("准备本地菜单失败（%s）", type(exc).__name__)
+
+    @filter.on_astrbot_loaded()
+    async def prepare_menus_after_start(self) -> None:
+        self._menu_ready = True
+        await self._prepare_local_menus()
+
+    @filter.on_plugin_loaded()
+    async def update_menus_after_plugin_loaded(self, metadata: Any) -> None:
+        if self._menu_ready:
+            await self._prepare_local_menus()
+
+    @filter.on_plugin_unloaded()
+    async def update_menus_after_plugin_unloaded(self, metadata: Any) -> None:
+        if self._menu_ready:
+            await self._prepare_local_menus()
+
     async def terminate(self) -> None:
         """卸载插件时释放队列和后台任务。"""
+        self._menu_ready = False
         runtime, self.runtime = self.runtime, None
         try:
             if runtime is not None:
@@ -194,7 +225,7 @@ class QQChatPlugin(Star):
             return
 
         image_groups, text_groups = build_unified_menu_groups(self.context, event)
-        from app.services.help_menu import concise_text_menu, render_help_menu
+        from app.services.help_menu import concise_text_menu, prepare_help_menu_file
 
         event.should_call_llm(False)
         event.stop_event()
@@ -203,23 +234,27 @@ class QQChatPlugin(Star):
             return
 
         try:
-            encoded = await render_help_menu(
+            from app.astrbot_menu_files import choose_event_menu_file
+
+            menu_path = await prepare_help_menu_file(
                 self.runtime._core.settings,
                 image_groups=image_groups,
                 text_groups=text_groups,
+            )
+            menu_path = await choose_event_menu_file(
+                self.context, event, menu_path, image_groups, text_groups,
             )
         except Exception:
             _LOGGER.exception("绘制菜单图片失败")
             yield event.make_result().message("菜单图片暂时生成不了，可以发“文字版菜单”。")
             return
 
-        normalized = self.runtime._core._qq_safe_image_variant(encoded) or encoded
-        normalized = normalized.removeprefix("base64://")
+        from app.astrbot_menu_files import menu_send_error_info, send_menu_file
+
         try:
-            # 直接等发送结果，才能接住协议端超时；yield 的发送发生在函数外。
-            await event.send(event.make_result().base64_image(normalized))
+            await send_menu_file(event, menu_path)
         except Exception as exc:  # noqa: BLE001 -- 各平台的发送错误类型不同。
-            _LOGGER.warning("菜单图片发送未完成（%s）", type(exc).__name__)
+            _LOGGER.warning("本地菜单发送未完成（%s，返回码 %s，%s）", *menu_send_error_info(exc))
             yield event.make_result().message("菜单图片发送失败或超时，可以发“文字版菜单”。")
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=-90)

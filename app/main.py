@@ -87,7 +87,7 @@ from app.services.help_menu import (
     concise_text_menu,
     is_help_menu_request,
     is_text_menu_request,
-    render_help_menu,
+    prepare_help_menu_file,
 )
 from app.services.http_routing import install_outbound_proxy_environment
 from app.services.image_generation import generate_image
@@ -773,6 +773,10 @@ async def close_runtime(app: FastAPI):
 async def lifespan(app: FastAPI):
     await initialize_runtime(app)
     try:
+        try:
+            await prepare_help_menu_file(settings)
+        except (OSError, ValueError, RuntimeError) as exc:
+            logger.warning("准备本地菜单失败（%s）", type(exc).__name__)
         yield
     finally:
         await close_runtime(app)
@@ -3995,8 +3999,8 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
         await send_group_message(group_id, concise_text_menu())
     elif text in HELP_COMMANDS or is_help_menu_request(text):
         try:
-            menu = await render_help_menu(settings)
-            await send_group_image(group_id, menu)
+            menu = await prepare_help_menu_file(settings)
+            await send_group_image(group_id, menu.as_uri())
         except (OSError, ValueError, RuntimeError) as exc:
             logger.warning("help image unavailable (%s)", type(exc).__name__)
             await send_group_message(group_id, "菜单图片发送失败或超时，可以 @我 文字版菜单。")

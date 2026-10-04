@@ -6,6 +6,9 @@ import hashlib
 import io
 import os
 import re
+import stat
+import tempfile
+import threading
 import uuid
 from collections.abc import Sequence
 from pathlib import Path
@@ -18,7 +21,9 @@ _BACKGROUND_DEFAULT = "assets/help-menu-background.png"
 _CANVAS_WIDTH = 1080
 _MIN_CANVAS_HEIGHT = 1480
 _MAX_ENCODED_BYTES = 4 * 1024 * 1024
+_MAX_MENU_JPEG_BYTES = 2 * 1024 * 1024
 _CACHE_VERSION = "help-menu-v2"
+_MENU_FILE_LOCK = threading.Lock()
 _MENU_TITLE = "聊天机器人 · 功能菜单"
 _IMAGE_MENU_SUBTITLE = "先 @我，再说想做什么；如“给我看看菜单”"
 _TEXT_MENU_SUBTITLE = "先 @我，再说想做什么。"
@@ -554,4 +559,158 @@ async def render_help_menu(
     """在线程中绘制或读取缓存，返回 OneBot base64 图片地址。"""
     return await asyncio.to_thread(
         _render_help_menu_sync, settings, image_groups, text_groups, title, subtitle,
+    )
+
+
+def _menu_file_cache_dir() -> Path:
+    project_root = _PROJECT_ROOT.resolve()
+    cache_dir = project_root / "data" / "help_menu"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    resolved_cache_dir = cache_dir.resolve(strict=True)
+    if (
+        resolved_cache_dir != cache_dir
+        or not resolved_cache_dir.is_relative_to(project_root)
+    ):
+        raise RuntimeError("帮助菜单缓存目录必须位于项目 data/help_menu 内。")
+    return resolved_cache_dir
+
+
+def _safe_menu_cache_file(cache_dir: Path, cache_path: Path) -> bool:
+    if cache_path.parent != cache_dir:
+        return False
+    try:
+        info = cache_path.lstat()
+    except (OSError, RuntimeError):
+        return not cache_path.exists()
+    if stat.S_ISLNK(info.st_mode) or bool(
+        getattr(info, "st_file_attributes", 0)
+        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    ):
+        return False
+    try:
+        resolved = cache_path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return False
+    return resolved.parent == cache_dir and resolved.is_relative_to(cache_dir)
+
+
+def _valid_baseline_jpeg(path: Path) -> bool:
+    if not _safe_menu_cache_file(path.parent, path):
+        return False
+    try:
+        payload = path.read_bytes()
+    except OSError:
+        return False
+    if (
+        not payload
+        or len(payload) > _MAX_MENU_JPEG_BYTES
+        or not payload.startswith(b"\xff\xd8")
+        or not payload.endswith(b"\xff\xd9")
+    ):
+        return False
+    try:
+        with Image.open(io.BytesIO(payload)) as cached:
+            if (
+                cached.format != "JPEG"
+                or cached.info.get("progressive", False)
+                or cached.info.get("progression", False)
+            ):
+                return False
+            cached.verify()
+    except (OSError, ValueError, SyntaxError, Image.DecompressionBombError):
+        return False
+    return True
+
+
+def _prepare_help_menu_file_sync(
+    settings: Any,
+    image_groups: Sequence[tuple[str, Sequence[str], Sequence[int]]] | None,
+    text_groups: Sequence[tuple[str, Sequence[str]]] | None,
+    title: str | None,
+    subtitle: str | None,
+) -> Path:
+    normalized_image_groups = _normalize_image_groups(image_groups)
+    normalized_text_groups = _normalize_text_groups(text_groups)
+    resolved_title = title or _MENU_TITLE
+    resolved_subtitle = subtitle or _IMAGE_MENU_SUBTITLE
+    background_path = _background_path(settings)
+
+    with _MENU_FILE_LOCK:
+        cache_dir = _menu_file_cache_dir()
+        cache_key = _cache_key(
+            background_path,
+            normalized_image_groups,
+            normalized_text_groups,
+            resolved_title,
+            resolved_subtitle,
+        )
+        cache_path = cache_dir / f"menu_{cache_key}.jpg"
+        if _valid_baseline_jpeg(cache_path):
+            return cache_path.resolve(strict=True)
+
+        rendered = _draw_menu(
+            background_path,
+            normalized_image_groups,
+            resolved_title,
+            resolved_subtitle,
+        ).convert("RGB")
+        jpeg_bytes = b""
+        for quality in (88, 82, 74, 66):
+            output = io.BytesIO()
+            rendered.save(
+                output,
+                format="JPEG",
+                quality=quality,
+                optimize=True,
+                progressive=False,
+            )
+            jpeg_bytes = output.getvalue()
+            if (
+                0 < len(jpeg_bytes) <= _MAX_MENU_JPEG_BYTES
+                and jpeg_bytes.startswith(b"\xff\xd8")
+                and jpeg_bytes.endswith(b"\xff\xd9")
+            ):
+                break
+        else:
+            raise RuntimeError("帮助菜单 JPEG 压缩后仍超过 2 MiB。")
+
+        file_descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{cache_path.stem}.",
+            suffix=".tmp",
+            dir=cache_dir,
+        )
+        temporary_path = Path(temporary_name)
+        try:
+            with os.fdopen(file_descriptor, "wb") as temporary_file:
+                temporary_file.write(jpeg_bytes)
+                temporary_file.flush()
+                os.fsync(temporary_file.fileno())
+            if not _valid_baseline_jpeg(temporary_path):
+                raise RuntimeError("帮助菜单 JPEG 文件校验失败。")
+            if cache_path.parent != cache_dir:
+                raise RuntimeError("帮助菜单缓存文件必须位于项目 data/help_menu 内。")
+            os.replace(temporary_path, cache_path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
+        if not _valid_baseline_jpeg(cache_path):
+            raise RuntimeError("帮助菜单 JPEG 文件校验失败。")
+        return cache_path.resolve(strict=True)
+
+
+async def prepare_help_menu_file(
+    settings: Any,
+    *,
+    image_groups: Sequence[tuple[str, Sequence[str], Sequence[int]]] | None = None,
+    text_groups: Sequence[tuple[str, Sequence[str]]] | None = None,
+    title: str | None = None,
+    subtitle: str | None = None,
+) -> Path:
+    """在线程中准备本地 JPEG 菜单，返回缓存文件绝对路径。"""
+    return await asyncio.to_thread(
+        _prepare_help_menu_file_sync,
+        settings,
+        image_groups,
+        text_groups,
+        title,
+        subtitle,
     )
