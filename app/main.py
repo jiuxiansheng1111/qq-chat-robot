@@ -3033,7 +3033,7 @@ async def _handle_singing_command(
     elif command.action == "status":
         job = manager.status(key)
         await send_group_message(
-            group_id, f"《{job.query}》：{job.progress}" + (f"\n{job.error}" if job.error else "")
+            group_id, f"翻唱请求「{job.query}」：{job.progress}" + (f"\n{job.error}" if job.error else "")
             if job else "你目前没有翻唱任务。",
         )
     elif command.action == "cancel":
@@ -3058,9 +3058,9 @@ async def _handle_singing_command(
             )
             await send_group_message(
                 group_id,
-                f"已接收《{job.query}》的"
-                f"{'片段' if command.mode == 'clip' else '完整'}翻唱请求，"
+                f"已接收{'片段' if command.mode == 'clip' else '完整'}翻唱请求，"
                 f"使用{profiles[profile_id].get('label') or profile_id}音色。"
+                + f"\n搜索：{job.query}"
                 + (f"\n片段约 {settings.singing_clip_seconds:g} 秒，会尽量唱完整的几句歌词。" if command.mode == "clip" else "")
                 + "\n生成需要一些时间，可发送“唱歌状态”或“取消唱歌”（需 @我）。",
             )

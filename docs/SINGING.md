@@ -51,6 +51,10 @@ flowchart TD
 
 ## 启用与群聊用法
 
+搜歌会同时匹配网易云登记的原名、别名和译名，歌手仍作为筛选条件。比如 `翻唱茉子 monitoring 初音ミク` 或 `翻唱茉子 Monitoring / 初音ミク`；多个空格也可以。受理时“搜索”显示输入词，找到歌曲后才显示实际歌名，不会把歌手当成歌名的一部分。
+
+不确定歌名时，先点歌确认曲目；相近译名没有登记在网易云里时，补上原名和歌手更可靠。
+
 安装完成后，在 `.env` 设置 `SINGING_ENABLED=true`。默认运行路径由 `SINGING_PYTHON`、`SINGING_SEED_ROOT`、`SINGING_FFMPEG_PATH`、`SINGING_FFPROBE_PATH` 指定；默认值见 `.env.example`。翻唱参考优先级为已配置的翻唱专用参考 → 角色原始本地录音 → GPT-SoVITS 训练音色合成短句。原始录音优先由 `SINGING_PREFER_RECORDED_REFERENCE=true` 控制；需要强制使用训练 TTS 的角色参考时设为 `false`，保持 `SINGING_USE_TRAINED_TTS_REFERENCE=true` 并确保原有语音服务可用。
 
 丛雨默认以真实游戏录音作为翻唱参考，由 `SINGING_REAL_REFERENCE_PROFILE_IDS=murasame` 指定。其它角色仍遵循上述 TTS 参考设置。为翻唱单独选择录音时，可设置 `SINGING_REFERENCE_AUDIO_BY_PROFILE_JSON`，例如 `{"murasame":"data/singing/acceptance/cute-references/murasame_soft_affection_0055_mono44k.wav"}`；路径相对项目根目录，此设置仅供翻唱使用。

@@ -224,7 +224,7 @@ def parse_singing_command(
         if candidate.casefold().startswith(prefix.casefold()):
             if prefix.isascii() and len(candidate) > len(prefix) and not candidate[len(prefix)].isspace():
                 continue
-            query = candidate[len(prefix):].strip(" ：:")[:160]
+            query = " ".join(candidate[len(prefix):].split()).strip(" ：:")[:160]
             query, mode = _take_singing_mode(query, mode)
             profile_id, query = _take_singing_profile(query, profiles)
             if profile_id:

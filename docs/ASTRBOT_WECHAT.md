@@ -1,15 +1,17 @@
 # AstrBot 微信接入
 
-本机 AstrBot 4.28.2 有个人微信 `weixin_oc`、企业微信 `wecom` / `wecom_ai_bot` 和微信公众号适配器。个人微信通过腾讯 `openclaw-weixin` 接口扫码并长轮询，不需要公网 Webhook。参见 [AstrBot 个人微信说明](https://github.com/AstrBotDevs/AstrBot/wiki/zh-platform-weixin_oc)。
+本机 AstrBot 4.28.2 有个人微信 `weixin_oc`、企业微信 `wecom` / `wecom_ai_bot` 和微信公众号适配器。个人微信通过腾讯 `openclaw-weixin` 接口扫码并长轮询，不需要公网 Webhook。参见 [AstrBot 个人微信说明](https://docs.astrbot.app/platform/weixin_oc.html)。
 
 ## 个人微信登录
 
 1. 打开 `http://127.0.0.1:6185`，初始密码在本机 `data/astrbot/dashboard-login.txt`。
-2. 在机器人列表编辑预设 `qq-chatrobot-wechat`，选择“个人微信”；其他部署方式可自行新建。
+2. 在机器人列表点击“创建机器人”，选择“个人微信”。旧的未登录预设没有二维码时，也用这个入口；已经登录的条目直接保留。
 3. 用手机微信扫码并在手机上确认。
 4. 页面显示登录成功后启用并点击“保存”。登录态有效时，AstrBot 重启后通常无需再次扫码。
 
 扫码成功后，AstrBot 会自动保存 token、account id 和轮询状态到 AstrBot 根目录的 `data/cmd_config.json`。不要分享或手动复制这个文件；需要迁移时使用 AstrBot 自身的配置备份流程。
+
+手机微信需包含 ClawBot 插件，版本至少 iOS 8.0.70 / Android 8.0.69。二维码过期时关闭弹窗再重新创建即可，尚未点击保存不会创建新条目。
 
 ## 消息能力与限制
 

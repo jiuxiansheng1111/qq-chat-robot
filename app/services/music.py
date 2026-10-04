@@ -28,6 +28,8 @@ class NeteaseTrack:
     album: str
     cover_url: str
     duration_seconds: int
+    title_aliases: tuple[str, ...] = ()
+    artist_aliases: tuple[str, ...] = ()
 
     @property
     def artist(self) -> str:
@@ -86,6 +88,31 @@ def normalize_music_text(value: str) -> str:
     return "".join(character for character in value if character.isalnum())
 
 
+def netease_title_names(track: NeteaseTrack) -> tuple[str, ...]:
+    """别名也可能是用户熟悉的英文歌名。"""
+    return (track.title, *track.title_aliases)
+
+
+def netease_artist_names(track: NeteaseTrack) -> tuple[str, ...]:
+    return (*track.artists, *track.artist_aliases)
+
+
+def _music_aliases(item: dict, *fields: str) -> tuple[str, ...]:
+    result: list[str] = []
+    for field in fields:
+        values = item.get(field)
+        if isinstance(values, str):
+            values = [values]
+        if not isinstance(values, list):
+            continue
+        for value in values[:16]:
+            if isinstance(value, str) and value.strip():
+                alias = value.strip()[:120]
+                if alias not in result:
+                    result.append(alias)
+    return tuple(result[:16])
+
+
 def music_query_suffixes(query: str) -> list[str]:
     """从歌手/歌名混合查询中，稳定地生成备用标题候选。"""
     tokens = query.split()
@@ -127,6 +154,11 @@ def parse_netease_tracks(payload: dict) -> list[NeteaseTrack]:
                 duration_seconds=max(
                     0, int(item.get("duration") or item.get("dt") or 0) // 1000
                 ),
+                title_aliases=_music_aliases(item, "alias", "alia", "tns", "transNames"),
+                artist_aliases=tuple(dict.fromkeys(
+                    alias for artist in artist_items if isinstance(artist, dict)
+                    for alias in _music_aliases(artist, "alias", "tns", "trans", "transNames")
+                ))[:32],
             )
         )
     return tracks
@@ -146,21 +178,21 @@ def choose_netease_track(
         unofficial = any(marker in combined for marker in UNOFFICIAL_VERSION_MARKERS)
         if unofficial and not requested_version:
             continue
-        track_title = normalize_music_text(track.title)
-        track_artists = [normalize_music_text(artist) for artist in track.artists]
-        exact_title = bool(title_norm and track_title == title_norm)
+        track_titles = [normalize_music_text(title) for title in netease_title_names(track)]
+        track_artists = [normalize_music_text(artist) for artist in netease_artist_names(track)]
+        exact_title = bool(title_norm and title_norm in track_titles)
         artist_match = bool(
             artist_norm
             and any(
                 artist_norm == artist or artist_norm in artist or artist in artist_norm
-                for artist in track_artists
+                for artist in track_artists if artist
             )
         )
         if artist_norm and not artist_match:
             continue
-        if title_norm and track_title != title_norm:
+        if title_norm and not exact_title:
             continue
-        query_match = bool(track_title and track_title in query_norm)
+        query_match = any(title and title in query_norm for title in track_titles)
         try:
             stable_id = int(track.song_id)
         except ValueError:
@@ -177,13 +209,14 @@ def choose_netease_track(
 
 def netease_track_matches_query(query: str, track: NeteaseTrack) -> bool:
     query_norm = normalize_music_text(query)
-    title_norm = normalize_music_text(track.title)
-    if not query_norm or not title_norm:
+    titles = [normalize_music_text(title) for title in netease_title_names(track)]
+    if not query_norm:
         return False
-    if query_norm == title_norm:
+    if query_norm in titles:
         return True
-    return title_norm in query_norm and any(
-        normalize_music_text(artist) in query_norm for artist in track.artists
+    return any(title and title in query_norm for title in titles) and any(
+        artist and artist in query_norm
+        for artist in (normalize_music_text(name) for name in netease_artist_names(track))
     )
 
 

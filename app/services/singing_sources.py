@@ -19,6 +19,8 @@ from app.services.music import (
     NeteaseTrack,
     choose_netease_track,
     music_query_suffixes,
+    netease_artist_names,
+    netease_title_names,
     netease_track_matches_query,
     normalize_music_text,
     parse_netease_tracks,
@@ -190,14 +192,15 @@ def _select_track(query: str, tracks: list[NeteaseTrack]) -> NeteaseTrack | None
     named = [
         track
         for track in tracks
-        if normalize_music_text(track.title) in normalized
-        and any(normalize_music_text(artist) in normalized for artist in track.artists)
+        if any(name and name in normalized for name in map(normalize_music_text, netease_title_names(track)))
+        and any(name and name in normalized for name in map(normalize_music_text, netease_artist_names(track)))
     ]
     if named:
-        named.sort(key=lambda track: max(len(normalize_music_text(a)) for a in track.artists), reverse=True)
+        named.sort(key=lambda track: max(len(normalize_music_text(a)) for a in netease_artist_names(track)), reverse=True)
         for track in named:
             named_artist = next(
-                artist for artist in track.artists if normalize_music_text(artist) in normalized
+                artist for artist in netease_artist_names(track)
+                if normalize_music_text(artist) and normalize_music_text(artist) in normalized
             )
             selected = choose_netease_track(
                 query, tracks, expected_artist=named_artist, expected_title=track.title
