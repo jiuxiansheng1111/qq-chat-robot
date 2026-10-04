@@ -154,8 +154,20 @@ function Read-AstrbotRunState {
     Assert-AstrbotManagedPath -Layout $Layout -Path $Path
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
     try {
-        $state = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+        $json = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+        # PowerShell 7 会自动转日期；身份核对需要原来的时间字符串。
+        if ((Get-Command ConvertFrom-Json).Parameters.ContainsKey("DateKind")) {
+            $state = $json | ConvertFrom-Json -DateKind String -ErrorAction Stop
+        } else {
+            $state = $json | ConvertFrom-Json -ErrorAction Stop
+        }
     } catch { throw "AstrBot 运行记录无法读取：$Path" }
+    # 较早的 PowerShell 7 没有 DateKind 参数，也要还原成 UTC 字符串。
+    foreach ($identity in @($state.Processes) + @($state.Launcher)) {
+        if ($identity.CreatedUtc -is [datetime]) {
+            $identity.CreatedUtc = $identity.CreatedUtc.ToUniversalTime().ToString("o")
+        }
+    }
     if ($state.SchemaVersion -ne 1 -or $state.AstrBotVersion -ne $AstrBotVersion -or
         $state.Port -ne $Port -or -not $state.Launcher -or -not $state.Processes) {
         throw 'AstrBot 运行记录格式或版本不匹配；为安全起见未处理任何进程。'

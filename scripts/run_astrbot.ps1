@@ -173,10 +173,15 @@ function Get-LiveRecordedIdentities {
         [Parameter(Mandatory = $true)][string]$ManagedPythonPath,
         [Parameter(Mandatory = $true)][int]$Port
     )
-    return @($State.Processes | Where-Object {
-        Test-AstrbotRecordedIdentity -Identity $_ -LauncherPath $LauncherPath `
-            -ToolPythonPath $ToolPythonPath -ManagedPythonPath $ManagedPythonPath -Port $Port
+    $live = @(foreach ($identity in $State.Processes) {
+        if (-not (Get-AstrbotProcessInfo -ProcessId ([int]$identity.ProcessId))) { continue }
+        if (-not (Test-AstrbotRecordedIdentity -Identity $identity -LauncherPath $LauncherPath `
+                -ToolPythonPath $ToolPythonPath -ManagedPythonPath $ManagedPythonPath -Port $Port)) {
+            throw "PID $($identity.ProcessId) 仍存在但身份不匹配；保留运行记录，未处理进程。"
+        }
+        $identity
     })
+    return $live
 }
 
 function Remove-RunState {
