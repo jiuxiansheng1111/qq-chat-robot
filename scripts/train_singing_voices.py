@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -175,6 +176,26 @@ def _soundfile_info(path: Path) -> tuple[float, int, int]:
     return float(info.duration), int(info.samplerate), int(info.channels)
 
 
+def _publish_staged_dataset(staged: Path, output_dir: Path) -> None:
+    """同盘发布暂存目录，短暂拒绝访问时重试三次。"""
+    for attempt in range(3):
+        if output_dir.exists():
+            raise FileExistsError(
+                f"Dataset appeared while it was being prepared: {output_dir}"
+            )
+        try:
+            staged.rename(output_dir)
+            return
+        except PermissionError:
+            if output_dir.exists():
+                raise FileExistsError(
+                    f"Dataset appeared while it was being prepared: {output_dir}"
+                ) from None
+            if attempt == 2:
+                raise
+            time.sleep(0.25 * (attempt + 1))
+
+
 def prepare_audio_dataset(
     manifest: Path,
     sources: list[Path],
@@ -280,7 +301,7 @@ def prepare_audio_dataset(
         (staged / "singing_dataset.json").write_text(
             json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
-        staged.replace(output_dir)
+        _publish_staged_dataset(staged, output_dir)
     return record
 
 
