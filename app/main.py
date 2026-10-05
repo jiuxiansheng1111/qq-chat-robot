@@ -2983,6 +2983,13 @@ async def send_group_netease_card(group_id: str, track: NeteaseTrack) -> None:
         raise RuntimeError(payload.get("wording") or "OneBot NetEase music card failed")
 
 
+def _singing_record_file(group_id: str, audio_path: Path) -> str:
+    """微信用本地音频附件，QQ继续用语音。"""
+    if group_id.startswith("wechat:"):
+        return audio_path.resolve().as_uri()
+    return "base64://" + base64.b64encode(audio_path.read_bytes()).decode("ascii")
+
+
 async def _run_singing_job(
     job: SingingJob, profile_id: str, bot_self_id: str, mode: str = "full"
 ) -> None:
@@ -3006,9 +3013,9 @@ async def _run_singing_job(
             )
         job.progress = f"正在发送第 {part.index}/{part.total} 段"
         await send_group_message(group_id, f"🎵 第 {part.index}/{part.total} 段")
-        record = "base64://" + base64.b64encode(part.chunk.path.read_bytes()).decode("ascii")
+        record = _singing_record_file(group_id, part.chunk.path)
         if not await send_group_record(group_id, record):
-            raise SingingPipelineError("QQ 未接受这一段语音，已停止后续生成和发送。")
+            raise SingingPipelineError("这一段音频没发成功，已停止后续生成和发送。")
         delivered = part.index
         if part.index < part.total:
             await asyncio.sleep(settings.singing_segment_pause_seconds)
@@ -3049,10 +3056,10 @@ async def _run_singing_job(
             for index, chunk in enumerate(cover.chunks, 1):
                 job.progress = f"正在发送第 {index}/{total} 段"
                 await send_group_message(group_id, f"🎵 第 {index}/{total} 段")
-                record = "base64://" + base64.b64encode(chunk.path.read_bytes()).decode("ascii")
+                record = _singing_record_file(group_id, chunk.path)
                 accepted = await send_group_record(group_id, record)
                 if not accepted:
-                    raise SingingPipelineError("QQ 未接受这一段语音，已停止后续发送。")
+                    raise SingingPipelineError("这一段音频没发成功，已停止后续发送。")
                 delivered = index
                 if index < total:
                     await asyncio.sleep(settings.singing_segment_pause_seconds)
