@@ -188,6 +188,7 @@ def _evaluate(args: argparse.Namespace) -> dict:
             converted_16k,
             sample_rate=16000,
             alignment_delay_ms=report["alignment_delay_ms"],
+            source_f0=source_f0,
         )
     )
     failures = quality_failures(

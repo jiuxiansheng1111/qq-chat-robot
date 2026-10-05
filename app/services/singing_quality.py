@@ -50,7 +50,10 @@ def compute_energy_coverage(
     converted_audio: np.ndarray,
     sample_rate: int = 16000,
     alignment_delay_ms: float = 0,
-) -> dict[str, float | None]:
+    *,
+    source_f0: np.ndarray | None = None,
+    f0_hop_seconds: float = 0.01,
+) -> dict:
     """比较活跃人声能量覆盖，不判断歌词或辅音是否正确。"""
     if (
         isinstance(sample_rate, bool)
@@ -77,6 +80,17 @@ def compute_energy_coverage(
     converted_windows = _energy_windows(converted, window_samples, hop_samples)
     source_level = _active_window_level(source_windows)
     converted_level = _active_window_level(converted_windows)
+    voiced = None
+    if source_f0 is not None:
+        if (
+            isinstance(f0_hop_seconds, bool)
+            or not np.isfinite(f0_hop_seconds) or f0_hop_seconds <= 0
+        ):
+            raise ValueError("音高帧间隔必须为正数")
+        f0 = np.asarray(source_f0, dtype=np.float64).reshape(-1)
+        if not f0.size or not np.all(np.isfinite(f0)):
+            raise ValueError("原唱音高数据无效")
+        voiced = f0 > 0
     if source_level <= 0:
         return {"vocal_energy_recall": None, "max_missing_vocal_seconds": 0.0}
 
@@ -88,17 +102,34 @@ def compute_energy_coverage(
     longest_missing = 0.0
     missing_start: int | None = None
     missing_end = 0
+    missing_intervals: list[dict[str, float]] = []
+    source_active_count = 0
 
     def finish_missing_run() -> None:
         nonlocal longest_missing, missing_start, missing_end
         if missing_start is not None:
             longest_missing = max(longest_missing, (missing_end - missing_start) / sample_rate)
+            missing_intervals.append({
+                "start_seconds": round(missing_start / sample_rate, 3),
+                "end_seconds": round(missing_end / sample_rate, 3),
+            })
             missing_start = None
 
     for start, end, source_rms in source_windows:
         if source_rms < source_floor:
             finish_missing_run()
             continue
+        source_active_count += 1
+        if voiced is not None:
+            # 只看原唱有声附近，辅音和气口也留出来。
+            first_frame = max(0, int((start / sample_rate - 0.15) / f0_hop_seconds))
+            last_frame = min(
+                voiced.size,
+                int(np.ceil((end / sample_rate + 0.15) / f0_hop_seconds)) + 1,
+            )
+            if not np.any(voiced[first_frame:last_frame]):
+                finish_missing_run()
+                continue
         target_start = start + offset_samples
         target_end = end + offset_samples
         clipped_start = max(0, target_start)
@@ -126,10 +157,22 @@ def compute_energy_coverage(
     finish_missing_run()
 
     recall = present_count / eligible_count if eligible_count else None
-    return {
+    result = {
         "vocal_energy_recall": float(recall) if recall is not None else None,
         "max_missing_vocal_seconds": float(longest_missing),
     }
+    if voiced is None:
+        return result
+    result.update({
+        "energy_coverage_basis": "source_f0_context",
+        "source_active_energy_windows": source_active_count,
+        "source_vocal_energy_windows": eligible_count,
+        "missing_vocal_intervals": sorted(
+            missing_intervals,
+            key=lambda item: item["end_seconds"] - item["start_seconds"], reverse=True,
+        )[:8],
+    })
+    return result
 
 
 def _aligned_pitch_metrics(

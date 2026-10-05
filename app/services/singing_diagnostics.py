@@ -16,6 +16,7 @@ _METRICS = frozenset({
     "identity_reference_similarity", "duration_ratio", "source_voiced_frames",
     "converted_rms", "clipping_ratio", "alignment_delay_ms",
     "vocal_energy_recall", "max_missing_vocal_seconds",
+    "source_active_energy_windows", "source_vocal_energy_windows",
     "pitch_residual_step_median_cents", "pitch_residual_isolated_jump_count",
     "pitch_residual_isolated_jumps_per_minute", "pitch_residual_adjacent_pair_count",
 })
@@ -24,7 +25,7 @@ _METRICS = frozenset({
 def save_failed_singing_diagnostics(
     job_id: str, job_directory: Path, profile_id: str, error_type: str,
 ) -> None:
-    """只存数值和失败类型，最多留二十次。"""
+    """留必要的失败信息，最多保留二十次。"""
     if not re.fullmatch(r"[a-f0-9]{32}", job_id):
         raise ValueError("翻唱任务编号无效")
     singing_root = SINGING_DATA_ROOT.resolve()
@@ -61,6 +62,11 @@ def save_failed_singing_diagnostics(
                 reports.append({
                     "part": int(part.name), "retry": name == "quality_retry.json",
                     "accepted": report.get("accepted") is True, "metrics": metrics,
+                    "energy_coverage_basis": report.get("energy_coverage_basis")
+                    if isinstance(report.get("energy_coverage_basis"), str)
+                    and report.get("energy_coverage_basis") in {"source_f0_context", "source_energy"}
+                    else "unknown",
+                    "missing_vocal_intervals": _missing_intervals(report),
                 })
     payload = {
         "created_at": datetime.now(UTC).isoformat(),
@@ -68,6 +74,18 @@ def save_failed_singing_diagnostics(
         "error_type": error_type if re.fullmatch(r"[A-Za-z_]{1,64}", error_type) else "unknown",
         "checks": reports,
     }
+    selection_path = directory / "selection.json"
+    if selection_path.is_file() and not selection_path.is_symlink() and selection_path.stat().st_size < 32_000:
+        try:
+            selection = json.loads(selection_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError):
+            selection = {}
+        if isinstance(selection, dict):
+            title = selection.get("song_title")
+            if isinstance(title, str) and 0 < len(title) <= 200:
+                payload["song_title"] = title
+            if isinstance(selection.get("mode"), str) and selection.get("mode") in {"full", "clip"}:
+                payload["mode"] = selection["mode"]
     root.mkdir(parents=True, exist_ok=True)
     target = (root / f"{job_id}.json").resolve()
     if target.parent != root:
@@ -82,3 +100,22 @@ def save_failed_singing_diagnostics(
     for path in saved[20:]:
         if path.resolve().parent == root:
             path.unlink(missing_ok=True)
+
+
+def _missing_intervals(report: dict) -> list[dict[str, float]]:
+    """留最多八处段内缺声位置，不保存歌词或账号。"""
+    result = []
+    intervals = report.get("missing_vocal_intervals")
+    if not isinstance(intervals, list):
+        return result
+    for item in intervals[:8]:
+        if not isinstance(item, dict):
+            continue
+        start, end = item.get("start_seconds"), item.get("end_seconds")
+        if (
+            type(start) in (int, float) and type(end) in (int, float)
+            and math.isfinite(start) and math.isfinite(end)
+            and 0 <= start < end <= 600
+        ):
+            result.append({"start_seconds": start, "end_seconds": end})
+    return result

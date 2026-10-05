@@ -510,6 +510,7 @@ async def convert_vocals(
     *,
     steps: int | None = None,
     semitone_shift: int = 0,
+    inference_cfg_rate: float | None = None,
 ) -> Path:
     python, seed_root, ffmpeg, _ = runtime_paths(settings)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -518,7 +519,10 @@ async def convert_vocals(
         "--seed-root", str(seed_root), "--ffmpeg", str(ffmpeg),
         "--source", str(source), "--target", str(reference), "--output", str(output_dir),
         "--diffusion-steps", str(steps or settings.singing_diffusion_steps),
-        "--inference-cfg-rate", str(inference_cfg_rate_for_profile(profile_id, settings)),
+        "--inference-cfg-rate", str(
+            inference_cfg_rate_for_profile(profile_id, settings)
+            if inference_cfg_rate is None else inference_cfg_rate
+        ),
         "--seed", str(settings.singing_seed),
         "--repair-f0-spikes" if settings.singing_repair_f0_spikes else "--no-repair-f0-spikes",
         "--semitone-shift", str(semitone_shift),
@@ -615,11 +619,28 @@ async def _render_singing_section(
                 expected_semitone_shift=voice_shift,
             )
         except SingingPipelineError:
-            await progress("这一段有音准或人声缺失问题，正在提高精度重试")
+            retry_cfg = None
+            previous = {}
+            with suppress(OSError, UnicodeError, ValueError):
+                previous = json.loads((directory / "quality.json").read_text(encoding="utf-8"))
+            failures = (previous.get("failures") or []) if isinstance(previous, dict) else []
+            if (
+                singing_checkpoint(profile_id, settings) is None
+                and inference_cfg_rate_for_profile(profile_id, settings) == 0
+                and isinstance(failures, list)
+                and any(
+                    isinstance(reason, str) and ("人声能量" in reason or "缺失人声" in reason)
+                    for reason in failures
+                )
+            ):
+                # 基础模型缺声时换一档引导，避免只加步数反复得到同样结果。
+                retry_cfg = 0.7
+            await progress("这一段有音准或人声缺失问题，正在调整生成参数重试")
             converted = await convert_vocals(
                 vocals, reference, directory / "retry", profile_id, settings,
                 steps=min(80, settings.singing_diffusion_steps + 15),
                 semitone_shift=voice_shift,
+                inference_cfg_rate=retry_cfg,
             )
             await _validate_model_audio(converted, ffprobe, seconds, settings)
             report = await check_cover_quality(
@@ -792,6 +813,7 @@ async def _generate_singing_cover_unlocked(
             song = replace(song, lyric_lines=lines, lyrics_text=format_excerpt_lrc(lines))
         (job_dir / "selection.json").write_text(json.dumps({
             "mode": mode, "song_id": song.track.song_id, "profile_id": profile_id,
+            "song_title": song.track.title,
             "source_start_seconds": selection.start_seconds,
             "source_end_seconds": selection.end_seconds, "reason": selection.reason,
         }, ensure_ascii=False, indent=2), encoding="utf-8")

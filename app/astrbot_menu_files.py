@@ -9,6 +9,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+_QQ_SEND_ACTION_TIMEOUT_MS = 30_000
+_QQ_SEND_OUTER_TIMEOUT_SECONDS = 35
+
 
 class _MenuAudience:
     """只用来列命令，不产生消息或调用模型。"""
@@ -127,11 +130,16 @@ async def send_menu_file(event: Any, path: Path) -> None:
     params: dict[str, Any] = {
         target: int(target_id),
         "message": [{"type": "image", "data": {"file": path.resolve().as_uri()}}],
+        # NapCat 按消息大小计算上传确认时间，菜单发送单独放宽时限。
+        "timeout": _QQ_SEND_ACTION_TIMEOUT_MS,
     }
     self_id = raw.get("self_id")
     if self_id is not None:
         params["self_id"] = str(self_id)
-    await asyncio.wait_for(event.bot.api.call_action(action, **params), timeout=25)
+    await asyncio.wait_for(
+        event.bot.api.call_action(action, **params),
+        timeout=_QQ_SEND_OUTER_TIMEOUT_SECONDS,
+    )
     event._has_send_oper = True
 
 
