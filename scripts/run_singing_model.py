@@ -70,6 +70,7 @@ def _parse_args(argv=None):
     )
     parser.add_argument("--checkpoint")
     parser.add_argument("--config")
+    parser.add_argument("--phrase-plan", help="歌词换句位置的短段计划，重试时使用")
     parser.add_argument("--offline", action="store_true", help="Use previously downloaded model weights only")
     return parser.parse_args(argv)
 
@@ -110,6 +111,11 @@ def main():
         raise ValueError("checkpoint and config must be specified together")
     if args.checkpoint:
         sys.argv.extend(["--checkpoint", args.checkpoint, "--config", args.config])
+    if args.phrase_plan:
+        from singing_phrase_inference import run_phrase_inference
+
+        run_phrase_inference(args, root)
+        return
     runpy.run_path(str(root / "inference.py"), run_name="__main__")
 
 

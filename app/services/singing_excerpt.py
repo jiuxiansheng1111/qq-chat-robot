@@ -133,6 +133,16 @@ def _clean_lyrics(
     return tuple(line for _, line in clean)
 
 
+def clean_singing_lyrics(
+    lines: Sequence[LyricLine], duration_seconds: float,
+    *, song_title: str | None = None, song_artists: Sequence[str] = (),
+) -> tuple[LyricLine, ...]:
+    """去掉作者、制作和版本介绍，只留实际歌词行。"""
+    return _clean_lyrics(
+        lines, duration_seconds, song_title=song_title, song_artists=song_artists,
+    )
+
+
 @dataclass(frozen=True)
 class SingingExcerpt:
     """原曲中的翻唱片段区间。"""

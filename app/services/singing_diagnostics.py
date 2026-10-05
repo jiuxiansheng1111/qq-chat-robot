@@ -17,6 +17,7 @@ _METRICS = frozenset({
     "converted_rms", "clipping_ratio", "alignment_delay_ms",
     "vocal_energy_recall", "max_missing_vocal_seconds",
     "source_active_energy_windows", "source_vocal_energy_windows",
+    "analysis_start_seconds",
     "pitch_residual_step_median_cents", "pitch_residual_isolated_jump_count",
     "pitch_residual_isolated_jumps_per_minute", "pitch_residual_adjacent_pair_count",
 })
@@ -67,6 +68,7 @@ def save_failed_singing_diagnostics(
                     and report.get("energy_coverage_basis") in {"source_f0_context", "source_energy"}
                     else "unknown",
                     "missing_vocal_intervals": _missing_intervals(report),
+                    "conversion": _conversion_info(part, name == "quality_retry.json"),
                 })
     payload = {
         "created_at": datetime.now(UTC).isoformat(),
@@ -118,4 +120,42 @@ def _missing_intervals(report: dict) -> list[dict[str, float]]:
             and 0 <= start < end <= 600
         ):
             result.append({"start_seconds": start, "end_seconds": end})
+    return result
+
+
+def _conversion_info(part: Path, retry: bool) -> dict:
+    source = part / ("retry" if retry else "converted") / "conversion.json"
+    if source.is_symlink() or not source.resolve().is_relative_to(part.resolve()):
+        return {}
+    try:
+        if source.stat().st_size > 4096:
+            return {}
+        value = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    result = {}
+    if type(value.get("envelope_stabilized")) is bool:
+        result["envelope_stabilized"] = value["envelope_stabilized"]
+    cfg = value.get("inference_cfg_rate")
+    if type(cfg) in (int, float) and math.isfinite(cfg) and 0 <= cfg <= 2:
+        result["inference_cfg_rate"] = cfg
+    for key, minimum, maximum in (
+        ("diffusion_steps", 10, 80), ("phrase_count", 1, 64),
+        ("semitone_shift", -12, 12), ("seed", 0, 2**32 - 1),
+    ):
+        number = value.get(key)
+        if type(number) is int and minimum <= number <= maximum:
+            result[key] = number
+    start = value.get("singing_start_seconds")
+    if type(start) in (int, float) and math.isfinite(start) and 0 <= start <= 120:
+        result["singing_start_seconds"] = start
+    for key, choices in (
+        ("model_kind", {"base", "fine_tuned"}),
+        ("conversion_mode", {"source_audio", "short_context_phrases"}),
+        ("status", {"requested", "completed"}),
+    ):
+        if isinstance(value.get(key), str) and value[key] in choices:
+            result[key] = value[key]
     return result

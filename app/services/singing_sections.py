@@ -11,6 +11,30 @@ from app.services.singing_excerpt import SingingExcerpt
 from app.services.singing_sources import LyricLine
 
 
+def plan_conversion_phrases(
+    lines: Sequence[LyricLine], duration_seconds: float, max_seconds: float = 14,
+) -> list[dict[str, float]]:
+    """转换重试用短句，优先在 LRC 换句处收尾；不改变 QQ 分段。"""
+    if not math.isfinite(duration_seconds) or not 0 < duration_seconds <= 120:
+        raise ValueError("转换分段时长无效")
+    if not math.isfinite(max_seconds) or not 5 <= max_seconds <= 14:
+        raise ValueError("转换短句上限无效")
+    times = sorted({
+        line.time_seconds for line in lines
+        if line.text.strip() and math.isfinite(line.time_seconds)
+        and 0 < line.time_seconds < duration_seconds
+    })
+    phrases = []
+    start = 0.0
+    while duration_seconds - start > max_seconds:
+        candidates = [time for time in times if start + 3 <= time <= start + max_seconds]
+        end = candidates[-1] if candidates else start + max_seconds
+        phrases.append({"start_seconds": start, "end_seconds": end})
+        start = end
+    phrases.append({"start_seconds": start, "end_seconds": duration_seconds})
+    return phrases
+
+
 def plan_paused_sections(
     vocal_pcm: Path, lines: Sequence[LyricLine], duration_seconds: float,
     max_seconds: float = 115,

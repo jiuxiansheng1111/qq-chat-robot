@@ -10,6 +10,7 @@ import math
 import os
 import re
 import shutil
+import wave
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, replace
@@ -27,6 +28,7 @@ from app.services.audio_chunks import (
 from app.services.singing_diagnostics import save_failed_singing_diagnostics
 from app.services.singing_excerpt import (
     SingingExcerpt,
+    clean_singing_lyrics,
     format_excerpt_lrc,
     select_singing_excerpt,
     shift_excerpt_lyrics,
@@ -34,9 +36,10 @@ from app.services.singing_excerpt import (
 from app.services.singing_gpu import async_gpu_lock
 from app.services.singing_mix import vocal_clarity_filter, vocal_forward_mix_filter, wav_rms
 from app.services.singing_resources import singing_resource_problem
-from app.services.singing_sections import plan_paused_sections
+from app.services.singing_sections import plan_conversion_phrases, plan_paused_sections
 from app.services.singing_sources import (
     SINGING_DATA_ROOT,
+    LyricLine,
     SingingSong,
     download_singing_source,
     resolve_singing_song,
@@ -118,6 +121,7 @@ async def run_audio_command(args, *, cwd=None, timeout_seconds=120.0) -> str:
     if issue:
         raise SingingPipelineError(issue)
     environment = dict(os.environ)
+    environment["PYTHONUTF8"] = "1"
     environment.update({key: "2" for key in (
         "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS",
     )})
@@ -511,13 +515,28 @@ async def convert_vocals(
     steps: int | None = None,
     semitone_shift: int = 0,
     inference_cfg_rate: float | None = None,
+    phrase_plan: list[dict[str, float]] | None = None,
+    singing_start_seconds: float = 0,
 ) -> Path:
     python, seed_root, ffmpeg, _ = runtime_paths(settings)
     output_dir.mkdir(parents=True, exist_ok=True)
+    active_source = source
+    source_seconds = None
+    if singing_start_seconds:
+        with wave.open(str(source), "rb") as audio:
+            source_seconds = audio.getnframes() / audio.getframerate()
+        if not math.isfinite(singing_start_seconds) or not 0 < singing_start_seconds < source_seconds:
+            raise SingingPipelineError("歌词开唱时间无效。")
+        active_source = output_dir / "_source_active.wav"
+        await run_audio_command([
+            ffmpeg, "-v", "error", "-nostdin", "-y", "-i", source,
+            "-ss", f"{singing_start_seconds:.6f}", "-ar", "44100", "-ac", "1",
+            "-c:a", "pcm_s16le", active_source,
+        ])
     args = [
         str(python), str(PROJECT_ROOT / "scripts" / "run_singing_model.py"),
         "--seed-root", str(seed_root), "--ffmpeg", str(ffmpeg),
-        "--source", str(source), "--target", str(reference), "--output", str(output_dir),
+        "--source", str(active_source), "--target", str(reference), "--output", str(output_dir),
         "--diffusion-steps", str(steps or settings.singing_diffusion_steps),
         "--inference-cfg-rate", str(
             inference_cfg_rate_for_profile(profile_id, settings)
@@ -532,11 +551,41 @@ async def convert_vocals(
         args += ["--offline"]
     if checkpoint:
         args += ["--checkpoint", str(checkpoint[0]), "--config", str(checkpoint[1])]
+    if phrase_plan and len(phrase_plan) > 1:
+        plan_file = output_dir / "phrases.json"
+        plan_file.write_text(json.dumps(phrase_plan), encoding="utf-8")
+        args += ["--phrase-plan", str(plan_file.resolve())]
+    metadata = {
+        "inference_cfg_rate": inference_cfg_rate_for_profile(profile_id, settings)
+        if inference_cfg_rate is None else inference_cfg_rate,
+        "diffusion_steps": steps or settings.singing_diffusion_steps,
+        "model_kind": "fine_tuned" if checkpoint else "base",
+        "conversion_mode": "short_context_phrases" if phrase_plan and len(phrase_plan) > 1 else "source_audio",
+        "phrase_count": len(phrase_plan) if phrase_plan else 1,
+        "status": "requested",
+        "semitone_shift": semitone_shift,
+        "seed": settings.singing_seed,
+        "singing_start_seconds": singing_start_seconds,
+    }
+    metadata_file = output_dir / "conversion.json"
+    metadata_file.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     await run_audio_command(args, cwd=seed_root, timeout_seconds=settings.singing_model_timeout_seconds)
-    files = list(output_dir.glob("*.wav"))
+    files = [path for path in output_dir.glob("*.wav") if path.name not in {"_source_active.wav", "vc_timed.wav"}]
     if len(files) != 1 or files[0].stat().st_size < 1000:
         raise SingingPipelineError("歌声模型没有生成完整音频。")
-    return files[0]
+    converted = files[0]
+    if singing_start_seconds:
+        timed = output_dir / "vc_timed.wav"
+        delay_samples = round(singing_start_seconds * 44100)
+        await run_audio_command([
+            ffmpeg, "-v", "error", "-nostdin", "-y", "-i", converted,
+            "-af", f"adelay={delay_samples}S:all=1,apad", "-t", f"{source_seconds:.6f}",
+            "-ar", "44100", "-ac", "1", "-c:a", "pcm_f32le", timed,
+        ])
+        converted = timed
+    metadata["status"] = "completed"
+    metadata_file.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    return converted
 
 
 async def check_cover_quality(
@@ -547,6 +596,7 @@ async def check_cover_quality(
     settings: Settings,
     *,
     expected_semitone_shift: int = 0,
+    analysis_start_seconds: float = 0,
 ) -> dict:
     python, seed_root, _, _ = runtime_paths(settings)
     await run_audio_command(
@@ -560,6 +610,7 @@ async def check_cover_quality(
          "--min-voiced-recall", str(settings.singing_min_voiced_recall),
          "--min-energy-recall", str(settings.singing_min_energy_recall),
          "--max-missing-vocal-seconds", str(settings.singing_max_missing_vocal_seconds),
+         "--analysis-start-seconds", str(analysis_start_seconds),
          *(["--offline"] if settings.singing_hf_offline else [])],
         cwd=seed_root, timeout_seconds=settings.singing_model_timeout_seconds,
     )
@@ -593,15 +644,82 @@ async def _validate_model_audio(
         raise SingingPipelineError("模型生成的音频时长异常，已停止生成。")
 
 
+async def _keep_failed_vocal_excerpt(
+    source: Path, converted: Path, directory: Path, ffmpeg: Path,
+) -> None:
+    """失败时留最多十二秒对照，方便下一次听辨；只保留最近三次。"""
+    job_id = directory.parents[1].name
+    if not re.fullmatch(r"[a-f0-9]{32}", job_id):
+        return
+    quality = directory / "quality_retry.json"
+    if not quality.is_file() or quality.stat().st_size > 256_000:
+        return
+    report = json.loads(quality.read_text(encoding="utf-8"))
+    intervals = report.get("missing_vocal_intervals") if isinstance(report, dict) else None
+    first = intervals[0] if isinstance(intervals, list) and intervals and isinstance(intervals[0], dict) else {}
+    at = first.get("start_seconds", 0)
+    if type(at) not in (int, float) or not math.isfinite(at) or not 0 <= at <= 120:
+        return
+    start = max(0, at - 3)
+    root = (SINGING_DATA_ROOT / "failures" / "audio").resolve()
+    if not root.is_relative_to(SINGING_DATA_ROOT.resolve()):
+        return
+    target = (root / job_id).resolve()
+    if (root / job_id).is_symlink() or target.parent != root:
+        return
+    target.mkdir(parents=True, exist_ok=True)
+    if any((target / name).is_symlink() for name in ("before.wav", "after.wav", "position.json")):
+        return
+    previous = sorted(
+        (path for path in root.iterdir() if re.fullmatch(r"[a-f0-9]{32}", path.name)
+         and path.is_dir() and not path.is_symlink()),
+        key=lambda path: path.stat().st_mtime, reverse=True,
+    )
+    for path in previous[3:]:
+        if path.resolve().parent == root:
+            await asyncio.to_thread(shutil.rmtree, path)
+    for input_audio, label in ((source, "before"), (converted, "after")):
+        # 对照也限制峰值，避免回听坏样本时突然很响。
+        await run_audio_command([
+            ffmpeg, "-v", "error", "-nostdin", "-y", "-i", input_audio,
+            "-ss", f"{start:.6f}", "-t", "12", "-af",
+            "alimiter=limit=0.90:latency=1:level=false",
+            "-ar", "32000", "-ac", "1", "-c:a", "pcm_s16le", target / f"{label}.wav",
+        ])
+    (target / "position.json").write_text(json.dumps({
+        "part": int(directory.name), "part_start_seconds": start, "maximum_seconds": 12,
+        "preview_peak_limited": True,
+    }), encoding="utf-8")
+    previous = sorted(
+        (path for path in root.iterdir() if re.fullmatch(r"[a-f0-9]{32}", path.name)
+         and path.is_dir() and not path.is_symlink()),
+        key=lambda path: path.stat().st_mtime, reverse=True,
+    )
+    for path in previous[3:]:
+        if path.resolve().parent == root:
+            await asyncio.to_thread(shutil.rmtree, path)
+
+
 async def _render_singing_section(
     vocals: Path, accompaniment: Path, reference: Path, directory: Path,
     profile_id: str, seconds: float, voice_shift: int, settings: Settings,
     ffmpeg: Path, ffprobe: Path, progress: Progress,
-    *, record_pause_seconds: float = 0,
+    *, record_pause_seconds: float = 0, lyric_lines: tuple[LyricLine, ...] = (),
+    singing_start_seconds: float = 0,
 ) -> tuple[Path, Path, dict]:
     directory.mkdir(parents=True, exist_ok=True)
+    used_cfg = inference_cfg_rate_for_profile(profile_id, settings)
+    used_steps = settings.singing_diffusion_steps
+    conversion_mode = "source_audio"
     source_rms = await asyncio.to_thread(wav_rms, vocals)
     background_rms = await asyncio.to_thread(wav_rms, accompaniment)
+    if singing_start_seconds >= seconds:
+        silent = directory / "instrumental_silence.wav"
+        await run_audio_command([
+            ffmpeg, "-v", "error", "-nostdin", "-y", "-i", vocals,
+            "-af", "volume=0", "-ar", "44100", "-ac", "1", "-c:a", "pcm_s16le", silent,
+        ])
+        vocals, source_rms = silent, 0
     if source_rms < 0.0003:
         # 纯伴奏段也保留，别让整首歌少一截。
         converted = vocals
@@ -611,12 +729,14 @@ async def _render_singing_section(
         converted = await convert_vocals(
             vocals, reference, directory / "converted", profile_id, settings,
             semitone_shift=voice_shift,
+            singing_start_seconds=singing_start_seconds,
         )
         await _validate_model_audio(converted, ffprobe, seconds, settings)
         try:
             report = await check_cover_quality(
                 vocals, converted, reference, directory / "quality.json", settings,
                 expected_semitone_shift=voice_shift,
+                analysis_start_seconds=singing_start_seconds,
             )
         except SingingPipelineError:
             retry_cfg = None
@@ -624,29 +744,64 @@ async def _render_singing_section(
             with suppress(OSError, UnicodeError, ValueError):
                 previous = json.loads((directory / "quality.json").read_text(encoding="utf-8"))
             failures = (previous.get("failures") or []) if isinstance(previous, dict) else []
+            missing_voice = isinstance(failures, list) and any(
+                isinstance(reason, str) and ("人声能量" in reason or "缺失人声" in reason)
+                for reason in failures
+            )
             if (
                 singing_checkpoint(profile_id, settings) is None
                 and inference_cfg_rate_for_profile(profile_id, settings) == 0
-                and isinstance(failures, list)
-                and any(
-                    isinstance(reason, str) and ("人声能量" in reason or "缺失人声" in reason)
-                    for reason in failures
-                )
+                and missing_voice
             ):
                 # 基础模型缺声时换一档引导，避免只加步数反复得到同样结果。
                 retry_cfg = 0.7
-            await progress("这一段有音准或人声缺失问题，正在调整生成参数重试")
+            active_lines = tuple(
+                LyricLine(line.time_seconds - singing_start_seconds, line.text)
+                for line in lyric_lines if line.time_seconds >= singing_start_seconds
+            )
+            phrase_plan = plan_conversion_phrases(active_lines, seconds - singing_start_seconds) if missing_voice else None
+            await progress(
+                "这一段有缺声，正在按歌词换句位置分小段重试"
+                if phrase_plan and len(phrase_plan) > 1 and lyric_lines
+                else "这一段有缺声，正在带上下文分小段重试"
+                if phrase_plan and len(phrase_plan) > 1
+                else "这一段有音准或人声缺失问题，正在调整生成参数重试"
+            )
+            used_cfg = used_cfg if retry_cfg is None else retry_cfg
+            used_steps = min(80, settings.singing_diffusion_steps + 15)
+            conversion_mode = "short_context_phrases" if phrase_plan and len(phrase_plan) > 1 else "source_audio"
             converted = await convert_vocals(
                 vocals, reference, directory / "retry", profile_id, settings,
-                steps=min(80, settings.singing_diffusion_steps + 15),
+                steps=used_steps,
                 semitone_shift=voice_shift,
                 inference_cfg_rate=retry_cfg,
+                phrase_plan=phrase_plan,
+                singing_start_seconds=singing_start_seconds,
             )
             await _validate_model_audio(converted, ffprobe, seconds, settings)
-            report = await check_cover_quality(
-                vocals, converted, reference, directory / "quality_retry.json", settings,
-                expected_semitone_shift=voice_shift,
-            )
+            if missing_voice:
+                stabilized = directory / "retry" / "vocal_stabilized.wav"
+                python, seed_root, _, _ = runtime_paths(settings)
+                await run_audio_command([
+                    python, PROJECT_ROOT / "scripts" / "stabilize_singing_vocals.py",
+                    "--source", vocals, "--converted", converted, "--output", stabilized,
+                ], cwd=seed_root)
+                await _validate_model_audio(stabilized, ffprobe, seconds, settings)
+                converted = stabilized
+                metadata_path = directory / "retry" / "conversion.json"
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                metadata["envelope_stabilized"] = True
+                metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+            try:
+                report = await check_cover_quality(
+                    vocals, converted, reference, directory / "quality_retry.json", settings,
+                    expected_semitone_shift=voice_shift,
+                    analysis_start_seconds=singing_start_seconds,
+                )
+            except SingingPipelineError:
+                with suppress(OSError, ValueError, RuntimeError, TimeoutError):
+                    await _keep_failed_vocal_excerpt(vocals, converted, directory, ffmpeg)
+                raise
     # 原转换结果保留给音准检查；混音单独处理，不再压缩放大后的人声。
     mix_vocal = directory / "vocal_mix_input.wav"
     await run_audio_command(
@@ -656,10 +811,15 @@ async def _render_singing_section(
     )
     await _validate_model_audio(mix_vocal, ffprobe, seconds, settings)
     mix_vocal_rms = await asyncio.to_thread(wav_rms, mix_vocal)
-    report["vocal_mix_input_rms"] = mix_vocal_rms
+    # 前奏的静音不算进补音量，否则正式开唱会被多放大一截。
+    active_rms = mix_vocal_rms
+    if 0 < singing_start_seconds < seconds:
+        active_rms *= math.sqrt(seconds / (seconds - singing_start_seconds))
+    report["vocal_mix_input_rms"] = active_rms
+    report["vocal_full_track_rms"] = mix_vocal_rms
     if source_rms >= 0.0003:
         vocal_gain = _vocal_mix_gain(report, settings, background_rms)
-    vocal_level = mix_vocal_rms * vocal_gain
+    vocal_level = active_rms * vocal_gain
     background_gain = settings.singing_accompaniment_gain if background_rms > 0 else 0
     accompaniment_shift = _accompaniment_pitch_shift(voice_shift)
     if accompaniment_shift:
@@ -716,7 +876,9 @@ async def _render_singing_section(
         "vocal_mix_gain": vocal_gain, "accompaniment_mix_gain": background_gain,
         "vocal_estimated_rms": vocal_level,
         "vocal_clarity_filter": vocal_clarity_filter(),
-        "inference_cfg_rate": inference_cfg_rate_for_profile(profile_id, settings),
+        "inference_cfg_rate": used_cfg,
+        "diffusion_steps": used_steps,
+        "conversion_mode": conversion_mode,
         "singing_model_backend": (
             "instrumental" if source_rms < 0.0003 else
             "base" if singing_checkpoint(profile_id, settings) is None else "profile"
@@ -790,6 +952,14 @@ async def _generate_singing_cover_unlocked(
         expected = song.track.duration_seconds
         if expected > 0 and abs(duration - expected) > max(2, expected * 0.03):
             raise SingingPipelineError("原曲文件时长与歌曲信息不一致，已停止生成。")
+        cleaned_lines = clean_singing_lyrics(
+            song.lyric_lines, duration,
+            song_title=song.track.title, song_artists=song.track.artists,
+        )
+        song = replace(
+            song, lyric_lines=cleaned_lines,
+            lyrics_text=format_excerpt_lrc(cleaned_lines) if cleaned_lines else song.lyrics_text,
+        )
         selection = SingingExcerpt(0, duration, "完整歌曲")
         if mode == "clip":
             selection = select_singing_excerpt(
@@ -898,6 +1068,14 @@ async def _generate_singing_cover_unlocked(
                 part_vocals, part_background, reference, directory, profile_id,
                 section.duration_seconds, voice_pitch_shift, settings, ffmpeg, ffprobe, progress,
                 record_pause_seconds=getattr(section, "pause_seconds", 0),
+                lyric_lines=tuple(
+                    LyricLine(max(0, line.time_seconds - section.start_seconds), line.text)
+                    for line in song.lyric_lines
+                    if section.start_seconds <= line.time_seconds < section.end_seconds
+                ),
+                singing_start_seconds=max(
+                    0, song.lyric_lines[0].time_seconds - 1.0 - section.start_seconds,
+                ) if song.lyric_lines else 0,
             )
             saved_record = record_dir / f"{index:03d}.wav"
             shutil.move(str(record), str(saved_record))

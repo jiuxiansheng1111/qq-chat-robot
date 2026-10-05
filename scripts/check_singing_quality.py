@@ -42,6 +42,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-clipping", type=float, default=0.01)
     parser.add_argument("--min-voice-similarity", type=float, default=0.35)
     parser.add_argument("--min-source-voiced-frames", type=int, default=100)
+    parser.add_argument("--analysis-start-seconds", type=float, default=0, help="正式歌词前预留气口后的起点")
     parser.add_argument("--offline", action="store_true", help="Use previously downloaded model weights only")
     parser.add_argument(
         "--require-pass", action="store_true", help="Exit 1 when thresholds fail (report is still written)"
@@ -163,6 +164,12 @@ def _evaluate(args: argparse.Namespace) -> dict:
     ):
         raise ValueError("One of the audio files is empty")
 
+    source_seconds, converted_seconds = source_16k.size / 16000, converted_16k.size / 16000
+    if not np.isfinite(args.analysis_start_seconds) or not 0 <= args.analysis_start_seconds < min(source_seconds, converted_seconds):
+        raise ValueError("歌词检查起点无效")
+    start_frame = round(args.analysis_start_seconds * 16000)
+    source_16k, converted_16k = source_16k[start_frame:], converted_16k[start_frame:]
+
     source_f0 = _infer_f0(rmvpe, source_16k)
     converted_f0 = _infer_f0(rmvpe, converted_16k)
     reference_embedding = _speaker_embedding(campplus, reference_16k, device)
@@ -175,8 +182,8 @@ def _evaluate(args: argparse.Namespace) -> dict:
         source_f0,
         converted_f0,
         np.asarray(converted_native),
-        source_16k.size / 16000,
-        converted_16k.size / 16000,
+        source_seconds,
+        converted_seconds,
         reference_embedding,
         converted_embedding,
         identity_reference_embedding=identity_reference_embedding,
@@ -191,6 +198,10 @@ def _evaluate(args: argparse.Namespace) -> dict:
             source_f0=source_f0,
         )
     )
+    report["analysis_start_seconds"] = args.analysis_start_seconds
+    for interval in report.get("missing_vocal_intervals", []):
+        interval["start_seconds"] = round(interval["start_seconds"] + args.analysis_start_seconds, 3)
+        interval["end_seconds"] = round(interval["end_seconds"] + args.analysis_start_seconds, 3)
     failures = quality_failures(
         report,
         max_pitch_median_cents=args.max_pitch_cents,

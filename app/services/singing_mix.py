@@ -9,6 +9,61 @@ from pathlib import Path
 import numpy as np
 
 
+def stabilize_vocal_envelope(
+    source: np.ndarray, converted: np.ndarray, sample_rate: int,
+) -> tuple[np.ndarray, dict]:
+    """参考原唱的轻重补弱字，最多两倍；空白处不补声音。"""
+    source = np.asarray(source, dtype=np.float32).reshape(-1)
+    converted = np.asarray(converted, dtype=np.float32).reshape(-1)
+    if (
+        type(sample_rate) is not int or sample_rate <= 0
+        or not source.size or not converted.size
+        or not np.all(np.isfinite(source)) or not np.all(np.isfinite(converted))
+        or abs(source.size - converted.size) > sample_rate * 0.03
+    ):
+        raise ValueError("人声音量整理的时间轴或样本无效")
+    window, hop = max(1, round(sample_rate * 0.1)), max(1, round(sample_rate * 0.05))
+    centers, source_levels, converted_levels, peaks = [], [], [], []
+    for first in range(0, converted.size, hop):
+        last = min(converted.size, first + window)
+        original = source[first:min(source.size, last)]
+        target = converted[first:last]
+        centers.append((first + last) * 0.5)
+        source_levels.append(float(np.sqrt(np.mean(np.square(original, dtype=np.float64)))) if original.size else 0)
+        converted_levels.append(float(np.sqrt(np.mean(np.square(target, dtype=np.float64)))))
+        peaks.append(float(np.max(np.abs(target))))
+    original = np.asarray(source_levels)
+    target = np.asarray(converted_levels)
+
+    def active_level(levels):
+        active = levels[levels > 0]
+        if not active.size:
+            return 0.0
+        count = max(1, int(np.ceil(active.size * 0.2)))
+        return float(np.median(np.partition(active, active.size - count)[-count:]))
+
+    source_level, target_level = active_level(original), active_level(target)
+    gain = np.ones(target.size)
+    if source_level > 0 and target_level > 0:
+        active = (original >= source_level * 0.05) & (target >= target_level * 0.0025)
+        desired = (original[active] / source_level) / (target[active] / target_level)
+        gain[active] = np.clip(np.sqrt(desired), 0.5, 2.0)
+    # 先按窗限制峰值，再平滑增益；不整体压低伴奏。
+    gain = np.minimum(gain, 0.90 / np.maximum(peaks, 1e-8))
+    envelope = np.interp(np.arange(converted.size, dtype=np.float32), centers, gain).astype(np.float32)
+    adjusted = converted * envelope
+    if not np.all(np.isfinite(adjusted)):
+        raise ValueError("人声音量整理产生了无效样本")
+    return adjusted, {
+        "boosted_windows": int(np.count_nonzero(gain > 1.05)),
+        "attenuated_windows": int(np.count_nonzero(gain < 0.95)),
+        "maximum_gain": float(np.max(gain)), "minimum_gain": float(np.min(gain)),
+        "peak_before": float(np.max(np.abs(converted))),
+        "peak_after": float(np.max(np.abs(adjusted))),
+        "source_samples": int(source.size), "converted_samples": int(converted.size),
+    }
+
+
 def wav_rms(path: Path) -> float:
     """分块读取 PCM WAV，返回归一化 RMS。"""
     total_square = 0.0
@@ -65,7 +120,9 @@ def vocal_clarity_filter() -> str:
     """先整理人声，再测电平和补音量。"""
     return (
         "highpass=f=60,equalizer=f=2400:t=q:w=0.8:g=2,"
-        "acompressor=threshold=0.16:ratio=1.5:attack=15:release=120:makeup=1"
+        "acompressor=threshold=0.16:ratio=1.5:attack=15:release=120:makeup=1,"
+        # 写入 PCM 前就限制尖峰，后面的混音限幅无法补救已经削波的样本。
+        "alimiter=limit=0.90:attack=5:release=80:latency=1:level=false"
     )
 
 
