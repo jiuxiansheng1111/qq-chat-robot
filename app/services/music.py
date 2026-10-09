@@ -4,10 +4,9 @@ import unicodedata
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-import httpx
-
 from app.config import Settings
 from app.services.bounded_http import request_json
+from app.services.http_routing import outbound_http_client
 
 
 @dataclass(frozen=True)
@@ -303,7 +302,7 @@ async def search_music(query: str, settings: Settings) -> list[MusicTrack]:
     query = " ".join(query.split()).strip()[:120]
     if not query:
         return []
-    async with httpx.AsyncClient(timeout=settings.music_timeout_seconds) as client:
+    async with outbound_http_client(timeout=settings.music_timeout_seconds) as client:
         response = await client.get(
             f"{settings.music_api_url.rstrip('/')}/search",
             params={"q": query, "limit": max(1, min(settings.music_search_limit, 25))},
@@ -328,7 +327,7 @@ async def search_netease_music(query: str, settings: Settings) -> list[NeteaseTr
         "offset": "0",
         "total": "true",
     }
-    async with httpx.AsyncClient(timeout=settings.music_timeout_seconds) as client:
+    async with outbound_http_client(timeout=settings.music_timeout_seconds) as client:
         payload = await request_json(
             client, "POST", settings.netease_music_api_url, data=data, headers=headers,
             timeout_seconds=max(1, settings.music_timeout_seconds),

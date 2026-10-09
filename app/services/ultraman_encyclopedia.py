@@ -13,6 +13,7 @@ import httpx
 from PIL import Image
 
 from app.config import Settings
+from app.services.http_routing import outbound_http_client
 from app.services.ultraman import normalize_ultraman_source_image
 from app.services.web_search import SearchResult, search_web
 
@@ -611,7 +612,7 @@ async def direct_ultraman_form_image(
         "User-Agent": ENCYCLOPEDIA_USER_AGENT,
         "Accept-Language": "zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7",
     }
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,
@@ -656,7 +657,7 @@ async def moegirl_ultraman_image(
         "Accept-Language": "zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7",
     }
 
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,
@@ -892,7 +893,7 @@ async def baidu_baike_ultraman_image(
     timeout = max(4.0, min(float(settings.media_timeout_seconds), 8.0))
     headers = {"User-Agent": ENCYCLOPEDIA_USER_AGENT}
 
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,
@@ -1058,7 +1059,7 @@ async def wikipedia_ultraman_image(
     headers = {"User-Agent": ENCYCLOPEDIA_USER_AGENT}
     terms = _specific_terms(name, aliases)
     queries = list(_encyclopedia_search_terms(name, aliases))[:6]
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,
@@ -1301,7 +1302,7 @@ async def baidu_image_search_ultraman_image(
         "Referer": "https://image.baidu.com/",
     }
 
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,
@@ -1415,7 +1416,7 @@ async def bing_image_search_ultraman_image(
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7,ja;q=0.5",
     }
 
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,
@@ -1554,7 +1555,7 @@ async def official_merch_ultraman_image(
         "User-Agent": ENCYCLOPEDIA_USER_AGENT,
         "Accept-Language": "ja,en;q=0.9,zh-CN;q=0.8",
     }
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,
@@ -1673,7 +1674,7 @@ async def web_page_ultraman_image(
                 continue
 
             try:
-                async with httpx.AsyncClient(
+                async with outbound_http_client(
                     timeout=timeout,
                     follow_redirects=True,
                     headers=headers,
@@ -1779,7 +1780,7 @@ async def search_engine_first_ultraman_image(
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,ja;q=0.7",
     }
 
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,
@@ -1988,7 +1989,7 @@ async def bing_image_relaxed_ultraman_image(
         ("https://www.bing.com/images/search", {}),
     )
 
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,

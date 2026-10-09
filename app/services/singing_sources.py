@@ -15,6 +15,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from app.config import Settings
+from app.services.http_routing import outbound_http_client
 from app.services.music import (
     NeteaseTrack,
     choose_netease_track,
@@ -364,7 +365,7 @@ async def resolve_singing_song(query: str, settings: Settings) -> SingingSong:
     source_path, local_lyrics = _local_source(track.song_id, settings)
     timeout = getattr(settings, "music_timeout_seconds", 10)
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+        async with outbound_http_client(timeout=timeout, follow_redirects=False) as client:
             if source_path is None:
                 track = await _detail_track(client, track)
             if local_lyrics is not None:
@@ -426,7 +427,7 @@ async def download_singing_source(song: SingingSong, job_dir: Path, settings: Se
     max_bytes = _max_source_bytes(settings)
     timeout = getattr(settings, "music_timeout_seconds", 10)
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+        async with outbound_http_client(timeout=timeout, follow_redirects=False) as client:
             for _ in range(5):
                 async with client.stream("GET", url, headers=_HEADERS, follow_redirects=False) as response:
                     if response.status_code in (301, 302, 303, 307, 308):

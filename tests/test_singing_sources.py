@@ -17,7 +17,7 @@ def _mock_client(monkeypatch, handler):
     monkeypatch.setattr(
         sources.httpx,
         "AsyncClient",
-        lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs),
+        lambda **kwargs: real_client(**(kwargs | {"transport": httpx.MockTransport(handler)})),
     )
 
 

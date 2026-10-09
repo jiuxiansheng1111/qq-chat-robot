@@ -1,6 +1,9 @@
 from datetime import datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfoNotFoundError
 
+import httpx
 import pytest
 
 from app import main
@@ -125,3 +128,39 @@ def test_daily_news_timezone_uses_utc8_without_tzdata(monkeypatch):
     assert calls == [main.settings.daily_news_timezone]
     assert tz.utcoffset(None) == timedelta(hours=8)
     assert tz.tzname(None) == "Asia/Shanghai"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('available', [True, False])
+async def test_broadcast_checks_membership_and_never_sends_to_invalid_or_unjoined_groups(
+    monkeypatch, available,
+):
+    settings = Settings(_env_file=None, onebot_self_id='news-test-bot',
+                        onebot_api_base='http://onebot.test')
+    monkeypatch.setattr(main, 'settings', settings)
+    monkeypatch.setattr(main, 'build_daily_news_digest', AsyncMock(return_value='news'))
+    db = SimpleNamespace(active_group_ids=AsyncMock(return_value=[
+        '111111', '222222', '999999', 'confirm-group', '0', 'wechat:private',
+    ]))
+    send = AsyncMock()
+    monkeypatch.setattr(main, 'send_group_long_message', send)
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def post(self, url, **kwargs):
+            assert url.endswith('/get_group_list')
+            return httpx.Response(200 if available else 503, request=httpx.Request('POST', url),
+                                  json={'status': 'ok', 'data': [
+                                      {'group_id': 111111}, {'group_id': 222222}, {'group_id': 0},
+                                  ]})
+
+    monkeypatch.setattr(main, 'onebot_client', lambda *args, **kwargs: Client())
+    await main.broadcast_daily_news(SimpleNamespace(state=SimpleNamespace(db=db)))
+    assert [call.args[0] for call in send.await_args_list] == (
+        ['111111', '222222'] if available else []
+    )

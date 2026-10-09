@@ -24,7 +24,7 @@ from app.services.anime_character import (
     _normalize,
     _series_match_terms,
 )
-from app.services.http_routing import install_outbound_proxy_environment
+from app.services.http_routing import configure_outbound_http, outbound_http_client
 
 API_URL = "https://zh.moegirl.org.cn/api.php"
 
@@ -178,10 +178,10 @@ async def run(
     settings = Settings()
     if not settings.moegirl_image_provider_enabled or not settings.anime_moegirl_only:
         raise RuntimeError("enable MOEGIRL_IMAGE_PROVIDER_ENABLED and ANIME_MOEGIRL_ONLY first")
-    await install_outbound_proxy_environment(settings)
+    await configure_outbound_http(settings)
     characters = list(ANIME_CHARACTER_ROSTER[:limit] if limit else ANIME_CHARACTER_ROSTER)
     rows: list[dict] = []
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=20,
         follow_redirects=True,
         headers={"User-Agent": "qq-chatrobot/0.1 (low-rate source audit)"},

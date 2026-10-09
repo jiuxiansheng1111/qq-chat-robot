@@ -11,7 +11,7 @@ from PIL import Image, ImageStat
 
 from app.config import Settings
 from app.services import ultraman
-from app.services.http_routing import install_outbound_proxy_environment
+from app.services.http_routing import configure_outbound_http
 from app.services.ultraman_encyclopedia import encyclopedia_ultraman_image
 
 
@@ -151,7 +151,7 @@ async def run(
     forms_only: bool = False,
 ) -> int:
     settings = Settings()
-    await install_outbound_proxy_environment(settings)
+    await configure_outbound_http(settings)
     settings.media_timeout_seconds = min(float(settings.media_timeout_seconds), 12.0)
     settings.media_max_bytes = max(int(settings.media_max_bytes), 8 * 1024 * 1024)
 

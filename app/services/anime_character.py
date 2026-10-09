@@ -19,6 +19,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from app.config import Settings
 from app.llm.providers import LLMError
+from app.services.http_routing import outbound_http_client
 from app.services.image_resolution import ImageResolution, coerce_image_resolution
 from app.services.web_search import search_web
 
@@ -367,7 +368,7 @@ async def _moegirl_character_profile(
     timeout = max(3.0, min(float(settings.media_timeout_seconds), 10.0))
     headers = {"User-Agent": "qq-chatrobot/0.1 (profile attribution resolver)"}
     try:
-        async with httpx.AsyncClient(
+        async with outbound_http_client(
             timeout=timeout,
             follow_redirects=True,
             headers=headers,
@@ -1054,7 +1055,7 @@ async def _vndb_image(
         "User-Agent": "qq-chatrobot/0.1 anime-character-image",
         "Content-Type": "application/json",
     }
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,
@@ -1181,7 +1182,7 @@ async def _bangumi_image(
         "User-Agent": "qq-chatrobot/0.1 anime-character-image",
     }
 
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,
@@ -1382,7 +1383,7 @@ async def _anilist_image(
         "Content-Type": "application/json",
     }
 
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,
@@ -1493,7 +1494,7 @@ async def _wikipedia_image(
     headers = {"User-Agent": "qq-chatrobot/0.1 anime-character-image"}
     names = tuple(dict.fromkeys((character.name, *aliases, *character.aliases)))
     terms = _name_terms(character, aliases)
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,
@@ -1666,7 +1667,7 @@ async def _moegirl_legacy_image(
         )
     )[:8]
 
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,
@@ -1913,7 +1914,7 @@ async def _web_page_character_image(
                 continue
 
             try:
-                async with httpx.AsyncClient(
+                async with outbound_http_client(
                     timeout=timeout,
                     follow_redirects=True,
                     headers=headers,
@@ -1997,7 +1998,7 @@ async def _bing_image_relaxed(
     series_terms = _series_terms(character)
     queries = _search_queries(character, aliases)
 
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,
@@ -2069,7 +2070,7 @@ async def _baidu_image(
         "User-Agent": "Mozilla/5.0 qq-chatrobot/0.1",
         "Referer": "https://image.baidu.com/",
     }
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,
@@ -2166,7 +2167,7 @@ async def _bing_image(
         ("https://www.bing.com/images/async", {"scenario": "ImageBasicHover"}),
         ("https://www.bing.com/images/search", {"form": "HDRSC3"}),
     )
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,
@@ -2257,7 +2258,7 @@ async def _search_engine_first_image(
     queries = list(dict.fromkeys(query.strip() for query in queries if query.strip()))[:6]
     timeout = max(3.0, min(float(settings.media_timeout_seconds), 6.0))
 
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers={"User-Agent": "Mozilla/5.0 qq-chatrobot/0.1"},
@@ -2389,7 +2390,7 @@ async def _moegirl_image(
     queries = _moegirl_search_queries(character)
     series_terms = _series_match_terms(character)
     saw_pages = False
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,

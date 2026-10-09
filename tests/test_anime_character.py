@@ -274,7 +274,7 @@ async def test_moegirl_profile_skips_disambiguation_and_uses_strict_search(monke
     monkeypatch.setattr(
         anime.httpx,
         "AsyncClient",
-        lambda **kwargs: original_client(transport=transport, **kwargs),
+        lambda **kwargs: original_client(**(kwargs | {"transport": transport})),
     )
     result = await anime._moegirl_character_profile(
         character,
@@ -449,7 +449,7 @@ async def test_moegirl_skips_direct_disambiguation_and_uses_strict_search_result
 
     transport = httpx.MockTransport(handler)
     original_client = httpx.AsyncClient
-    monkeypatch.setattr(anime.httpx, "AsyncClient", lambda **kwargs: original_client(transport=transport, **kwargs))
+    monkeypatch.setattr(anime.httpx, "AsyncClient", lambda **kwargs: original_client(**(kwargs | {"transport": transport})))
 
     async def download(client, url, referer, settings):
         assert url.endswith("murasame.jpg")
@@ -483,7 +483,7 @@ async def test_moegirl_searches_when_direct_page_has_no_pageimage(monkeypatch):
     monkeypatch.setattr(
         anime.httpx,
         "AsyncClient",
-        lambda **kwargs: original_client(transport=transport, **kwargs),
+        lambda **kwargs: original_client(**(kwargs | {"transport": transport})),
     )
 
     async def download(*args):

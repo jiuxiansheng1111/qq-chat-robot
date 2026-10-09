@@ -149,6 +149,7 @@ class Settings(BaseSettings):
     cat_giphy_page_url: str = "https://giphy.com/gifs/art-cat-HMDsITZh2SBGM"
     cat_timeout_seconds: float = 12
     cat_cache_size: int = 6
+    cat_history_path: str = "./data/cat_image_history.sqlite3"
     pig_api_url: str = "https://commons.wikimedia.org/w/api.php"
     music_api_url: str = "https://api.deezer.com"
     music_timeout_seconds: float = 10

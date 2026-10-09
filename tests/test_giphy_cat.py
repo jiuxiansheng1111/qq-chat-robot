@@ -1,7 +1,7 @@
 import asyncio
+import base64
 import io
 import json
-from itertools import pairwise
 from types import SimpleNamespace
 
 import httpx
@@ -33,13 +33,9 @@ def cat_item(identity='cat-one', title='cat GIF'):
 
 @pytest.fixture(autouse=True)
 def clear_history():
-    giphy._RECENT_IDS.clear()
-    giphy._RECENT_CONTENT.clear()
     giphy._IN_FLIGHT_IDS.clear()
     giphy._PAGE_CANDIDATES.clear()
     yield
-    giphy._RECENT_IDS.clear()
-    giphy._RECENT_CONTENT.clear()
     giphy._IN_FLIGHT_IDS.clear()
     giphy._PAGE_CANDIDATES.clear()
 
@@ -102,9 +98,8 @@ def test_animated_gif_requires_two_frames():
 
 
 @pytest.mark.asyncio
-async def test_giphy_download_validates_animation_and_returns_original_url(monkeypatch):
+async def test_giphy_sends_the_same_validated_bytes_without_a_second_url_fetch(monkeypatch):
     item = cat_item('unique-cat')
-    url = item['images']['original']['url']
 
     def handler(request):
         if request.url.host == 'giphy.com':
@@ -115,16 +110,14 @@ async def test_giphy_download_validates_animation_and_returns_original_url(monke
 
     original = httpx.AsyncClient
     monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: original(
-        **kwargs, transport=httpx.MockTransport(handler),
+        **(kwargs | {"transport": httpx.MockTransport(handler)}),
     ))
     result = await random_giphy_cat_gif(SimpleNamespace(media_max_bytes=1024, cat_timeout_seconds=5))
-    assert result == url
+    assert base64.b64decode(result.removeprefix('base64://')) == animated_gif()
 
 
 @pytest.mark.asyncio
-async def test_giphy_reuses_oldest_after_pool_is_seen_without_immediate_repeat(monkeypatch):
-    giphy._RECENT_IDS.clear()
-    giphy._IN_FLIGHT_IDS.clear()
+async def test_giphy_does_not_reuse_gifs_after_candidate_pool_is_seen(monkeypatch):
     items = [cat_item('cat-A'), cat_item('cat-B')]
 
     def handler(request):
@@ -135,11 +128,13 @@ async def test_giphy_reuses_oldest_after_pool_is_seen_without_immediate_repeat(m
 
     original = httpx.AsyncClient
     monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: original(
-        **kwargs, transport=httpx.MockTransport(handler),
+        **(kwargs | {"transport": httpx.MockTransport(handler)}),
     ))
     settings = SimpleNamespace(media_max_bytes=1024, cat_timeout_seconds=5)
-    values = [await random_giphy_cat_gif(settings) for _ in range(5)]
-    assert all(first != second for first, second in pairwise(values))
+    values = [await random_giphy_cat_gif(settings) for _ in range(2)]
+    assert len(set(values)) == 2
+    with pytest.raises(RuntimeError, match='没有未发过'):
+        await random_giphy_cat_gif(settings)
 
 
 @pytest.mark.asyncio
@@ -154,12 +149,14 @@ async def test_different_links_with_same_content_are_skipped(monkeypatch):
 
     original = httpx.AsyncClient
     monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: original(
-        **kwargs, transport=httpx.MockTransport(handler),
+        **(kwargs | {"transport": httpx.MockTransport(handler)}),
     ))
     monkeypatch.setattr(giphy.random, 'SystemRandom', lambda: SimpleNamespace(choice=lambda values: values[0]))
     settings = SimpleNamespace(media_max_bytes=1024, cat_timeout_seconds=5)
-    assert 'cat-A/' in await random_giphy_cat_gif(settings)
-    assert 'cat-B/' in await random_giphy_cat_gif(settings)
+    first = await random_giphy_cat_gif(settings)
+    second = await random_giphy_cat_gif(settings)
+    assert base64.b64decode(first.removeprefix('base64://')) == animated_gif('red')
+    assert base64.b64decode(second.removeprefix('base64://')) == animated_gif('green')
 
 
 @pytest.mark.asyncio
@@ -171,11 +168,11 @@ async def test_single_unchanged_gif_does_not_repeat(monkeypatch):
 
     original = httpx.AsyncClient
     monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: original(
-        **kwargs, transport=httpx.MockTransport(handler),
+        **(kwargs | {"transport": httpx.MockTransport(handler)}),
     ))
     settings = SimpleNamespace(media_max_bytes=1024, cat_timeout_seconds=5)
     await random_giphy_cat_gif(settings)
-    with pytest.raises(RuntimeError, match='没有可用'):
+    with pytest.raises(RuntimeError, match='没有未发过'):
         await random_giphy_cat_gif(settings)
 
 
@@ -183,7 +180,8 @@ async def test_single_unchanged_gif_does_not_repeat(monkeypatch):
 async def test_cat_giphy_has_priority_and_cataas_is_fallback(monkeypatch):
     settings = SimpleNamespace(cat_giphy_enabled=True)
     media._cat_gif_cache.clear()
-    media._cat_gif_cache.append('base64://cached-fallback')
+    fallback = 'base64://' + base64.b64encode(animated_gif('green')).decode()
+    media._cat_gif_cache.append(fallback)
 
     async def no_refill(_):
         return None
@@ -200,5 +198,5 @@ async def test_cat_giphy_has_priority_and_cataas_is_fallback(monkeypatch):
         raise RuntimeError('upstream offline')
 
     monkeypatch.setattr(media, 'random_giphy_cat_gif', failed)
-    assert await media.random_cat_gif(settings) == 'base64://cached-fallback'
+    assert await media.random_cat_gif(settings) == fallback
     await asyncio.sleep(0)

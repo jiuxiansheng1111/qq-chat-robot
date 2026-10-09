@@ -31,7 +31,7 @@ from app.core.rate_limit import LocalRateLimiter, RedisRateLimiter
 from app.db.database import Database
 from app.llm.manager import LLMManager
 from app.llm.memory import ConversationMemory
-from app.llm.providers import LLMError, describe_llm_error
+from app.llm.providers import LLMError, describe_llm_error, llm_failure_reply
 from app.plugins.media import (
     maintain_cat_gif_cache,
     random_cat_gif,
@@ -67,6 +67,7 @@ from app.services.bilibili import (
     choose_bilibili_video,
     search_bilibili_videos,
 )
+from app.services.cat_history import CatHistoryError, NoNewCatImage
 from app.services.character_catalog import (
     ANIME_CATALOG_ALIASES,
     ANIME_FAVORITE_ALIASES,
@@ -89,7 +90,7 @@ from app.services.help_menu import (
     is_text_menu_request,
     prepare_help_menu_file,
 )
-from app.services.http_routing import install_outbound_proxy_environment
+from app.services.http_routing import configure_outbound_http
 from app.services.image_generation import generate_image
 from app.services.image_resolution import (
     ImageResolution,
@@ -568,7 +569,35 @@ async def broadcast_daily_news(app: FastAPI) -> None:
         logger.info("daily noon news skipped: no recently active groups")
         return
 
-    for group_id in groups:
+    # 活跃记录跨账号且可能保留已退群/测试群；发送前核对当前账号的真实群列表。
+    route = onebot_route(settings)
+    if not route.api_base:
+        logger.info("daily noon news skipped: no connected OneBot account")
+        return
+    headers = {"Authorization": f"Bearer {route.access_token}"} if route.access_token else {}
+    try:
+        async with onebot_client(settings, timeout=10, trust_env=False) as client:
+            response = await client.post(
+                f"{route.api_base.rstrip('/')}/get_group_list", headers=headers, json={},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        if (not isinstance(payload, dict) or payload.get("status") != "ok"
+                or not isinstance(payload.get("data"), list)):
+            raise RuntimeError("unable to confirm joined groups")
+        joined = {
+            str(item.get("group_id")) for item in payload["data"]
+            if isinstance(item, dict) and str(item.get("group_id", "")).isascii()
+            and str(item.get("group_id", "")).isdigit()
+            and int(item["group_id"]) > 0
+        }
+    except (RuntimeError, ValueError, httpx.HTTPError) as exc:
+        logger.warning("daily noon news skipped: group membership check failed: %s", exc)
+        return
+    eligible = [group_id for group_id in groups if group_id in joined]
+    logger.info("daily noon news: %s joined targets, %s skipped", len(eligible), len(groups) - len(eligible))
+
+    for group_id in eligible:
         # 微信会话没有 QQ 群接口，私人对话也不接收每日群推送。
         if group_id.startswith("wechat:"):
             continue
@@ -616,7 +645,7 @@ async def initialize_runtime(app: FastAPI):
     app.state.runtime_resources = []
     settings.validate_security()
     try:
-        proxy = await install_outbound_proxy_environment(settings)
+        proxy = await configure_outbound_http(settings)
         if proxy:
             logger.info("Outbound web route ready via proxy: %s", proxy)
     except (OSError, RuntimeError, ValueError) as exc:
@@ -4609,6 +4638,11 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
         try:
             image = await random_cat_gif(settings)
             await send_group_image(group_id, image)
+        except NoNewCatImage:
+            await send_group_message(group_id, "猫图来源暂时没有未发过的新图，稍后再试。")
+        except CatHistoryError as exc:
+            logger.error("cat image history unavailable: %s", exc)
+            await send_group_message(group_id, "猫图去重记录暂时不可用，已暂停发送，请联系管理员。")
         except (RuntimeError, httpx.HTTPError) as exc:
             logger.warning("cat image failed: %s", exc)
             await send_group_message(group_id, "猫图服务暂时不可用，请稍后再试。")
@@ -5254,5 +5288,5 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
         except (LLMError, httpx.HTTPError) as exc:
             reason = describe_llm_error(exc)
             logger.warning("LLM request failed (%s): %s", reason, exc)
-            await send_group_message(group_id, "苟修金，吾辈现在有点忙，稍后再试一下吧。")
+            await send_group_message(group_id, llm_failure_reply(exc))
     return {"ok": True}

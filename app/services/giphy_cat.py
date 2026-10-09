@@ -1,13 +1,12 @@
 """从 GIPHY 猫图页面选动态 GIF，不落盘缓存媒体。"""
 
 import asyncio
-import hashlib
+import base64
 import html
 import io
 import json
 import random
 import re
-from collections import deque
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from urllib.parse import urlsplit
@@ -15,9 +14,15 @@ from urllib.parse import urlsplit
 import httpx
 from PIL import Image
 
+from app.services.cat_history import (
+    CatHistoryError,
+    CatImageHistory,
+    NoNewCatImage,
+    fingerprint_cat_gif,
+)
+from app.services.http_routing import outbound_http_client
+
 GIPHY_CAT_PAGE = "https://giphy.com/gifs/art-cat-HMDsITZh2SBGM"
-_RECENT_IDS: deque[str] = deque(maxlen=16)
-_RECENT_CONTENT: deque[str] = deque(maxlen=16)
 _PAGE_CANDIDATES: dict[str, tuple["GiphyGif", ...]] = {}
 _IN_FLIGHT_IDS: set[str] = set()
 _RECENT_LOCK = asyncio.Lock()
@@ -143,6 +148,7 @@ def _animated_gif(content: bytes) -> bool:
 
 
 async def random_giphy_cat_gif(settings) -> str:
+    history = CatImageHistory.from_settings(settings)
     timeout = min(float(getattr(settings, "cat_timeout_seconds", 12)), 20)
     maximum = int(settings.media_max_bytes)
     page_url = str(getattr(settings, "cat_giphy_page_url", GIPHY_CAT_PAGE))
@@ -151,7 +157,7 @@ async def random_giphy_cat_gif(settings) -> str:
         raise RuntimeError("GIPHY 猫图页面地址无效")
     async with (
         asyncio.timeout(timeout + 3),
-        httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers={
+        outbound_http_client(timeout=timeout, follow_redirects=True, headers={
             # 取完整页面，推荐图也要一起读。
             "Accept": "text/html",
         }) as client,
@@ -166,48 +172,31 @@ async def random_giphy_cat_gif(settings) -> str:
             if len(_PAGE_CANDIDATES) >= 4 and page_url not in _PAGE_CANDIDATES:
                 _PAGE_CANDIDATES.pop(next(iter(_PAGE_CANDIDATES)))
             _PAGE_CANDIDATES[page_url] = tuple(candidates)
+        known = await history.known_sources([f"giphy:{gif.id}" for gif in candidates])
         tried: set[str] = set()
-        for _ in range(min(6, len(candidates))):
+        for _ in range(min(12, len(candidates))):
             async with _RECENT_LOCK:
                 available = [gif for gif in candidates
-                             if gif.id not in _IN_FLIGHT_IDS and gif.id not in tried]
+                             if gif.id not in _IN_FLIGHT_IDS and gif.id not in tried
+                             and f"giphy:{gif.id}" not in known]
                 if not available:
                     break
-                fresh = [gif for gif in available if gif.id not in _RECENT_IDS]
-                if fresh:
-                    gif = random.SystemRandom().choice(fresh)
-                else:
-                    # 看过一轮后从最久没发的开始，不连续发同一张。
-                    recent = list(_RECENT_IDS)
-                    gif = min(available, key=lambda item: recent.index(item.id))
+                gif = random.SystemRandom().choice(available)
                 _IN_FLIGHT_IDS.add(gif.id)
                 tried.add(gif.id)
-            valid = False
-            digest = ""
+            accepted = False
             try:
                 content = await _bounded_get(client, gif.url, maximum)
-                valid = await asyncio.to_thread(_animated_gif, content)
-                if valid:
-                    digest = hashlib.sha256(content).hexdigest()
+                fingerprint = await asyncio.to_thread(fingerprint_cat_gif, content)
+                accepted = await history.claim(fingerprint, f"giphy:{gif.id}")
+            except CatHistoryError:
+                raise
             except (RuntimeError, httpx.HTTPError):
                 pass
             finally:
                 async with _RECENT_LOCK:
                     _IN_FLIGHT_IDS.discard(gif.id)
-                    if valid:
-                        # 有些不同链接其实是同一张，按文件内容再检查一次。
-                        repeated = bool(_RECENT_CONTENT and digest == _RECENT_CONTENT[-1])
-                        fresh_duplicate = gif.id not in _RECENT_IDS and digest in _RECENT_CONTENT
-                        if repeated or fresh_duplicate:
-                            valid = False
-                    if valid:
-                        if gif.id in _RECENT_IDS:
-                            _RECENT_IDS.remove(gif.id)
-                        _RECENT_IDS.append(gif.id)
-                        if digest in _RECENT_CONTENT:
-                            _RECENT_CONTENT.remove(digest)
-                        _RECENT_CONTENT.append(digest)
-            if valid:
-                # 交给 QQ 直接读取原 GIF URL，不改参数，也不缓存 GIPHY 媒体。
-                return gif.url
-    raise RuntimeError("GIPHY 这次没有可用的动态猫 GIF")
+            if accepted:
+                # 发已经核验并登记的字节，避免 QQ 再次取 URL 时收到另一份内容。
+                return "base64://" + base64.b64encode(content).decode("ascii")
+    raise NoNewCatImage("GIPHY 这次没有未发过的动态猫 GIF")

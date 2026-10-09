@@ -12,6 +12,7 @@ import httpx
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 from app.config import Settings
+from app.services.http_routing import outbound_http_client
 from app.services.web_search import search_web
 
 OFFICIAL_HERO_BASE_URL = "https://tsuburaya-prod.com/heroes"
@@ -1201,7 +1202,7 @@ async def official_ultraman_search_image(hero: Ultraman, settings: Settings) -> 
 
     headers = {"User-Agent": OFFICIAL_USER_AGENT}
     errors: list[str] = []
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,
@@ -1278,7 +1279,7 @@ async def official_ultraman_image(hero: Ultraman, settings: Settings) -> str:
     )
     timeout = min(float(settings.media_timeout_seconds), 30.0)
     headers = {"User-Agent": OFFICIAL_USER_AGENT}
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout, follow_redirects=True, headers=headers
     ) as client:
         candidate_urls: list[str] = []

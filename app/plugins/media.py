@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import hashlib
+import logging
 import random
 import time
 from collections import deque
@@ -10,7 +11,14 @@ from urllib.parse import urlparse
 import httpx
 
 from app.config import Settings
+from app.services.cat_history import (
+    CatHistoryError,
+    CatImageHistory,
+    NoNewCatImage,
+    fingerprint_cat_gif,
+)
 from app.services.giphy_cat import random_giphy_cat_gif
+from app.services.http_routing import outbound_http_client
 
 WIKIMEDIA_COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 WIKIMEDIA_USER_AGENT = "qq-chatrobot/0.1 (https://github.com/jiuxiansheng1111/qq-chat-robot)"
@@ -95,22 +103,22 @@ _nailong_path_pool: list[str] = []
 _nailong_pool_lock = asyncio.Lock()
 _cat_gif_cache: deque[str] = deque()
 _cat_cached_hashes: set[str] = set()
-_cat_recent_hashes: deque[str] = deque(maxlen=16)
 _cat_cache_lock = asyncio.Lock()
 _cat_fill_lock = asyncio.Lock()
+logger = logging.getLogger(__name__)
 
 
 def _cat_digest(image: str) -> str:
-    return hashlib.sha256(image.encode("ascii", errors="ignore")).hexdigest()
+    return hashlib.sha256(_cat_content(image)).hexdigest()
 
 
-def _remember_cat_digest(digest: str) -> None:
-    if digest in _cat_recent_hashes:
-        try:
-            _cat_recent_hashes.remove(digest)
-        except ValueError:
-            pass
-    _cat_recent_hashes.append(digest)
+def _cat_content(image: str) -> bytes:
+    if not image.startswith("base64://"):
+        raise RuntimeError("猫图必须先下载并核验内容")
+    try:
+        return base64.b64decode(image.removeprefix("base64://"), validate=True)
+    except ValueError as exc:
+        raise RuntimeError("猫 GIF 内容无效") from exc
 
 
 @dataclass(frozen=True)
@@ -144,7 +152,7 @@ async def _download_cat_gif_once(settings: Settings) -> str:
     headers = {"Cache-Control": "no-cache", "User-Agent": WIKIMEDIA_USER_AGENT}
     content = bytearray()
     async with (
-        httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client,
+        outbound_http_client(timeout=timeout, follow_redirects=True) as client,
         client.stream("GET", url, headers=headers) as response,
     ):
         if response.status_code >= 400:
@@ -177,6 +185,7 @@ async def _download_cat_gif(settings: Settings) -> str:
 
 
 async def warm_cat_gif_cache(settings: Settings) -> None:
+    history = CatImageHistory.from_settings(settings)
     target = max(1, min(int(getattr(settings, "cat_cache_size", 6)), 10))
     async with _cat_fill_lock:
         attempts_left = max(8, target * 4)
@@ -187,11 +196,16 @@ async def warm_cat_gif_cache(settings: Settings) -> None:
             attempts_left -= 1
             try:
                 image = await _download_cat_gif(settings)
+                fingerprint = await asyncio.to_thread(fingerprint_cat_gif, _cat_content(image))
+                if await history.contains(fingerprint):
+                    continue
+            except CatHistoryError:
+                raise
             except (RuntimeError, httpx.HTTPError):
                 return
             digest = _cat_digest(image)
             async with _cat_cache_lock:
-                if digest in _cat_cached_hashes or digest in _cat_recent_hashes:
+                if digest in _cat_cached_hashes:
                     continue
                 _cat_gif_cache.append(image)
                 _cat_cached_hashes.add(digest)
@@ -201,41 +215,47 @@ async def maintain_cat_gif_cache(settings: Settings) -> None:
     """上游临时失败后，继续补充猫图缓存。"""
     target = max(1, min(int(getattr(settings, "cat_cache_size", 6)), 10))
     while True:
-        await warm_cat_gif_cache(settings)
+        await _refill_cat_cache(settings)
         async with _cat_cache_lock:
             ready = len(_cat_gif_cache) >= target
         await asyncio.sleep(20 if ready else 3)
 
 
+async def _refill_cat_cache(settings: Settings) -> None:
+    try:
+        await warm_cat_gif_cache(settings)
+    except (RuntimeError, httpx.HTTPError) as exc:
+        logger.warning("cat GIF cache refill failed: %s", exc)
+
+
 async def random_cat_gif(settings: Settings) -> str:
+    history = CatImageHistory.from_settings(settings)
     if getattr(settings, "cat_giphy_enabled", False):
         try:
             return await random_giphy_cat_gif(settings)
+        except CatHistoryError:
+            raise
         except (RuntimeError, TimeoutError, httpx.HTTPError):
             pass
-    async with _cat_cache_lock:
-        image = _cat_gif_cache.popleft() if _cat_gif_cache else None
-        if image is not None:
-            digest = _cat_digest(image)
-            _cat_cached_hashes.discard(digest)
-            _remember_cat_digest(digest)
-
-    if image is None:
-        # 上游有时一直返回同一张，比较内容再换一张。
-        for _ in range(8):
-            candidate = await _download_cat_gif(settings)
-            digest = _cat_digest(candidate)
-            async with _cat_cache_lock:
-                if digest in _cat_recent_hashes:
-                    continue
-                _remember_cat_digest(digest)
-            image = candidate
-            break
+    for _ in range(10):
+        async with _cat_cache_lock:
+            image = _cat_gif_cache.popleft() if _cat_gif_cache else None
+            if image is not None:
+                _cat_cached_hashes.discard(_cat_digest(image))
         if image is None:
-            raise RuntimeError("猫图网站这次一直返回重复图片，稍后再试")
-
-    asyncio.create_task(warm_cat_gif_cache(settings))
-    return image
+            break
+        fingerprint = await asyncio.to_thread(fingerprint_cat_gif, _cat_content(image))
+        # 缓存可能在另一个来源/进程发送前就已预热，出队后必须再原子检查一次。
+        if await history.claim(fingerprint):
+            asyncio.create_task(_refill_cat_cache(settings))
+            return image
+    for _ in range(8):
+        image = await _download_cat_gif(settings)
+        fingerprint = await asyncio.to_thread(fingerprint_cat_gif, _cat_content(image))
+        if await history.claim(fingerprint):
+            asyncio.create_task(_refill_cat_cache(settings))
+            return image
+    raise NoNewCatImage("猫图来源一直返回重复图片，暂时没有未发过的新图")
 
 
 async def random_nailong_image(settings: Settings) -> str:
@@ -245,7 +265,7 @@ async def random_nailong_image(settings: Settings) -> str:
     timeout = getattr(settings, "media_timeout_seconds", 60)
     attempts = max(1, getattr(settings, "media_retry_attempts", 2))
     headers = {"User-Agent": WIKIMEDIA_USER_AGENT}
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+    async with outbound_http_client(timeout=timeout, follow_redirects=True) as client:
         for attempt in range(attempts):
             try:
                 response = await client.get(url, headers=headers)
@@ -286,7 +306,7 @@ async def random_real_pig_image(api_url: str, settings: Settings) -> RealPigImag
     attempts = max(1, getattr(settings, "media_retry_attempts", 2))
     headers = {"User-Agent": WIKIMEDIA_USER_AGENT}
 
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+    async with outbound_http_client(timeout=timeout, follow_redirects=True) as client:
         for attempt in range(attempts):
             try:
                 response = await client.get(endpoint, params=params, headers=headers)
@@ -336,7 +356,7 @@ async def random_image(url: str, api_key: str, settings: Settings) -> str:
         headers["Cache-Control"] = "no-cache"
     timeout = getattr(settings, "media_timeout_seconds", 60)
     attempts = max(1, getattr(settings, "media_retry_attempts", 2))
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+    async with outbound_http_client(timeout=timeout, follow_redirects=False) as client:
         for attempt in range(attempts):
             try:
                 response = await client.get(url, headers=headers)

@@ -1,6 +1,27 @@
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def isolate_default_cat_history(tmp_path, monkeypatch, request):
+    """Offline tests must never reserve images in the user's live history."""
+    if request.node.get_closest_marker("live"):
+        return
+    from pathlib import Path
+
+    from app.services.cat_history import CatImageHistory
+
+    default = (Path(__file__).resolve().parents[1] / "data/cat_image_history.sqlite3").resolve()
+    original = CatImageHistory.from_settings.__func__
+
+    def isolated(cls, settings):
+        value = getattr(settings, "cat_history_path", "./data/cat_image_history.sqlite3")
+        if Path(value).resolve() == default:
+            return cls(tmp_path / "cat_history.sqlite3")
+        return original(cls, settings)
+
+    monkeypatch.setattr(CatImageHistory, "from_settings", classmethod(isolated))
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--live",

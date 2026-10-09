@@ -49,6 +49,10 @@ def _load_plugin(monkeypatch: pytest.MonkeyPatch):
         PlatformAdapterType = FakePlatformAdapterType
         event_message_type = staticmethod(decorator_factory)
         platform_adapter_type = staticmethod(decorator_factory)
+        on_astrbot_loaded = staticmethod(decorator_factory)
+        on_plugin_loaded = staticmethod(decorator_factory)
+        on_plugin_unloaded = staticmethod(decorator_factory)
+        on_decorating_result = staticmethod(decorator_factory)
 
     event_api.AstrMessageEvent = type("AstrMessageEvent", (), {})
     event_api.filter = FakeFilter

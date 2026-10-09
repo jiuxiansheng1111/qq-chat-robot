@@ -20,7 +20,7 @@ from app.services.onebot_routing import (
 )
 
 _LOCAL_PATH_FIELDS = (
-    "database_path", "persona_prompt_file", "persona_examples_file",
+    "database_path", "cat_history_path", "persona_prompt_file", "persona_examples_file",
     "ultraman_image_cache_dir", "anime_image_cache_dir", "murasame_asset_dir",
     "netease_member_token_path", "singing_python", "singing_seed_root",
     "singing_ffmpeg_path", "singing_ffprobe_path", "help_menu_background_path",

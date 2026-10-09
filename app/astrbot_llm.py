@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import logging
 from collections.abc import Iterator
@@ -9,8 +10,10 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 
+from app.config import Settings
 from app.llm.providers import LLMError
 from app.llm.resilience import CircuitBreaker, ProviderStats
+from app.services.http_routing import outbound_http_client
 
 logger = logging.getLogger(__name__)
 _session_origin: ContextVar[str | None] = ContextVar("astrbot_model_session", default=None)
@@ -46,8 +49,9 @@ def _model_config(context: Any) -> dict:
 class AstrBotChatProvider:
     """每次读取面板里的主模型和备用模型，不另存一份密钥。"""
 
-    def __init__(self, context: Any):
+    def __init__(self, context: Any, settings: Settings | None = None):
         self.context = context
+        self.settings = settings
 
     async def chat(self, messages: list[dict]) -> str:
         config = _model_config(self.context)
@@ -77,6 +81,7 @@ class AstrBotChatProvider:
                 last_error = LLMError("AstrBot 聊天模型未启用或未加载")
                 continue
             try:
+                await route_provider_http_client(provider, self.settings)
                 # 原来的 system prompt、每用户记忆和角色选择直接传给模型。
                 result = await provider.text_chat(
                     contexts=copy.deepcopy(messages), request_max_retries=retries,
@@ -96,12 +101,46 @@ class AstrBotChatProvider:
         """模型连接由 AstrBot 统一关闭。"""
 
 
+async def route_provider_http_client(provider: Any, settings: Settings | None) -> None:
+    """保留 AstrBot SDK 配置，给其持久 HTTP 客户端安装可恢复的线路。"""
+    client = getattr(provider, "client", None)
+    if not callable(getattr(client, "with_options", None)):
+        return
+    if getattr(provider, "_qqchat_routed_client", None) is client:
+        return
+    lock = getattr(provider, "_qqchat_routing_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        provider._qqchat_routing_lock = lock
+    async with lock:
+        client = provider.client
+        if getattr(provider, "_qqchat_routed_client", None) is client:
+            return
+        config = getattr(provider, "provider_config", {})
+        http_client = outbound_http_client(
+            settings=settings, proxy=config.get("proxy") or None,
+            timeout=getattr(provider, "timeout", 45),
+        )
+        try:
+            replacement = client.with_options(http_client=http_client)
+        except BaseException:
+            await http_client.aclose()
+            raise
+        provider.client = replacement
+        provider._qqchat_routed_client = replacement
+        await client.close()
+
+
 async def bind_astrbot_models(manager: Any, context: Any) -> bool:
     """换掉模型连接，沿用原来的排队、并发限制和服务引用。"""
     if not _model_config(context).get("provider_id"):
         return False
     original = {id(manager.provider): manager.provider, id(manager.fallback): manager.fallback}
-    adapter = AstrBotChatProvider(context)
+    adapter = AstrBotChatProvider(context, manager.settings)
+    get_providers = getattr(context, "get_all_providers", None)
+    if callable(get_providers):
+        for provider in get_providers():
+            await route_provider_http_client(provider, manager.settings)
     manager.provider = manager.fallback = adapter
     manager.provider_name = manager.fallback_name = "astrbot"
     manager.breakers = {"astrbot": CircuitBreaker()}

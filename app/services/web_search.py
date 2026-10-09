@@ -9,6 +9,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 
+from app.services.http_routing import outbound_http_client
+
 
 @dataclass(frozen=True)
 class SearchResult:
@@ -167,7 +169,7 @@ async def search_web(query: str, limit: int = 5, timeout: float = 12) -> list[Se
     }
     collected: list[SearchResult] = []
     errors: list[str] = []
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,
@@ -234,7 +236,7 @@ async def search_news_feed(
         ),
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7",
     }
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,

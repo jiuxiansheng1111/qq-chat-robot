@@ -1,5 +1,7 @@
 import httpx
 
+from app.services.http_routing import outbound_http_client
+
 
 class LLMError(RuntimeError):
     pass
@@ -16,21 +18,34 @@ def describe_llm_error(exc: Exception) -> str:
         return "queue_timeout"
     if "API key 未配置" in text:
         return "missing_api_key"
-    if "temporary error: 429" in text:
+    if "temporary error: 429" in text or "HTTP 429" in text:
         return "rate_limited"
     if "invalid response" in text:
         return "invalid_response"
     if "empty response" in text:
         return "empty_response"
-    if isinstance(exc, httpx.TimeoutException):
+    if isinstance(exc, httpx.TimeoutException) or "APITimeoutError" in text:
         return "timeout"
-    if isinstance(exc, httpx.ConnectError):
+    if isinstance(exc, httpx.ConnectError) or "APIConnectionError" in text:
         return "connect_error"
     if isinstance(exc, httpx.HTTPStatusError):
         return f"http_{exc.response.status_code}"
     if isinstance(exc, httpx.HTTPError):
         return "network_error"
     return "llm_error"
+
+
+def llm_failure_reply(exc: Exception) -> str:
+    reason = describe_llm_error(exc)
+    if reason in {"queue_full", "queue_timeout", "rate_limited"}:
+        return "苟修金，聊天请求有点多，请稍后再试一下吧。"
+    if reason in {"connect_error", "network_error"}:
+        return "苟修金，吾辈暂时连不上聊天模型，请稍后再试一下吧。"
+    if reason == "timeout":
+        return "苟修金，聊天模型回复超时了，请稍后再试一下吧。"
+    if reason == "circuit_open":
+        return "苟修金，聊天模型连续调用失败，吾辈会在稍后重新尝试。"
+    return "苟修金，聊天模型暂时出错了，请稍后再试一下吧。"
 
 
 class OpenAICompatibleProvider:
@@ -42,7 +57,7 @@ class OpenAICompatibleProvider:
         self.timeout = timeout
         self.max_tokens = max_tokens
         self.temperature = temperature
-        self.client = httpx.AsyncClient(timeout=timeout)
+        self.client = outbound_http_client(timeout=timeout)
 
     async def chat(self, messages: list[dict]) -> str:
         if not self.api_key:

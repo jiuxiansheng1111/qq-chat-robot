@@ -13,7 +13,7 @@ from app.services.anime_character import (
     ANIME_CHARACTER_ROSTER,
     resolve_anime_character_image,
 )
-from app.services.http_routing import install_outbound_proxy_environment
+from app.services.http_routing import configure_outbound_http
 
 
 async def audit_character(character, settings: Settings, semaphore: asyncio.Semaphore):
@@ -77,7 +77,7 @@ async def run(
         anime_image_cache_dir=str(cache_dir),
         anime_image_resolve_timeout_seconds=timeout,
     )
-    await install_outbound_proxy_environment(settings)
+    await configure_outbound_http(settings)
     semaphore = asyncio.Semaphore(max(1, concurrency))
     rows = await asyncio.gather(
         *(

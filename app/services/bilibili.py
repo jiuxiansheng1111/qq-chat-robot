@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import httpx
 
 from app.config import Settings
+from app.services.http_routing import outbound_http_client
 
 BILIBILI_HOME_URL = "https://www.bilibili.com/"
 BILIBILI_SEARCH_TYPE_URL = "https://api.bilibili.com/x/web-interface/search/type"
@@ -241,7 +242,7 @@ async def search_bilibili_videos(
         "Accept": "application/json,text/plain,*/*",
     }
     timeout = max(3.0, min(float(settings.bilibili_timeout_seconds), 20.0))
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,
@@ -331,7 +332,7 @@ async def download_bilibili_cover(
         "User-Agent": BILIBILI_USER_AGENT,
         "Referer": video.url,
     }
-    async with httpx.AsyncClient(
+    async with outbound_http_client(
         timeout=timeout,
         follow_redirects=True,
         headers=headers,
