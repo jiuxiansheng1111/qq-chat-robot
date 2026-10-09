@@ -28,6 +28,8 @@ try {
     $lastStatus = ''
     $failedAttempts = 0
     $healthySince = [datetime]::MinValue
+    $listenerWatch = $null
+    $lastWatchError = ''
     while ((Get-QQChatRobotRuntime -ProjectRoot $layout.ProjectRoot) -eq 'astrbot') {
         try {
             # Start/stop and health snapshots use the same lock: don't inspect half-written startup state.
@@ -35,7 +37,26 @@ try {
             $snapshotHeld = $false
             try {
                 $snapshotHeld = Enter-AstrbotMutex -Mutex $lifecycle
-                if ($snapshotHeld) { $health = Get-AstrbotHealth -Layout $layout }
+                if ($snapshotHeld) {
+                    try {
+                        if ($listenerWatch -and $listenerWatch.Process.HasExited) {
+                            $exitStatus = Get-AstrbotExitDescription -ExitCode $listenerWatch.Process.ExitCode
+                            $manual = Test-AstrbotManualStop -Layout $layout
+                            Write-SupervisorLog "Listener PID $($listenerWatch.Identity.ProcessId) exited: $exitStatus; manual-stop=$manual."
+                            $listenerWatch.Process.Dispose()
+                            $listenerWatch = $null
+                        }
+                        if (-not $listenerWatch) { $listenerWatch = New-AstrbotListenerWatch -Layout $layout }
+                        $lastWatchError = ''
+                    } catch {
+                        # Capturing diagnostics must not prevent the health check or recovery.
+                        if ($listenerWatch) { $listenerWatch.Process.Dispose(); $listenerWatch = $null }
+                        $watchError = "Exit watch unavailable: $($_.Exception.Message)"
+                        if ($watchError -ne $lastWatchError) { Write-SupervisorLog $watchError }
+                        $lastWatchError = $watchError
+                    }
+                    $health = Get-AstrbotHealth -Layout $layout
+                }
             } finally {
                 if ($snapshotHeld) { $lifecycle.ReleaseMutex() }
                 $lifecycle.Dispose()
@@ -88,6 +109,7 @@ try {
     }
     Write-SupervisorLog 'Runtime switched away from AstrBot; supervisor exiting.'
 } finally {
+    if ($listenerWatch) { $listenerWatch.Process.Dispose() }
     $supervisorMutex.ReleaseMutex()
     $supervisorMutex.Dispose()
 }

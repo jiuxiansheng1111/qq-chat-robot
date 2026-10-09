@@ -151,6 +151,38 @@ async def test_existing_client_tracks_system_proxy_changes(monkeypatch):
     assert [call[0] for call in calls] == ["direct", "proxy", "direct"]
 
 
+async def test_stalled_probe_close_does_not_block_next_route(monkeypatch):
+    class Writer:
+        def __init__(self):
+            self.transport = self
+            self.closed = False
+            self.aborted = False
+
+        def close(self):
+            self.closed = True
+
+        async def wait_closed(self):
+            await asyncio.Event().wait()
+
+        def abort(self):
+            self.aborted = True
+
+    writer = Writer()
+
+    async def connect(_host, _port):
+        return None, writer
+
+    monkeypatch.setattr(routing.asyncio, "open_connection", connect)
+    assert await asyncio.wait_for(
+        routing._proxy_port_open("http://127.0.0.1:7897", timeout=0.01), timeout=1,
+    )
+    assert writer.closed and writer.aborted
+    # 同一循环仍可探测下一条线路，不留一个无限等待关闭的任务。
+    assert await asyncio.wait_for(
+        routing._proxy_port_open("http://127.0.0.1:7890", timeout=0.01), timeout=1,
+    )
+
+
 async def test_real_sockets_same_client_survives_proxy_shutdown_and_restart(monkeypatch):
     async def reply(reader, writer, body):
         try:

@@ -67,6 +67,26 @@ try {
     function Test-AstrbotDashboardResponse { return $script:responsive }
     Set-TestPlatform $true
     Assert-Equal (Get-AstrbotHealth -Layout $layout).Status 'healthy' 'Healthy instance rejected'
+    $script:watchProcess = [pscustomobject]@{
+        Handle = [IntPtr]123; Path = $script:nativePath
+        StartTime = $script:processes[10003].CreationDate; Disposed = $false
+    }
+    $script:watchProcess | Add-Member ScriptMethod Dispose { $this.Disposed = $true }
+    function Get-Process { param([int]$Id); Assert-Equal $Id 10003 'Wrong process opened for exit watch'; return $script:watchProcess }
+    $watch = New-AstrbotListenerWatch -Layout $layout
+    Assert-Equal $watch.Identity.ProcessId 10003 'Wrong recorded listener watched'
+    Assert-Equal $watch.Process.Handle ([IntPtr]123) 'Listener handle not retained'
+    $script:watchProcess.Path = 'C:\foreign\python.exe'
+    Assert-Throws { New-AstrbotListenerWatch -Layout $layout } 'Changed process path accepted by exit watch'
+    Assert-Equal $script:watchProcess.Disposed $true 'Rejected process handle was not disposed'
+    $script:watchProcess.Path = $script:nativePath; $script:watchProcess.Disposed = $false
+    $script:watchProcess.StartTime = $script:watchProcess.StartTime.AddMinutes(1)
+    Assert-Throws { New-AstrbotListenerWatch -Layout $layout } 'Reused PID accepted by exit watch'
+    Assert-Equal $script:watchProcess.Disposed $true 'Reused PID handle was not disposed'
+    $script:watchProcess.StartTime = $script:processes[10003].CreationDate
+    Remove-Item Function:\Get-Process
+    Assert-Equal (Get-AstrbotExitDescription -ExitCode 0) 'ExitCode=0 (0x00000000)' 'Zero exit code incorrectly formatted'
+    Assert-Equal (Get-AstrbotExitDescription -ExitCode -1073741819) 'ExitCode=-1073741819 (0xC0000005)' 'Windows crash code lost its unsigned representation'
     $script:wsOwner = 0
     $health = Get-AstrbotHealth -Layout $layout
     Assert-Equal $health.Status 'unhealthy' 'Missing QQ listener ignored'
@@ -93,6 +113,7 @@ try {
     $script:responsive = $true
     $script:dashboardOwner = 0; $script:wsOwner = 0
     $script:processes.Remove(10003)
+    Assert-Equal (New-AstrbotListenerWatch -Layout $layout) $null 'Exited listener was opened for a new watch'
     $health = Get-AstrbotHealth -Layout $layout
     Assert-Equal $health.Status 'down' 'Listener exit not detected'
     Assert-Equal $health.Restart $true 'Remaining wrappers were not scheduled for cleanup'
@@ -127,12 +148,27 @@ try {
         Invoke-AstrbotLoggedCommand -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-Command', 'exit 7') `
             -WorkingDirectory $repo -LogPrefix 'exit-failure' -LogDirectory $layout.Logs -TimeoutSeconds 5
     } 'Failing child command was accepted'
+    $child = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-Command', 'Start-Sleep -Milliseconds 500; exit 7') `
+        -PassThru -WindowStyle Hidden
+    try {
+        $retained = Get-Process -Id $child.Id
+        try {
+            $null = $retained.Handle
+            if (-not $retained.WaitForExit(5000)) { throw 'Exit watch child did not finish.' }
+            Assert-Equal $retained.HasExited $true 'Retained handle did not observe child exit'
+            Assert-Equal (Get-AstrbotExitDescription -ExitCode $retained.ExitCode) 'ExitCode=7 (0x00000007)' `
+                'Exit status was lost after the child disappeared'
+        } finally { $retained.Dispose() }
+    } finally {
+        if (-not $child.HasExited) { $child.Kill() }
+        $child.Dispose()
+    }
     Assert-Throws {
         Invoke-AstrbotLoggedCommand -FilePath 'powershell.exe' `
             -ArgumentList @('-NoProfile', '-Command', 'Start-Sleep -Seconds 10') `
             -WorkingDirectory $repo -LogPrefix 'exit-timeout' -LogDirectory $layout.Logs -TimeoutSeconds 1
     } 'Hung recovery command did not time out'
-    Write-Host 'AstrBot supervisor checks passed: ownership, exit, readiness, grace, retry, manual stop and log preservation.'
+    Write-Host 'AstrBot supervisor checks passed: ownership, retained exit status, readiness, grace, retry, manual stop and log preservation.'
 } finally {
     $expectedPrefix = [IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\') + '\.supervisor-test-'
     if (-not ([IO.Path]::GetFullPath($root)).StartsWith($expectedPrefix, [StringComparison]::OrdinalIgnoreCase)) {

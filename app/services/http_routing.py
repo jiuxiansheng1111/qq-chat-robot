@@ -59,9 +59,10 @@ async def _proxy_port_open(proxy_url: str, timeout: float = 0.35) -> bool:
         if writer is not None:
             writer.close()
             try:
-                await writer.wait_closed()
-            except (OSError, RuntimeError):
-                pass
+                # 网络切换时关闭探测连接也可能停滞，不能一直占住路由锁。
+                await asyncio.wait_for(writer.wait_closed(), timeout=timeout)
+            except (OSError, RuntimeError, TimeoutError):
+                writer.transport.abort()
 
 
 async def resolve_web_proxy(settings: Settings) -> str | None:

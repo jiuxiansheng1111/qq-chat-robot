@@ -138,6 +138,7 @@ try {
     $env:PYTHONNOUSERSITE = '1'
     $env:PYTHONUTF8 = '1'
     $env:PYTHONUNBUFFERED = '1'
+    $env:PYTHONFAULTHANDLER = '1'
     Invoke-AstrbotLoggedCommand -FilePath $toolPythonPath -ArgumentList @($configureScript) `
         -WorkingDirectory $layout.ProjectRoot -LogPrefix 'configure-astrbot' -LogDirectory $layout.Logs | Out-Null
 

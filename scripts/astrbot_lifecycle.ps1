@@ -316,6 +316,38 @@ function Get-AstrbotRecoveryDecision {
     return 'wait'
 }
 
+function New-AstrbotListenerWatch {
+    param($Layout)
+    $state = Read-AstrbotRunState -Path (Join-Path $Layout.Root 'astrbot-owned-run.json') `
+        -Layout $Layout -AstrBotVersion '4.28.2' -Port 6185
+    if (-not $state -or $state.Phase -cne 'running') { return $null }
+    $launcherPath = Join-Path $Layout.UvToolBin 'astrbot.exe'
+    $toolPythonPath = Join-Path $Layout.UvToolDir 'astrbot\Scripts\python.exe'
+    $managedPythonPath = Get-ManagedPythonPath -Layout $Layout
+    Assert-StatePaths -State $state -LauncherPath $launcherPath -ToolPythonPath $toolPythonPath `
+        -ManagedPythonPath $managedPythonPath
+    $identity = Get-StateIdentity -State $state -Kind 'managed-python'
+    if (-not (Test-AstrbotRecordedIdentity -Identity $identity -LauncherPath $launcherPath `
+        -ToolPythonPath $toolPythonPath -ManagedPythonPath $managedPythonPath -Port 6185)) { return $null }
+    $process = Get-Process -Id $identity.ProcessId -ErrorAction Stop
+    try {
+        # Retain this exact Windows handle, so exit status remains available after the PID disappears.
+        $null = $process.Handle
+        $created = [datetime]::Parse($identity.CreatedUtc).ToUniversalTime()
+        if (-not $process.Path.Equals($identity.ExecutablePath, [StringComparison]::OrdinalIgnoreCase) -or
+            [math]::Abs(($process.StartTime.ToUniversalTime() - $created).TotalSeconds) -gt 2) {
+            throw 'AstrBot listener identity changed while opening the exit watch.'
+        }
+        return [pscustomobject]@{ Process = $process; Identity = $identity }
+    } catch { $process.Dispose(); throw }
+}
+
+function Get-AstrbotExitDescription {
+    param([int]$ExitCode)
+    $unsigned = [BitConverter]::ToUInt32([BitConverter]::GetBytes($ExitCode), 0)
+    return "ExitCode=$ExitCode (0x$($unsigned.ToString('X8')))"
+}
+
 function Start-AstrbotSupervisor {
     param([string]$ProjectRoot)
     $mutex = New-AstrbotMutex -ProjectRoot $ProjectRoot -Purpose 'Supervisor'
