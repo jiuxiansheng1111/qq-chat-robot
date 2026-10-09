@@ -210,6 +210,8 @@ data\singing\runtime\.venv\Scripts\python.exe .\scripts\train_singing_voices.py 
 
 完整歌按停顿或歌词换句位置分段，`SINGING_CHUNK_SECONDS` 默认且最高 115 秒，生成一段就发一段。本地完整混音供回听。最近 5 份结果、实际参考音频、短人声对照和质量报告保存在 `data/singing/results/`；其它中间文件会清理。
 
+Windows 翻唱启动前要求至少 4 GiB 可用物理内存，运行中至少保留 1.5 GiB，系统提交量达到 85% 时也会停止本次任务。资源保护提示表示检测值触及保护线，不等于模型已经发生内存溢出。提示会给出当前数值；日志中的 `singing_resource_guard` 记录触发原因、命令阶段、物理内存和提交量，`singing job stopped` 记录任务编号及业务阶段。AstrBot 模式下查看 `data/astrbot/logs/astrbot-service.stderr.log`。这项保护检查资源读数，不读取代理配置；开启代理后重试成功不能单独证明内存问题由代理引起。
+
 本地训练需要 RTX 4060 笔记本的 CUDA 环境，实际耗时随模型缓存、批次和音频时长变化。Seed-VC 仓库的 T4 100 步速度仅是上游参考，不能视为本机训练时间保证。
 
 ## 上游

@@ -3096,6 +3096,10 @@ async def _run_singing_job(
     except asyncio.CancelledError:
         raise
     except (SingingPipelineError, SingingSourceError) as exc:
+        logger.warning(
+            "singing job stopped id=%s stage=%s error_type=%s reason=%s",
+            job.id, job.progress, type(exc).__name__, str(exc),
+        )
         message = str(exc)
         if delivered:
             message += f"（已发送 {delivered} 段）"

@@ -117,7 +117,11 @@ class SingingPipelineError(RuntimeError):
 
 async def run_audio_command(args, *, cwd=None, timeout_seconds=120.0) -> str:
     """翻唱子进程按两线程运行，内存紧张时取消本次生成。"""
-    issue = singing_resource_problem(PROJECT_ROOT)
+    if not args:
+        raise ValueError("args must be nonempty")
+    command = args[1] if len(args) > 1 and str(args[1]).endswith(".py") else args[0]
+    stage = Path(command).stem
+    issue = singing_resource_problem(PROJECT_ROOT, stage=stage)
     if issue:
         raise SingingPipelineError(issue)
     environment = dict(os.environ)
@@ -133,7 +137,7 @@ async def run_audio_command(args, *, cwd=None, timeout_seconds=120.0) -> str:
             done, _ = await asyncio.wait({task}, timeout=1)
             if done:
                 return await task
-            issue = singing_resource_problem(PROJECT_ROOT)
+            issue = singing_resource_problem(PROJECT_ROOT, stage=stage)
             if issue:
                 raise SingingPipelineError(issue)
     finally:
@@ -908,7 +912,7 @@ async def generate_singing_cover(
 ) -> SingingCover:
     """训练和翻唱轮流用显卡，避免同时生成时爆显存。"""
     async with async_gpu_lock():
-        issue = singing_resource_problem(PROJECT_ROOT, starting=True)
+        issue = singing_resource_problem(PROJECT_ROOT, starting=True, stage="startup")
         if issue:
             raise SingingPipelineError(issue)
         return await _generate_singing_cover_unlocked(
