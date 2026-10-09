@@ -6,8 +6,12 @@ $taskName = "QQChatRobot API"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'bot_runtime_mode.ps1')
 if ((Get-QQChatRobotRuntime -ProjectRoot $projectRoot) -eq 'astrbot') {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'run_astrbot.ps1')
-    exit $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    . (Join-Path $PSScriptRoot 'astrbot_windows_common.ps1')
+    . (Join-Path $PSScriptRoot 'astrbot_process.ps1')
+    . (Join-Path $PSScriptRoot 'astrbot_lifecycle.ps1')
+    Start-AstrbotSupervisor -ProjectRoot $projectRoot
+    exit 0
 }
 
 $logRoot = Join-Path $projectRoot "logs"

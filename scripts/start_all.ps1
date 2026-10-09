@@ -555,6 +555,11 @@ try {
         }
         Write-Host '[READY] AstrBot 面板已就绪：http://127.0.0.1:6185' -ForegroundColor Green
         Write-Host '[READY] AstrBot OneBot 反向 WS 已就绪：127.0.0.1:6199' -ForegroundColor Green
+        . (Join-Path $PSScriptRoot 'astrbot_windows_common.ps1')
+        . (Join-Path $PSScriptRoot 'astrbot_process.ps1')
+        . (Join-Path $PSScriptRoot 'astrbot_lifecycle.ps1')
+        Start-AstrbotSupervisor -ProjectRoot $projectRoot
+        Write-Host '[READY] AstrBot 自动恢复监控已启动。' -ForegroundColor Green
 
         # QQ 登录后，检查它是否还在向旧端口上报消息。
         $napcatConnectionScript = Join-Path $PSScriptRoot 'connect_astrbot_qq.py'

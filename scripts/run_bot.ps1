@@ -11,7 +11,7 @@ $ErrorActionPreference = "Continue"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'bot_runtime_mode.ps1')
 if ((Get-QQChatRobotRuntime -ProjectRoot $projectRoot) -eq 'astrbot') {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'run_astrbot.ps1')
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'supervise_astrbot.ps1')
     exit $LASTEXITCODE
 }
 

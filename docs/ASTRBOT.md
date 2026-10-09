@@ -52,7 +52,7 @@ scripts\run_astrbot.ps1
 scripts\run_astrbot.ps1 -Stop
 ```
 
-启动器核对启动器、虚拟环境 Python、实际监听 Python 的父子关系、路径和启动时间，把归属记录放在 `data/astrbot/astrbot-owned-run.json`。重复启动会复用已有实例，其他进程占用端口时会报错。启动时会调用 `scripts/start_netease_member.ps1 -Port 3010`，不打开登录页；已有 GPT-SoVITS 进程保持运行。它不会启动 NapCat、旧 Uvicorn 或旧生命周期看门狗。停止 AstrBot 时只处理已验证的 AstrBot 进程，不按端口误杀其他服务。
+启动器核对启动器、虚拟环境 Python、实际监听 Python 的父子关系、路径和启动时间，把归属记录放在 `data/astrbot/astrbot-owned-run.json`。重复启动会复用已有实例，其他进程占用端口时会报错。启动时会调用 `scripts/start_netease_member.ps1 -Port 3010`，不打开登录页；已有 GPT-SoVITS 进程保持运行。启动后会保持一个 AstrBot 守护进程。停止 AstrBot 时只处理已验证的 AstrBot 进程，不按端口误杀其他服务。
 
 切换成功后，`data/astrbot/active-mode.txt` 记录为 `astrbot`，原来的 `start_all.ps1`、`run_bot.ps1` 和恢复检查也会启动 AstrBot。回退时先恢复 NapCat 备份、停用 AstrBot QQ 平台，再将此文件改为 `fastapi`，启动旧入口。
 
@@ -126,7 +126,21 @@ NapCat 切换到 AstrBot 后，不要再把相同 OneBot 消息转发到旧 `/on
 - 语音启动失败会显示警告，已经启动的 AstrBot 继续运行。
 - 启动日志在本地 `data/logs/`，AstrBot 日志在 `data/astrbot/logs/`，均不提交到 GitHub。
 
-QQ 日志出现 `ECONNREFUSED 127.0.0.1:6199` 时，说明当时 AstrBot 尚未监听该端口。重新双击启动入口，看到 6199 就绪后，QQ 会自动重连。
+QQ 日志出现 `ECONNREFUSED 127.0.0.1:6199` 时，说明当时 AstrBot 尚未监听该端口。此端口是本机 AstrBot 的 QQ 消息入口，与外网代理端口不同。守护进程每轮检查后等待 10 秒：进程退出时自动重新启动；面板不响应或已启用的 QQ 平台缺少 6199 监听持续 60 秒时，核对归属后重启。NapCat 会自动重连。QQ 平台主动关闭时不要求监听 6199。连续启动失败或频繁退出会增加重试间隔，最高 5 分钟。
+
+Windows 登录自启动和守护进程自身的恢复需要安装计划任务：
+
+```powershell
+scripts\install_autostart.ps1
+```
+
+该脚本按当前项目目录注册并启用 `QQChatRobot API` 和 `QQChatRobot Health Check`，覆盖旧目录的任务入口。主任务登录后常驻，运行时间不限；恢复任务每分钟检查守护进程。反复启动、一键启动、恢复检查与计划任务之间使用项目独立的互斥锁，保留一个守护进程和一个 AstrBot 实例。
+
+`scripts\run_astrbot.ps1 -Stop` 会保存本机 `data/astrbot/manual-stop.json`，暂停自动拉起，重登 Windows 后也保留。再次执行 `scripts\run_astrbot.ps1` 或双击启动入口恢复运行。维护重启可执行 `scripts\run_astrbot.ps1 -Restart`。`-Recovery` 供守护程序使用，会遵守手动停止标记。
+
+恢复记录保存在 `data/astrbot/logs/astrbot-supervisor.log`。下次启动前，旧标准输出和错误日志会移到 `data/astrbot/logs/archive/`，旧进程身份记录也会归档；每次恢复命令使用独立的时间戳日志。启动失败、端口被其他程序占用或配置不可读取时会记录原因，保留原有进程。日志仅保存在本机；需要清理磁盘空间时可在排查结束后手动删除旧归档。
+
+这些机制用于恢复已识别的进程退出和持续失去响应。遇到安装文件缺失、端口冲突或 Windows 未登录时，需要先解决对应条件。查看最后一条恢复记录可确定具体原因。
 
 统一菜单保留原业务和图鉴，并显示当前会话可用的 AstrBot 原生命令、已启用插件命令。向机器人请求“帮助”或“菜单”发送图片；请求“文字版菜单”发送文字。不同平台和权限看到的命令可能不同。
 

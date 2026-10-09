@@ -287,7 +287,7 @@ Windows 一键启动 NapCatQQ Desktop、OneBot 和 FastAPI：
 安装机器人开机自启.bat
 ```
 
-它会注册并立即运行 `QQChatRobot API` 计划任务，登录 Windows 后自动启动生命周期守护脚本；只有 NapCat/OneBot 可用时才启动并守护 8000 服务，NapCat 关闭时会一并停止 Uvicorn；同时注册每分钟检查一次的 `QQChatRobot Health Check`，主守护任务意外退出时也会自动拉起。
+它会按当前项目目录注册、启用并立即运行 `QQChatRobot API` 计划任务，登录 Windows 后自动启动当前运行模式的守护脚本；同时注册每分钟检查一次的 `QQChatRobot Health Check`，主守护进程意外退出时也会自动拉起。AstrBot 模式会监控进程身份、6185 面板响应和已启用的 QQ 6199 端口，并在异常退出后自动恢复；`scripts\run_astrbot.ps1 -Stop` 会暂停自动恢复，再次启动恢复运行。详情和日志位置见 [AstrBot 连接恢复说明](docs/ASTRBOT.md#一键启动与连接恢复)。FastAPI 模式仍在 NapCat/OneBot 可用时守护 8000 服务，NapCat 关闭后停止 Uvicorn。
 NapCat/QQ 因可能需要登录确认，仍使用 `start-qq-chatrobot.bat` 启动。
 
 一键脚本会读取 `.env` 中的 `ONEBOT_SELF_ID`，检查端口避免重复启动 NapCat，并优先启动默认安装位置的 NapCatQQ Desktop：

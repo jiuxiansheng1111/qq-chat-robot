@@ -9,6 +9,10 @@ $taskName = "QQChatRobot API"
 $healthRunner = Join-Path $PSScriptRoot "check_bot_task.ps1"
 $hiddenHealthRunner = Join-Path $PSScriptRoot "check_bot_task_hidden.vbs"
 $healthTaskName = "QQChatRobot Health Check"
+. (Join-Path $PSScriptRoot 'bot_runtime_mode.ps1')
+$runtime = Get-QQChatRobotRuntime -ProjectRoot $projectRoot
+$principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) `
+    -LogonType Interactive -RunLevel Limited
 
 if (-not (Test-Path -LiteralPath $runner)) {
     throw "Bot runner not found: $runner"
@@ -31,14 +35,17 @@ $taskSettings = New-ScheduledTaskSettingsSet `
     -DontStopIfGoingOnBatteries `
     -ExecutionTimeLimit ([TimeSpan]::Zero) `
     -RestartCount 999 `
-    -RestartInterval (New-TimeSpan -Minutes 1)
+    -RestartInterval (New-TimeSpan -Minutes 1) `
+    -MultipleInstances IgnoreNew `
+    -StartWhenAvailable
 
 Register-ScheduledTask `
     -TaskName $taskName `
     -Action $action `
     -Trigger $trigger `
     -Settings $taskSettings `
-    -Description "Start and supervise the qq-chatrobot FastAPI service at user logon." `
+    -Principal $principal `
+    -Description "Supervise the selected qq-chatrobot runtime (AstrBot or FastAPI) at user logon." `
     -Force | Out-Null
 
 $healthArguments = '"{0}"' -f $hiddenHealthRunner
@@ -52,17 +59,24 @@ $healthSettings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -ExecutionTimeLimit (New-TimeSpan -Minutes 1) `
-    -StartWhenAvailable
+    -StartWhenAvailable `
+    -MultipleInstances IgnoreNew
 
 Register-ScheduledTask `
     -TaskName $healthTaskName `
     -Action $healthAction `
     -Trigger $healthTrigger `
     -Settings $healthSettings `
-    -Description "Restart the qq-chatrobot supervisor if its local health endpoint is unavailable." `
+    -Principal $principal `
+    -Description "Restore the selected qq-chatrobot supervisor every minute, respecting intentional AstrBot stops." `
     -Force | Out-Null
 
 Start-ScheduledTask -TaskName $taskName
 Write-Host "Installed and started scheduled task: $taskName" -ForegroundColor Green
 Write-Host "Installed recovery task: $healthTaskName" -ForegroundColor Green
-Write-Host "Health URL: http://127.0.0.1:8000/health/ready"
+if ($runtime -eq 'astrbot') {
+    Write-Host 'AstrBot monitor: process identity, dashboard 6185 and enabled QQ adapter 6199.'
+    Write-Host 'Supervisor log: data/astrbot/logs/astrbot-supervisor.log'
+} else {
+    Write-Host "Health URL: http://127.0.0.1:8000/health/ready"
+}

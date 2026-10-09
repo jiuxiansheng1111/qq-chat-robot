@@ -307,15 +307,27 @@ function Invoke-AstrbotLoggedCommand {
         [Parameter(Mandatory = $true)][string[]]$ArgumentList,
         [Parameter(Mandatory = $true)][string]$WorkingDirectory,
         [Parameter(Mandatory = $true)][string]$LogPrefix,
-        [string]$LogDirectory
+        [string]$LogDirectory,
+        [int]$TimeoutSeconds = 0
     )
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
     if (-not $LogDirectory) { $LogDirectory = $WorkingDirectory }
     $stdoutPath = Join-Path $LogDirectory ("$LogPrefix-$stamp.stdout.log")
     $stderrPath = Join-Path $LogDirectory ("$LogPrefix-$stamp.stderr.log")
     $nativeArguments = @($ArgumentList | ForEach-Object { ConvertTo-AstrbotWindowsArgument -Value $_ }) -join ' '
-    $process = Start-Process -FilePath $FilePath -ArgumentList $nativeArguments -WorkingDirectory $WorkingDirectory `
-        -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru -Wait -WindowStyle Hidden
+    if ($TimeoutSeconds -le 0) {
+        $process = Start-Process -FilePath $FilePath -ArgumentList $nativeArguments -WorkingDirectory $WorkingDirectory `
+            -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru -Wait -WindowStyle Hidden
+    } else {
+        $process = Start-Process -FilePath $FilePath -ArgumentList $nativeArguments -WorkingDirectory $WorkingDirectory `
+            -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru -WindowStyle Hidden
+        # Cache the handle before waiting: PowerShell 5.1 can otherwise lose the child's exit code.
+        $processHandle = $process.Handle
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            $process.Kill()
+            throw "命令超时（${TimeoutSeconds}s），日志：$stdoutPath、$stderrPath"
+        }
+    }
     if ($process.ExitCode -ne 0) {
         throw "命令失败（退出码 $($process.ExitCode)），日志：$stdoutPath、$stderrPath"
     }
