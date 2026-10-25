@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": "90b5c9a573861a17",
+      "title": "雀魂四麻复盘教练提示词",
+      "kind": "prompt",
+      "status": "verified",
+      "file": "prompts/mahjong_coach.md",
+      "sha256": "b65311f726edd09dfc3de4fa1bb76a6115964bea9591f81349c8ba30db8634e9",
+      "source": "主对话授权提供正文；2026-10-25；非视频摘要，非成功Library下载",
+      "verified_by": "主对话核对并提供；本地牌形另有测试",
+      "timecodes": []
+    },
+    {
+      "id": "5e0d18964b0ac95d",
+      "title": "日麻攻防与场况本地解析",
+      "kind": "teaching",
+      "status": "verified",
+      "file": "docs/mahjong/LOCAL_GUIDE.md",
+      "sha256": "5473cb588f161ec08afc3d9371493a3dc88af42cbfbcc0ecfb5698cac7268c32",
+      "source": "主对话核验并直接提供的独立主题教材；2026-10-25；文字版；外链仅附录",
+      "verified_by": "主对话字幕/画面与共通牌理核对；本地整手形状另有测试",
+      "timecodes": []
+    }
+  ],
+  "hash_normalization": "UTF-8 bytes; CRLF normalized to LF"
+}

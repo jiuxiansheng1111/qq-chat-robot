@@ -3220,6 +3220,9 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
         return {"ok": True, "ignored": True}
 
     text = message_text(event)
+    from app.services.mahjong.intent import prepare_event_text
+
+    text = prepare_event_text(event, text, request.app.state)
     addressed = bool(event.get("wechat_private") or bot_mentioned(event) or text.startswith("/"))
     story_request = parse_story_request(text) if addressed else None
     music_action = parse_music_action(text) if not story_request else None
@@ -3227,7 +3230,9 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
         "select", "lyrics_candidate", "cancel",
     }:
         music_action = None
-    direct_request = story_request is not None or music_action is not None
+    review_spec, _ = registry.resolve(text)
+    mahjong_request = review_spec is not None and review_spec.name == "mahjong_review"
+    direct_request = story_request is not None or music_action is not None or mahjong_request
     if not direct_request:
         if bot_mentioned(event) or text.startswith("/"):
             text = normalize_menu_intent(text)

@@ -3,8 +3,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from app.plugins.mahjong import handle_mahjong
 from app.services.anime_character import ANIME_CHARACTER_ROSTER
 from app.services.character_catalog import character_catalog_menu
+from app.services.mahjong.intent import normalize_intent
 from app.services.ultraman import ULTRAMAN_ROSTER
 
 PluginHandler = Callable[[Any], Awaitable[str | None]]
@@ -36,6 +38,9 @@ class PluginRegistry:
         for command, name in self._aliases.items():
             if text.startswith(command + " "):
                 return self._plugins[name], text[len(command) :].strip()
+        normalized = normalize_intent(text)
+        if normalized and normalized != text:
+            return self.resolve(normalized)
         return None, ""
 
     async def dispatch(self, text: str, context: Any) -> tuple[str, str | None] | None:
@@ -77,6 +82,7 @@ class PluginRegistry:
             "│\n"
             "│  🖼️ 随机图片｜@我 随机猫咪 / @我 随机猪猪 / @我 随机奶龙\n"
             "│  🌐 翻译与联网｜@我 翻译 外语内容 / @我 搜索 关键词\n"
+            "│  🀄 赛后复盘｜@我 /牌谱分析（四麻；详情按请求展开）\n"
             "│  🎵 点歌｜@我 点歌 歌名\n"
             "│  🎤 角色翻唱｜@我 唱歌 歌名 / 翻唱 芳乃 歌名\n"
             "│  唱歌状态 / 取消唱歌 / 唱歌音色（需@）\n"
@@ -94,6 +100,14 @@ class PluginRegistry:
 
 
 registry = PluginRegistry()
+registry.register(
+    PluginSpec(
+        "mahjong_review",
+        ("/牌谱分析", "牌谱分析", "/雀魂复盘", "雀魂复盘"),
+        "雀魂四麻赛后复盘：本地导出JSON/mjai、开局座位、东风/半庄；先摘要后详情",
+        handler=handle_mahjong,
+    )
+)
 registry.register(PluginSpec("help", ("/help", "/帮助", "help", "帮助"), "/help —— 查看帮助"))
 registry.register(
     PluginSpec(

@@ -46,7 +46,7 @@ def test_casual_text_does_not_request_menu(text):
 def test_image_menu_covers_chart_and_cover_modes():
     groups = {heading: lines for heading, lines, _ in help_menu._IMAGE_GROUPS}
     assert set(groups) == {
-        "聊天陪伴", "语音翻唱", "点歌视频", "实用工具", "互动小游戏", "管理"
+        "聊天陪伴", "语音翻唱", "点歌视频", "实用工具", "互动小游戏", "雀魂牌谱分析", "管理"
     }
     assert all(len(lines) <= 3 for lines in groups.values())
     assert any("图鉴" in line and "角色图鉴" in line for line in groups["互动小游戏"])
@@ -122,7 +122,7 @@ async def test_render_help_menu_returns_cached_onebot_png(tmp_path, monkeypatch)
     monkeypatch.setattr(help_menu, "_PROJECT_ROOT", tmp_path)
     render_calls = []
 
-    def draw(background):
+    def draw(background, *_render_options):
         render_calls.append(background)
         return Image.new("RGB", (1080, 1480), (244, 248, 246))
 
