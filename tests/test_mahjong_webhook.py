@@ -1,5 +1,6 @@
 """Real application dispatch with mocked QQ output; not an online QQ E2E test."""
 
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -11,6 +12,31 @@ from app.main import app, settings
 def test_full_webhook_at_followup_attachment_permissions_and_duplicate(tmp_path, monkeypatch):
     import app.main as core
     import app.plugins.mahjong as plugin
+    from app.services.mahjong import ai_coach as ai
+
+    ai_calls = []
+
+    class MockPinnedCoach:
+        async def explain(self, messages):
+            data = json.loads(messages[1]["content"])
+            ai_calls.append(data)
+            candidates = data["program_calculated_candidates"]
+            return json.dumps({
+                "comparisons": [{"candidate": c["candidate"], "benefit": "保留改良空间",
+                                 "cost": "仍需支付推进风险", "change_when": "遇到立直重新评估"}
+                                for c in candidates],
+                "preferred": candidates[0]["candidate"], "reason": "兼顾速度与退路",
+                "uncertainty": "对手进度无法确认",
+            })
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(ai, "ZhipuCoach", lambda _: MockPinnedCoach())
+    monkeypatch.setattr(settings, "llm_provider", "zhipu")
+    monkeypatch.setattr(settings, "llm_base_url", "https://open.bigmodel.cn/api/paas/v4")
+    monkeypatch.setattr(settings, "llm_api_key", "offline-test-key")
+    monkeypatch.setattr(settings, "llm_model", "glm-4-flash-250414")
 
     monkeypatch.setattr(settings, "database_path", str(tmp_path / "review.db"))
     monkeypatch.setattr(settings, "onebot_api_base", "")
@@ -66,6 +92,8 @@ def test_full_webhook_at_followup_attachment_permissions_and_duplicate(tmp_path,
         assert len(store.jobs) == 1
         result = next(iter(store.jobs.values()))[2]
         assert result.coach_prompt_sha256 and result.coach_context
+        assert result.coaching.completed == len(ai_calls) == ai.MAX_NODES
+        assert "智谱AI已生成" in output.call_args.args[1]
         assert "本地主题教材" in output.call_args.args[1]
         assert client.app.state.llm.ask.await_count == 0
         assert activity.await_count == 0
@@ -75,6 +103,7 @@ def test_full_webhook_at_followup_attachment_permissions_and_duplicate(tmp_path,
             == "duplicate_event"
         )
         assert output.await_count == before and len(store.jobs) == 1
+        assert len(ai_calls) == ai.MAX_NODES
         client.portal.call(client.app.state.db.set_group_enabled, "disabled", False)
         disabled = event(
             "分析牌谱 座位=北 赛制=半庄 文件=game.json", "mahjong-disabled", group="disabled"

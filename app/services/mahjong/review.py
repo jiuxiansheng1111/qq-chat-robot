@@ -6,6 +6,7 @@ import hashlib
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from app.services.mahjong.ai_coach import CoachRun, coach_status, node_coaching
 from app.services.mahjong.analysis import (
     Decision,
     LocalStrategyEngine,
@@ -27,6 +28,7 @@ class Review:
     sources: tuple[KnowledgeSource, ...] = ()
     coach_prompt_sha256: str | None = None
     coach_context: tuple[dict[str, str], ...] = ()
+    coaching: CoachRun | None = None
 
 
 def noten_payments(tenpai: tuple[bool, ...], pool: int = 3000) -> tuple[int, ...]:
@@ -281,11 +283,12 @@ def markdown(result: Review) -> str:
     lines.append(
         "专业教练MD与本地主题教材："
         + (
-            f"已读取并构建隔离上下文；提示词SHA256 {result.coach_prompt_sha256}。当前使用规则基线，没有调用外部AI。"
+            f"已读取并构建隔离上下文；提示词SHA256 {result.coach_prompt_sha256}。"
             if result.coach_prompt_sha256
             else "未加载成功，当前仅有形状规则计算，不能声称已调用教练知识。"
         )
     )
+    lines.append(coach_status(result.coaching))
     if analysis.engine_metadata:
         lines.append("可选本地引擎元数据（未声称校准）：" + _cell(asdict(analysis.engine_metadata)))
     else:
@@ -295,6 +298,8 @@ def markdown(result: Review) -> str:
     lines.append("## 关键节点与逐巡检查｜仅当时可见信息")
     for number, decision in enumerate(analysis.decisions, 1):
         lines.append(decision_markdown(decision, number, sources=result.sources))
+        if result.coaching is not None:
+            lines.append(node_coaching(result.coaching, number, decision))
     lines.extend(
         [
             "## 流局与结算检查／事后全知解释｜不参与决策评分",
@@ -333,10 +338,11 @@ def summary(result: Review, job_id: str) -> str:
         + "\n"
         "方法：向听/可见形状进张的规则基线；无策略权重，不输出胜率或放铳率。决策与事后暗牌已隔离。\n"
         + (
-            "专业教练MD和本地主题教材已读取；无外部AI调用。\n"
+            "专业教练MD和本地主题教材已读取。\n"
             if result.coach_prompt_sha256
             else "教练/教材MD未加载，已降级为纯规则计算。\n"
         )
+        + coach_status(result.coaching) + "\n"
         + f"展开：/牌谱分析 详情 {job_id} 1；分页追加页码；导出：/牌谱分析 导出 {job_id}\n"
         "牌谱为片段时仅分析片段；完整计分与全部平台细则尚未实现。"
     )
@@ -378,7 +384,9 @@ def brief_decision(result: Review, number: int, page: int) -> str:
     lines.extend(
         [
             "未见枚数不是概率；形状待牌还须核验役与振听。顺位取舍须结合本场供托、直击/自摸及终局条件。",
-            "完整候选、流局条件收益、转折条件与事后验证见本地导出；本页是短摘要，无外部AI调用。",
+            "完整候选、流局条件收益、转折条件与事后验证见本地导出；本页是短摘要。",
         ]
     )
+    if page == 1 and result.coaching is not None:
+        lines.append(node_coaching(result.coaching, number, decision, compact=True))
     return "\n".join(lines)

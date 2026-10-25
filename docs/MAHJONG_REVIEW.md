@@ -1,6 +1,6 @@
 # 雀魂四麻本地文字复盘
 
-本功能接入现有 `app.main` 消息分发和插件注册，不替换角色、不改变其他功能。默认是可解释规则基线，没有训练策略模型，没有策略权重，不调用外部LLM，不上传牌谱。系统提示词与主题教材会实际读取、检查SHA256并构建只含当时视角的教练上下文；读不到时明确降级，不假称调用成功。
+本功能接入现有 `app.main` 消息分发和插件注册，不替换角色、不改变其他功能。计算采用透明规则基线，没有训练策略模型或策略权重。用户明确授权后，触发复盘时可把脱敏的当时局面、计算候选和相关本地教材发给智谱生成节点解释；原始牌谱不上传。系统提示词与主题教材实际读取并检查SHA256；缺配置、关闭、路由不符或调用失败时明确退回本地版，不假称AI调用成功。
 
 ## 使用
 
@@ -21,6 +21,7 @@
 ```text
 帮我分析牌谱 座位=北 赛制=半庄 文件=sample-rinshan.json
 /牌谱分析 座位=3 赛制=半庄 文件=sample-rinshan.json
+/牌谱分析 AI=关闭 座位=3 赛制=半庄 文件=sample-rinshan.json
 /牌谱分析 详情 <复盘ID> 1
 /牌谱分析 详情 <复盘ID> 1 2
 /牌谱分析 导出 <复盘ID>
@@ -57,7 +58,17 @@
 - 主教材：`docs/mahjong/LOCAL_GUIDE.md`，独立主题文字，完整牌形例、适用条件和反例都在正文；来源只在附录，读取不联网。《长期意识》按用户要求暂缓。
 - 专业教练补充：`prompts/mahjong_coach.md`，与原角色语气分工，不覆盖原角色文件。
 - 追溯索引：`docs/mahjong/knowledge/index.json`，含内容哈希、来源、核验状态与核验说明。
-- `coach.coach_request`构建系统提示及当时可见JSON+本地主题片段；原始牌谱字段不会成为系统指令。没有自动接入云端AI；合法本地模型可以通过 `LocalStrategyEngine` 的只读时点接口由程序显式注入，需提供版本、权重SHA256、许可证和目标，未声称其已校准。动作偏好不能称作胜率。
+- `coach.coach_request`保留本地上下文构建。实际云端教练使用 `ai_coach.build_request` 的显式字段白名单，逐节点构建独立请求，不直接序列化整个Review/DecisionView，也不发送通用聊天历史或原角色私人记忆。合法本地策略模型仍可通过 `LocalStrategyEngine` 注入，须有版本、权重SHA256、许可证和目标，动作偏好不能称为胜率。
+
+## 智谱接收方与调用边界
+
+仅在用户明确触发且资料通过校验后调用。默认开启，可在同义请求或命令中加 `AI=关闭`；本地CLI始终离线，不会自动调用模型。复用现有 `llm_api_key`、`llm_model`、`llm_base_url` 配置，不创建或改写凭据。只接受配置主提供方为zhipu、HTTPS主机严格为 `open.bigmodel.cn`、标准 `/api/paas/v4` 路径。请求固定到该主机的 `/chat/completions`，每节点重新校验，TLS验证开启，不跟随重定向；独立HTTP客户端不继承环境代理，不使用通用聊天管理器、Groq备用或AstrBot动态路由，也不修改它们的配置。无法验证接收方就本地回退。
+
+外发字段只有本人当时手牌与摸牌、公开牌河/副露/立直/宝牌指示牌、四家点数、本场供托、公开剩余张数、局数座位、程序算出的候选形状结果、实际动作编号及最多三个本地教学段落和教练提示词。没有QQ号、昵称、群号、原分享ID、文件名、原始Replay、他家暗手、未来牌序、实际终局或事后解释。公开资料按每个DecisionView时点截断；复盘其他节点的消息不拼进当前请求。模型不能访问工具或自动抓取来源链接。
+
+预算：每次复盘取前四个已有关键节点；无关键节点时仅取首个。每节点最多六个候选，保留实际、形状基线和可用防守候选，其他候选在完整本地报告仍可查看。每节点输入最多26000字符、输出1500 tokens且解析后最多3500字符、HTTP响应最多32768字节；单节点8秒、整体36秒、请求并发1，不自动重试。原插件锁阻止同时处理多份牌谱；详情/导出只读取缓存，不重复消耗模型额度。未入预算或失败节点明确标为仅本地解释。
+
+AI返回只允许结构化定性优点、代价、转折条件、倾向候选与不确定性，数值、概率、绝对安全保证、额外事实字段或非法候选会被拒绝。程序候选表与建议冻结后不被模型覆盖；AI段明确标为教材解释/不确定推断，不当作确定计算或已校准引擎输出。模型仍可能有语义误判，人工需核对适用条件。报告分别标明成功节点、降级和预算范围；仅构建上下文不算调用成功。
 
 本机教材目前是文字版。Library官方helper已在下载后因Windows缺少 `os.setxattr` 失败，三张截图没有伪装成已入库；正文含全部必要文字复现且没有坏图。主对话另提供完整图文包。
 
@@ -75,11 +86,13 @@ python scripts/import_mahjong_knowledge.py docs/mahjong/LOCAL_GUIDE.md --title "
 
 ```powershell
 python scripts/review_mahjong.py tests/fixtures/mahjong/upstream/rinshan.json --seat 3 --match hanchan --output report.md --visible-json visible.json
-python scripts/test_mahjong_offline.py tests/test_mahjong_review.py tests/test_mahjong_imports.py tests/test_mahjong_webhook.py tests/test_plugins.py tests/test_astrbot_runtime.py tests/test_onebot_routing.py tests/test_webhook.py -q
+python scripts/test_mahjong_offline.py tests/test_mahjong_review.py tests/test_mahjong_imports.py tests/test_mahjong_ai.py tests/test_mahjong_menu.py tests/test_mahjong_webhook.py tests/test_plugins.py tests/test_astrbot_runtime.py tests/test_onebot_routing.py tests/test_webhook.py -q
 python -m ruff check app/services/mahjong app/plugins/mahjong.py scripts/review_mahjong.py scripts/import_mahjong_knowledge.py scripts/test_mahjong_offline.py tests/test_mahjong_review.py tests/test_mahjong_imports.py tests/test_mahjong_webhook.py
 ```
 
 测试脚本阻断真实socket连接，包含本机OneBot；仅允许Windows asyncio内部socketpair。若受限沙箱在socketpair初始化阻塞，应按既有授权在可创建内部socketpair的执行环境运行该离线脚本，不改系统网络。测试临时数据库和输出使用隔离目录，无真实QQ发送、云模型调用或雀魂账号登录。
+
+新增智谱用例使用HTTP mock或模型适配器mock，证明真实插件/OneBot消息分发能按节点调用并消费返回值、没有跨域或备用请求、资料与时点隔离、数字和提示注入防护、开关和异常降级。它们不等于真实智谱服务连通或质量验收；本轮没有发送真实用户牌谱或付费模型测试请求。
 
 真实图片菜单渲染测试需要系统中文字体（如微软雅黑或思源黑体）。缺少字体的环境会明确跳过该实绘制项，不能据此宣称已验证图片；文字菜单和其余回归仍执行。本机Windows已进行实际渲染、视觉检查和缓存失效测试。
 

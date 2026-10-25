@@ -22,6 +22,10 @@ def test_local_feature_menu_has_triggers_inputs_and_honest_link_limit():
         "mjai",
         "tenhou.net/6",
         "不能直接抓取解析",
+        "智谱匿名当时局面分析",
+        "open.bigmodel.cn",
+        "AI=关闭",
+        "不走其他模型备用",
     ):
         assert entry in text
     for original in ("角色图鉴", "今日奥特曼", "翻唱", "天气", "点歌"):

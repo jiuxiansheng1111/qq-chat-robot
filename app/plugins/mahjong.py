@@ -1,4 +1,4 @@
-"""QQ command adapter: bounded input, per-owner reports, summary-first, no LLM upload."""
+"""Bounded replay input, per-owner reports, and authorized recipient-pinned AI coaching."""
 
 from __future__ import annotations
 
@@ -8,8 +8,10 @@ import re
 import time
 import uuid
 from collections import OrderedDict
+from dataclasses import replace
 from pathlib import Path
 
+from app.services.mahjong.ai_coach import coach_decisions
 from app.services.mahjong.intent import complete_request
 from app.services.mahjong.records import (
     LinkNeedsExport,
@@ -23,12 +25,14 @@ from app.services.mahjong.records import (
 from app.services.mahjong.review import Review, brief_decision, markdown, review, summary
 
 HELP = (
-    "雀魂四麻牌谱复盘（本地规则基线）\n"
+    "雀魂四麻牌谱复盘（规则计算＋智谱匿名当时局面教学）\n"
     "/牌谱分析 座位=东 赛制=半庄 文件=sample.json\n"
     "或 /牌谱分析 座位=0 赛制=东风 JSON={...}\n"
     "座位是开局固定座位0东1南2西3北；支持标准mjai及tenhou.net/6兼容导出（内部格式仅供调试）。\n"
     "文件须先由本机放入项目data/mahjong/inbox；群消息不能读取任意本机路径或任意附件URL。\n"
-    "官方链接可校验，但原生解码未实现；不需要账号密码。群内只给摘要，详情按节点/页展开。"
+    "官方链接可校验，但原生解码未实现；不需要账号密码。群内只给摘要，详情按节点/页展开。\n"
+    "默认最多4个关键节点发智谱open.bigmodel.cn：脱敏当时局面、计算与相关本地教材；使用现有API额度。"
+    "不发QQ身份、原谱、暗手、未来或结局，不走备用；失败回本地。AI=关闭 可仅用本地规则版。"
 )
 
 
@@ -69,7 +73,7 @@ def _root(context) -> Path:
 
 def _arguments(text: str) -> tuple[int, str, str, str]:
     header, marker, body = text.partition(" JSON=")
-    matches = re.findall(r"(?:^|\s)(座位|赛制|文件|链接)=([^\s]+)", header)
+    matches = re.findall(r"(?:^|\s)(座位|赛制|文件|链接|AI)=([^\s]+)", header)
     params = dict(matches)
     if len(matches) != len(params):
         raise RecordError("参数重复，请只提供一个座位、赛制和输入")
@@ -141,6 +145,10 @@ async def handle_mahjong(context) -> str:
         if prompt:
             return prompt
         args = prepared
+        ai_option = re.search(r"(?:^|\s)AI=([^\s]+)", args.partition(" JSON=")[0])
+        if ai_option and ai_option[1] not in {"开启", "关闭"}:
+            raise RecordError("AI参数只支持 AI=开启 或 AI=关闭")
+        ai_enabled = ai_option is None or ai_option[1] == "开启"
         seat, match, kind, source = _arguments(args)
         if kind == "链接":
             import_link(source)
@@ -155,6 +163,10 @@ async def handle_mahjong(context) -> str:
             return "正在处理另一份牌谱，请稍后再试。"
         async with state.mahjong_review_lock:
             result = await asyncio.to_thread(review, replay, seat)
+            # Never call the mutable general chat manager, AstrBot provider, or its fallbacks.
+            configured = getattr(getattr(state, "llm", None), "settings", None)
+            coaching = await coach_decisions(result.analysis.decisions, configured, enabled=ai_enabled)
+            result = replace(result, coaching=coaching)
         job_id = store.put(owner, result)
         return summary(result, job_id)
     except (RecordError, LinkNeedsExport) as exc:

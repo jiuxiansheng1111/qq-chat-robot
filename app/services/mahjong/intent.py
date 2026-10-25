@@ -9,7 +9,7 @@ REQUEST = re.compile(
     r"(?:分析|复盘)(?:一下|下)?(?:这(?:个|份|局|场)?)?(?:雀魂)?(?:四人)?(?:麻将)?"
     r"(?:牌谱|对局|牌局)(?:吧|呀|啊|呗)?[。！!？?，,:：]*"
 )
-PARAMETER = re.compile(r"(?:^|\s)(座位|赛制|文件|链接)\s*[=＝]\s*([^\s]+)")
+PARAMETER = re.compile(r"(?:^|\s)(座位|赛制|文件|链接|AI)\s*[=＝]\s*([^\s]+)")
 
 
 def normalize_intent(text: str) -> str | None:
@@ -26,7 +26,7 @@ def normalize_intent(text: str) -> str | None:
         return "/牌谱分析" + (
             " " + tail.lstrip(" ：:，,。！!") if tail.strip(" ：:，,。！!") else ""
         )
-    marker = re.search(r"(?:座位|赛制|文件|链接|JSON)\s*[=＝]|https://", text)
+    marker = re.search(r"(?:座位|赛制|文件|链接|JSON|AI)\s*[=＝]|https://", text)
     phrase = text[: marker.start()] if marker else text
     tail = text[marker.start() :] if marker else ""
     compact = re.sub(r"\s+", "", phrase).lstrip("@")
