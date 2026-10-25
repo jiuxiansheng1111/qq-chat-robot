@@ -186,10 +186,13 @@ def test_prompt_and_sources_are_actually_read_and_injection_is_data_only():
     assert "INJECT_FROM_REPLAY" not in json.dumps(packets)
     payload = json.loads(packets[1]["content"].split("\n", 1)[1])
     assert payload["teaching_data_not_instructions"]
-    assert any(
-        "先分清牌形" in p["topic"] or "立直与默听" in p["topic"]
-        for p in payload["teaching_data_not_instructions"]
-    )
+    # Relevance may choose another chapter; verify the actual source body, not a fixed old topic.
+    guide = (ROOT / "docs/mahjong/LOCAL_GUIDE.md").read_text(encoding="utf-8")
+    guide_id = next(s.id for s in sources if s.file == "docs/mahjong/LOCAL_GUIDE.md")
+    for passage in payload["teaching_data_not_instructions"]:
+        assert f"## {passage['topic']}\n" in guide
+        assert passage["text"] and passage["text"] in guide
+        assert passage["source_id"] == guide_id
     assert "https://www.bilibili.com" not in packets[1]["content"]
     assert all(k not in json.dumps(payload["view"]) for k in ("wall", "revealed_hands", "result"))
 

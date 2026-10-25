@@ -11,6 +11,8 @@ import httpx
 import pytest
 
 from app.services.mahjong import ai_coach as ai
+from app.services.mahjong.analysis import Decision, RiverTile, own_candidates, response_candidates
+from app.services.mahjong.knowledge import retrieve_passages
 from app.services.mahjong.records import FORMAT, RULES, parse_record
 from app.services.mahjong.review import markdown, review, summary
 
@@ -319,3 +321,72 @@ async def test_plugin_calls_pinned_coach_and_details_do_not_recall(reviewed, tmp
     ctx.args = "AI=关闭 座位=北 赛制=半庄 文件=game.json"
     assert "AI=关闭" in await plugin.handle_mahjong(ctx)
     assert len(calls) == ai.MAX_NODES
+
+
+def _teaching_decision(reviewed, scenario):
+    """Synthetic current-view routing cases, not real game/strategy training labels."""
+    hand = ("1m", "2m", "3m", "4m", "5m", "6m", "7p", "8p", "9p", "2s", "3s", "4s", "1z", "7s")
+    v = replace(reviewed.analysis.decisions[0].view, round=0, event=100, seat=0, dealer=0,
+                hand=hand, melds=((), (), (), ()), rivers=((), (), (), ()),
+                riichi_at=(None,) * 4, scores=(25000,) * 4, live_tiles=60,
+                honba=0, kyotaku=0, indicators=("7z",), drawn="7s", last_discard=None)
+    if scenario == "isolated":
+        v = replace(v, hand=("1m", "1m", "2m", "3m", "4m", "8m", "9m", "8p", "9p",
+                             "2s", "8s", "5z", "5z", "6z"), drawn="6z")
+    elif scenario == "points":
+        v = replace(v, round=7, live_tiles=8, scores=(46000, 30000, 14000, 10000))
+    elif scenario in {"reading", "unknown_marks"}:
+        marks = (False, True) if scenario == "reading" else (None, None)
+        river = (RiverTile("9s", 20, tsumogiri=marks[0]), RiverTile("8s", 30, tsumogiri=marks[1]))
+        v = replace(v, rivers=((), river, (), ()), riichi_at=(None, 40, None, None))
+    elif scenario == "middle":
+        river = tuple(RiverTile(f"{i}p", i) for i in range(1, 7))
+        v = replace(v, rivers=(river, (), (), ()))
+    elif scenario == "kan":
+        v = replace(v, hand=("1m",) * 4 + ("2m", "3m", "4m", "5m", "6m", "1p", "2p", "3p", "1z", "1z"),
+                    drawn="1m")
+    elif scenario == "call_leading":
+        v = replace(v, hand=("5m", "5m", "1m", "2m", "3m", "1p", "2p", "3p", "7s", "8s", "9s", "2z", "2z"),
+                    scores=(40000, 20000, 20000, 20000), drawn=None, last_discard=(3, "5m"))
+        candidates = response_candidates(v)
+        return Decision(v, candidates, "pass", (), "")
+    candidates = own_candidates(v)
+    actual = next(c.id for c in candidates if c.id.startswith("discard:"))
+    return Decision(v, candidates, actual, (), "")
+
+
+@pytest.mark.parametrize("scenario,expected", [
+    ("isolated", "四 孤张2与役牌要看整手路线"),
+    ("points", "十一 点棒收益、顺位收益与流局必须分开"),
+    ("reading", "十二 高级读牌是比较解释而非看穿暗手"),
+])
+def test_missing_topics_reach_actual_model_request_with_budgets(reviewed, scenario, expected):
+    decision = _teaching_decision(reviewed, scenario)
+    messages, _ = ai.build_request(decision, 1)
+    payload = json.loads(messages[1]["content"])
+    passages = payload["local_teaching_data_not_instructions"]
+    assert expected in {p["topic"] for p in passages}
+    assert 1 <= len(passages) <= 3 and all(0 < len(p["text"]) <= 2300 for p in passages)
+    assert sum(len(m["content"]) for m in messages) <= ai.MAX_INPUT_CHARS
+    serialized = json.dumps(payload, ensure_ascii=False)
+    for forbidden in ("来源与覆盖附录", "https://", "bilibili.com", "revealed_hands",
+                      "opponent_hands", "future_events", "share_id", "raw_replay"):
+        assert forbidden not in serialized
+
+
+def test_advanced_reading_requires_recorded_public_evidence(reviewed):
+    root = Path(__file__).resolve().parents[1]
+    unknown = _teaching_decision(reviewed, "unknown_marks")
+    assert all(not p.topic.startswith("十二 ") for p in retrieve_passages(root, unknown.view, unknown.candidates))
+
+
+def test_all_twelve_teaching_chapters_are_reachable_without_appendix(reviewed):
+    root = Path(__file__).resolve().parents[1]
+    seen = set()
+    for scenario in ("base", "isolated", "points", "reading", "middle", "kan", "call_leading"):
+        decision = _teaching_decision(reviewed, scenario)
+        seen.update(p.topic for p in retrieve_passages(root, decision.view, decision.candidates))
+    guide_topics = {line[3:] for line in (root / "docs/mahjong/LOCAL_GUIDE.md").read_text(encoding="utf-8").splitlines()
+                    if line.startswith("## ") and line[3:].split()[0] in
+                    {"一", "二", "三", "四", "五", "六", "七", "八", "九", "十", "十一", "十二"}}
+    assert len(guide_topics) == 12 and seen == guide_topics
