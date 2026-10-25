@@ -2,6 +2,7 @@
 
 from types import SimpleNamespace
 
+import pytest
 from PIL import Image
 
 from app.services import help_menu
@@ -29,6 +30,10 @@ def test_local_feature_menu_has_triggers_inputs_and_honest_link_limit():
 
 async def test_real_menu_render_and_cache_invalidation(tmp_path, monkeypatch):
     monkeypatch.setattr(help_menu, "_PROJECT_ROOT", tmp_path)
+    try:
+        help_menu._find_font_path()
+    except RuntimeError as exc:
+        pytest.skip(f"真实菜单渲染需要本机中文字体，当前环境未提供：{exc}")
     settings = SimpleNamespace(help_menu_background_path=tmp_path / "none.png")
     first = await help_menu.prepare_help_menu_file(settings)
     with Image.open(first) as rendered:

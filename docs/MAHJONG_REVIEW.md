@@ -81,6 +81,8 @@ python -m ruff check app/services/mahjong app/plugins/mahjong.py scripts/review_
 
 测试脚本阻断真实socket连接，包含本机OneBot；仅允许Windows asyncio内部socketpair。若受限沙箱在socketpair初始化阻塞，应按既有授权在可创建内部socketpair的执行环境运行该离线脚本，不改系统网络。测试临时数据库和输出使用隔离目录，无真实QQ发送、云模型调用或雀魂账号登录。
 
+真实图片菜单渲染测试需要系统中文字体（如微软雅黑或思源黑体）。缺少字体的环境会明确跳过该实绘制项，不能据此宣称已验证图片；文字菜单和其余回归仍执行。本机Windows已进行实际渲染、视觉检查和缓存失效测试。
+
 真实格式fixtures来自mjai-reviewer上游Apache-2.0仓库；它们验证格式与重建，不是本用户真实雀魂端到端测试。`rinshan/chankan/four_reach`覆盖四座位；`ryukyoku`用于超出当前重建子集时拒绝的回归。详细归属见测试fixture目录说明。
 
 开发验收不部署、不重启在线进程、不发送真实QQ消息；在线进程不会因代码落盘自动启用新功能。Git提交与推送按用户后续明确授权仅包含本次功能、教材和菜单，不包含运行数据、凭据或其他用户改动。
