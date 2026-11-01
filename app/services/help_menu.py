@@ -22,9 +22,11 @@ _CANVAS_WIDTH = 1080
 _MIN_CANVAS_HEIGHT = 1480
 _MAX_ENCODED_BYTES = 4 * 1024 * 1024
 _MAX_MENU_JPEG_BYTES = 2 * 1024 * 1024
-_CACHE_VERSION = "help-menu-v4-mahjong-zhipu"
+_CACHE_VERSION = "help-menu-v8-majsoul-cards"
 _MENU_FILE_LOCK = threading.Lock()
 _MENU_TITLE = "聊天机器人 · 功能菜单"
+COMPACT_MENU_TITLE = "聊天机器人 · 常用菜单"
+COMPACT_MENU_SUBTITLE = "命令可不加 /；群里 @我 更稳"
 _IMAGE_MENU_SUBTITLE = "先 @我，再说想做什么；如“给我看看菜单”"
 _TEXT_MENU_SUBTITLE = "先 @我，再说想做什么。"
 _MENU_REQUEST_WORDS = (
@@ -77,7 +79,7 @@ _IMAGE_GROUPS = (
         (
             "@我 帮我分析牌谱 / 分析雀魂牌谱",
             "赛后牌谱＋座位；mjai / 天凤兼容 JSON",
-            "智谱匿名局面教练／本地回退；链接仅识别",
+            "连接雀魂账号后，链接读取整场；无需截图",
         ),
         (111, 145, 123),
     ),
@@ -105,7 +107,7 @@ _TEXT_GROUPS = (
             "“启动语音”“关闭语音”“语音状态”控制角色语音。",
             "“可用角色”查看角色；“选择角色 芳乃”切换角色。",
             "@我 翻唱片段 芳乃 歌名：约20秒。@我 翻唱完整 芳乃 歌名：整首分段发送，每段少于2分钟（上限115秒）。",
-            "“唱歌状态”查看进度，“取消唱歌”停止，“唱歌音色”查看可用音色。",
+            "“唱歌状态”查看进度，“暂停翻唱”或“取消唱歌”停止，“唱歌音色”查看可用音色。",
         ),
     ),
     (
@@ -140,9 +142,9 @@ _TEXT_GROUPS = (
             "@我 帮我分析牌谱 / 分析牌谱 / 分析雀魂牌谱；也可说“帮我分析一下这个对局”。",
             "提供已结束牌谱、本人开局固定座位和东风/半庄；缺资料会提示补充，不编造。",
             "支持本地标准 mjai JSON/JSONL 和 tenhou.net/6 天凤兼容 JSON；附件须有可信本地导出文件。",
-            "官方分享链接目前仅识别，不能直接抓取解析；无需账号密码，不上传原始牌谱。",
-            "默认群内给摘要；/牌谱分析 详情 复盘ID 节点号 [页码]；/牌谱分析 导出 复盘ID。",
-            "智谱匿名当时局面分析：open.bigmodel.cn，使用已有API额度；最多4节点，不走其他模型备用。",
+            "管理员在本机‘雀魂账号设置’连接账号后，官方链接读取整场；账号密码不要发到QQ。",
+            "逐局图文给具体切牌、保留牌和场况攻守；/牌谱分析 详情 复盘ID 节点号 [页码]；/牌谱分析 导出 复盘ID。",
+            "GPT-6 Luna 匿名当时局面分析：ChatGPT 订阅；逐局挑选关键节点，不走其他模型备用。",
             "仅发脱敏当时局面、计算与相关本地教材；不发QQ身份、原谱、暗手、未来或结局。",
             "AI=关闭 仅用本地规则；缺配置、路由不符或失败自动回退。没有策略权重，不给虚构概率。",
         ),
@@ -157,6 +159,39 @@ _TEXT_GROUPS = (
 )
 
 _TEXT_MENU_ALIASES = frozenset({"文字版菜单", "文字菜单", "文字版帮助", "菜单文字版"})
+
+
+def configured_menu_groups(settings: Any):
+    """只展示本机实际配置的乐队角色；图片、文字菜单共用同一份名单。"""
+    if not getattr(settings, "voice_profiles_json", None):
+        return _IMAGE_GROUPS, _TEXT_GROUPS
+    from app.services.band_characters import BAND_CHARACTERS
+    from app.services.voice import voice_profiles
+
+    profiles = voice_profiles(settings)
+    images, texts = [], []
+    for prefix, title, accent in (
+        ("mygo_", "MyGO!!!!! 角色", (92, 147, 185)),
+        ("mujica_", "Ave Mujica 角色", (153, 98, 145)),
+    ):
+        names = [label for profile_id, label, *_ in BAND_CHARACTERS if profile_id.startswith(prefix) and profile_id in profiles]
+        if not names:
+            continue
+        example = "爱音" if prefix == "mygo_" else "祥子"
+        images.append((title, (
+            " / ".join(names[:3]), " / ".join(names[3:]),
+            f"选择角色 {example}；@我 翻唱 {example} 歌名",
+        ), accent))
+        texts.append((title, (
+            "可用角色：" + "、".join(names),
+            f"选择角色 {example}；也可说“{example}出来”进行文字聊天。",
+            f"@我 翻唱片段 {example} 歌名；@我 翻唱完整 {example} 歌名。",
+            "这批角色支持文字聊天和翻唱，尚未配置文字朗读音色。",
+        )))
+    return (
+        (*_IMAGE_GROUPS[:-1], *images, _IMAGE_GROUPS[-1]),
+        (*_TEXT_GROUPS[:-1], *texts, _TEXT_GROUPS[-1]),
+    )
 
 
 def _normalize_image_groups(
@@ -205,9 +240,12 @@ def concise_text_menu(
     *,
     title: str | None = None,
     subtitle: str | None = None,
+    settings: Any = None,
 ) -> str:
     """返回分组清楚的完整文字菜单。"""
     sections = [title or _MENU_TITLE, subtitle or _TEXT_MENU_SUBTITLE]
+    if text_groups is None and settings is not None:
+        _, text_groups = configured_menu_groups(settings)
     for heading, lines in _normalize_text_groups(text_groups):
         sections.append(f"\n【{heading}】")
         sections.extend(f"- {line}" for line in lines)
@@ -386,17 +424,18 @@ def _draw_menu(
     title: str,
     subtitle: str,
 ) -> Image.Image:
+    compact = title == COMPACT_MENU_TITLE
     font_path = _find_font_path()
     width = _CANVAS_WIDTH
 
     left = 56
-    top = 215
+    top = 174 if compact else 215
     gap_x = 24
-    gap_y = 22
+    gap_y = 18 if compact else 22
     card_width = (width - 2 * left - gap_x) // 2
     measure = ImageDraw.Draw(Image.new("RGB", (1, 1)))
     prepared_groups = []
-    card_height = 332
+    card_height = 208 if compact else 332
     for heading, lines, accent in image_groups:
         prepared_lines = []
         content_height = 0
@@ -405,22 +444,23 @@ def _draw_menu(
                 measure, line, font_path, card_width - 87,
             )
             prepared_lines.append((font, wrapped))
-            content_height += max(61, 30 * len(wrapped))
-        card_height = max(card_height, 105 + content_height + 25)
+            content_height += max(46 if compact else 61, 30 * len(wrapped))
+        card_height = max(card_height, (91 if compact else 105) + content_height + (18 if compact else 25))
         prepared_groups.append((heading, prepared_lines, accent))
 
     rows = (len(prepared_groups) + 1) // 2
     content_bottom = top + rows * (card_height + gap_y) - gap_y if rows else top
-    note_y = content_bottom + 70
-    footer_y = note_y + 47
-    canvas_height = max(_MIN_CANVAS_HEIGHT, footer_y + 79)
+    note_y = content_bottom + (40 if compact else 70)
+    footer_y = note_y + (0 if compact else 47)
+    canvas_height = max(1040 if compact else _MIN_CANVAS_HEIGHT, footer_y + 79)
     canvas = _load_background(background_path, (width, canvas_height)).convert("RGBA")
     draw = ImageDraw.Draw(canvas, "RGBA")
     title_font = _fit_font(draw, title, font_path, width - 116, size=49, min_size=32)
     subtitle_font = _fit_font(draw, subtitle, font_path, width - 122, size=29, min_size=19)
-    draw.text((58, 54), title, font=title_font, fill=(37, 54, 68, 255))
-    draw.text((61, 127), subtitle, font=subtitle_font, fill=(80, 103, 108, 245))
-    draw.rounded_rectangle((59, 184, width - 59, 188), radius=2, fill=(91, 151, 132, 150))
+    draw.text((58, 42 if compact else 54), title, font=title_font, fill=(37, 54, 68, 255))
+    draw.text((61, 108 if compact else 127), subtitle, font=subtitle_font, fill=(80, 103, 108, 245))
+    divider_y = 146 if compact else 184
+    draw.rounded_rectangle((59, divider_y, width - 59, divider_y + 4), radius=2, fill=(91, 151, 132, 150))
 
     shadow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     shadow_draw = ImageDraw.Draw(shadow)
@@ -457,27 +497,27 @@ def _draw_menu(
 
         line_offset = 0
         for font, wrapped in lines:
-            line_y = y + 105 + line_offset
+            line_y = y + (91 if compact else 105) + line_offset
             draw.ellipse((x + 32, line_y + 10, x + 43, line_y + 21), fill=(*accent, 230))
             for wrapped_index, part in enumerate(wrapped):
                 draw.text(
                     (x + 57, line_y + wrapped_index * 30), part,
                     font=font, fill=(53, 67, 78, 255),
                 )
-            line_offset += max(61, 30 * len(wrapped))
+            line_offset += max(46 if compact else 61, 30 * len(wrapped))
 
     canvas = Image.alpha_composite(canvas, card_layer)
     draw = ImageDraw.Draw(canvas, "RGBA")
 
     footer_font = _load_font(font_path, 29)
     note_font = _load_font(font_path, 25)
-    note = "短版约 20 秒 · 整首逐段发送，每段不到 2 分钟"
+    note = "" if compact else "短版约 20 秒 · 整首逐段发送，每段不到 2 分钟"
     note_bbox = draw.textbbox((0, 0), note, font=note_font)
     draw.text(
         ((width - (note_bbox[2] - note_bbox[0])) // 2, note_y), note,
         font=note_font, fill=(64, 83, 92, 255),
     )
-    footer_text = "想看全部用法：@我 文字版菜单"
+    footer_text = "文字版：@我 文字版菜单" if compact else "想看全部用法：@我 文字版菜单"
     footer_bbox = draw.textbbox((0, 0), footer_text, font=footer_font)
     draw.text(
         ((width - (footer_bbox[2] - footer_bbox[0])) // 2, footer_y),
@@ -579,6 +619,10 @@ async def render_help_menu(
     subtitle: str | None = None,
 ) -> str:
     """在线程中绘制或读取缓存，返回 OneBot base64 图片地址。"""
+    if image_groups is None:
+        image_groups, configured_text = configured_menu_groups(settings)
+        if text_groups is None:
+            text_groups = configured_text
     return await asyncio.to_thread(
         _render_help_menu_sync, settings, image_groups, text_groups, title, subtitle,
     )
@@ -728,6 +772,10 @@ async def prepare_help_menu_file(
     subtitle: str | None = None,
 ) -> Path:
     """在线程中准备本地 JPEG 菜单，返回缓存文件绝对路径。"""
+    if image_groups is None:
+        image_groups, configured_text = configured_menu_groups(settings)
+        if text_groups is None:
+            text_groups = configured_text
     return await asyncio.to_thread(
         _prepare_help_menu_file_sync,
         settings,

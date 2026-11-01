@@ -12,7 +12,7 @@ def test_local_feature_menu_has_triggers_inputs_and_honest_link_limit():
     image = {name: lines for name, lines, _ in help_menu._IMAGE_GROUPS}
     text = help_menu.concise_text_menu()
     assert "雀魂牌谱分析" in image
-    assert any("链接仅识别" in line for line in image["雀魂牌谱分析"])
+    assert any("链接读取整场" in line for line in image["雀魂牌谱分析"])
     for entry in (
         "帮我分析牌谱",
         "分析雀魂牌谱",
@@ -21,9 +21,9 @@ def test_local_feature_menu_has_triggers_inputs_and_honest_link_limit():
         "开局固定座位",
         "mjai",
         "tenhou.net/6",
-        "不能直接抓取解析",
-        "智谱匿名当时局面分析",
-        "open.bigmodel.cn",
+        "官方链接读取整场",
+        "GPT-6 Luna 匿名当时局面分析",
+        "ChatGPT 订阅",
         "AI=关闭",
         "不走其他模型备用",
     ):

@@ -34,6 +34,36 @@ _TEXT_MENU_NAMES = frozenset({
     "文字版功能", "纯文字菜单", "画境拾珍菜单", "画境拾珍帮助",
 })
 _LOGGER = logging.getLogger(__name__)
+_PLUGIN_DISPLAY_NAMES = {
+    "astrbot_plugin_lifesim": "模拟人生",
+    "astrbot_plugin_private_companion": "日常陪伴",
+    "astrbot_plugin_qq_group_daily_analysis": "群聊分析",
+    "astrbot_plugin_self_learning": "学习设置",
+    "astrbot_plugin_qqchat": "主动消息",
+    "meme_manager": "表情包",
+}
+_COMMON_PLUGIN_COMMANDS = {
+    # 生图服务的工作流维护由面板管理，用户入口统一通过“陪伴 生图”。
+    "astrbot_plugin_image_companion": (),
+    "astrbot_plugin_qqchat": (("主动消息", "查看本群主动消息设置"),),
+    "astrbot_plugin_lifesim": (
+        ("人生开启", "开始人生"), ("人生继续", "继续剧情"), ("人生选择", "选择行动"),
+        ("人生加点", "分配属性"), ("人生状态", "查看状态"), ("人生重置", "重新开始"),
+    ),
+    "astrbot_plugin_private_companion": (("陪伴", "个人状态与设置"), ("陪伴群", "群聊状态与开关")),
+    "astrbot_plugin_self_learning": (
+        ("learning_status", "学习状态"), ("start_learning", "开启学习"),
+        ("stop_learning", "停止学习"), ("set_mood", "设置心情"), ("affection_status", "查看好感"),
+    ),
+    "astrbot_plugin_qq_group_daily_analysis": (
+        ("群分析", "生成群报告"), ("群漫画", "生成群漫画"), ("设置格式", "设置报告格式"),
+        ("设置模板", "设置报告模板"), ("查看模板", "查看可用模板"), ("分析设置", "查看分析设置"),
+    ),
+    "meme_manager": (
+        ("表情管理", "图库与表情设置"), ("表情管理 查看图库", "查看图库"),
+        ("表情管理 添加表情", "添加表情"), ("表情管理 图库统计", "查看图库统计"),
+    ),
+}
 
 
 def menu_request_kind(text: str) -> str | None:
@@ -422,10 +452,11 @@ def _auto_trigger_enabled(plugin: Any) -> bool:
 
 
 def _complete_plugin_text_lines(items: Sequence[dict[str, Any]]) -> tuple[str, ...]:
-    """返回插件全部当前命令，不套用原生命令的行数上限。"""
+    """只列选定的可调用入口，不展开插件全部能力和内部说明。"""
     lines = []
     for item in items:
-        description = " ".join(str(item["description"]).split())
+        description = str(item.get("menu_label") or item["description"]).split("\n", 1)[0].strip()
+        description = re.split(r"[。！？]", description, maxsplit=1)[0][:36]
         label = f"/{item['primary']}"
         if description:
             label += f"：{description}"
@@ -438,15 +469,37 @@ def _complete_plugin_text_lines(items: Sequence[dict[str, Any]]) -> tuple[str, .
     return tuple(lines)
 
 
-def build_unified_menu_groups(
+def _common_plugin_menu_items(items: Sequence[dict[str, Any]], event: Any) -> list[dict[str, Any]]:
+    if not items:
+        return []
+    selected = _COMMON_PLUGIN_COMMANDS.get(items[0]["plugin_name"])
+    if selected is None:
+        return list(items[:6])
+    output = []
+    for name, label in selected:
+        if items[0]["plugin_name"] == "astrbot_plugin_private_companion":
+            in_group = bool(getattr(event, "get_group_id", lambda: "")())
+            if (name == "陪伴" and in_group) or (name == "陪伴群" and not in_group):
+                continue
+        item = _find_plugin_command(items, handler_names=(), command_names=(name,))
+        if item is None:
+            continue
+        primary = next((alias for alias in item["names"] if _command_path(alias) == _command_path(name)), item["primary"])
+        output.append({**item, "primary": primary, "menu_label": label})
+    return output
+
+
+def _build_detailed_menu_groups(
     context: Any,
     event: Any,
+    settings: Any = None,
 ) -> tuple[
     tuple[tuple[str, tuple[str, ...], tuple[int, int, int]], ...],
     tuple[tuple[str, tuple[str, ...]], ...],
 ]:
-    """保留原有五个功能组，附加适用的 AstrBot 命令和插件。"""
-    from app.services.help_menu import _IMAGE_GROUPS, _TEXT_GROUPS
+    """保留基础功能，仅附加当前用户可调用或设置的常用插件入口。"""
+    from app.services.help_menu import _IMAGE_GROUPS, _TEXT_GROUPS, configured_menu_groups
+    base_images, base_texts = configured_menu_groups(settings) if settings is not None else (_IMAGE_GROUPS, _TEXT_GROUPS)
 
     commands = _active_commands(context, event)
     native_by_id: dict[str, dict[str, Any]] = {}
@@ -470,8 +523,6 @@ def build_unified_menu_groups(
         ))
     if native_roots - set(image_native_ids):
         native_image_lines.append("其他原生命令见文字版菜单。")
-    if not native_image_lines:
-        native_image_lines = ["当前平台暂无可用的原生命令。"]
 
     plugin_items = [
         item for item in commands
@@ -496,17 +547,27 @@ def build_unified_menu_groups(
         if not group_items:
             continue
         group_items.sort(key=lambda item: item["primary"].casefold())
+        plugin_name = group_items[0]["plugin_name"]
         is_anime_plugin = any(
             item["plugin_name"] == "astrbot_plugin_get_px" for item in group_items
         )
         if is_anime_plugin:
             image_lines = _anime_plugin_image_lines(group_items)
-            text_lines = list(_complete_plugin_text_lines(group_items))
+            text_lines = list(image_lines)
+            if any(item.get("handler_name") == "cmd_p" for item in group_items):
+                text_lines.append("题材插画：来份色图 / 来张泳装图 / 来张丝袜女仆图；每次一张，非R18")
             if any(_auto_trigger_enabled(item["plugin"]) for item in group_items):
                 text_lines.append("自然语言发图：来一份图；来张风景图")
         else:
-            image_lines = _command_lines(group_items, image=True)
+            group_items = _common_plugin_menu_items(group_items, event)
+            if not group_items:
+                continue
+            image_lines = tuple(
+                "；".join(f"/{item['primary']}" for item in group_items[index:index + 2])
+                for index in range(0, min(len(group_items), 6), 2)
+            )
             text_lines = list(_complete_plugin_text_lines(group_items))
+        display_name = _PLUGIN_DISPLAY_NAMES.get(plugin_name, display_name)
         if image_lines:
             image_plugin_groups.append(
                 (display_name, tuple(image_lines[:3]), (145, 117, 171))
@@ -515,32 +576,189 @@ def build_unified_menu_groups(
             text_plugin_groups.append((display_name, tuple(text_lines)))
 
     is_admin = bool(getattr(event, "is_admin", lambda: False)())
-    old_admin_image = _IMAGE_GROUPS[-1]
-    old_admin_text = _TEXT_GROUPS[-1]
+    old_admin_image = base_images[-1]
+    old_admin_text = base_texts[-1]
     if is_admin:
         management_image = old_admin_image
         management_text = old_admin_text
-    else:
-        management_image = ("管理", ("群管理和管理员指令仅管理员可用。",), old_admin_image[2])
-        management_text = ("管理", ("群管理和 AstrBot 管理命令仅管理员可用。",))
 
     image_groups = (
-        *tuple(_IMAGE_GROUPS[:5]),
-        ("AstrBot 聊天", tuple(native_image_lines[:3]), (91, 145, 173)),
+        *tuple(base_images[:-1]),
+        *((("AstrBot 聊天", tuple(native_image_lines[:3]), (91, 145, 173)),) if native_image_lines else ()),
         *tuple(image_plugin_groups),
-        management_image,
+        *((management_image,) if is_admin else ()),
     )
     native_text_lines = tuple(
         f"/{native_by_id[name]['primary']}：{_NATIVE_COMMANDS[name]}"
         for name in _NATIVE_ORDER if name in native_by_id
-    ) or ("当前平台暂无可用的原生命令。",)
+    )
     text_groups = (
-        *tuple(_TEXT_GROUPS[:5]),
-        ("AstrBot 聊天", native_text_lines),
+        *tuple(base_texts[:-1]),
+        *((("AstrBot 聊天", native_text_lines),) if native_text_lines else ()),
         *tuple(text_plugin_groups),
-        management_text,
+        *((management_text,) if is_admin else ()),
     )
     return image_groups, text_groups
+
+
+def _enabled_menu_plugins(context: Any, event: Any) -> set[str]:
+    """补上仅提供面板设置、没有聊天命令的已启用插件。"""
+    getter = getattr(context, "get_all_stars", None)
+    if not callable(getter):
+        return set()
+    allowed = getattr(event, "plugins_name", None)
+    if not isinstance(allowed, (list, tuple)):
+        allowed = None
+    return {
+        str(getattr(plugin, "name", ""))
+        for plugin in getter()
+        if _plugin_enabled_for_event(plugin, event, allowed)
+    }
+
+
+def build_unified_menu_groups(context: Any, event: Any, settings: Any = None):
+    """精简基础功能，并让已启用插件在图片和文字中都有常用入口。"""
+    from app.services.help_menu import _IMAGE_GROUPS, _TEXT_GROUPS, configured_menu_groups
+
+    _, detailed = _build_detailed_menu_groups(context, event, settings)
+    base_images, base = configured_menu_groups(settings) if settings is not None else (_IMAGE_GROUPS, _TEXT_GROUPS)
+    base_titles = {title for title, _ in base} | {"AstrBot 聊天", "管理"}
+    plugins = [(title, lines) for title, lines in detailed if title not in base_titles]
+    plugin_lines = {}
+    plugin_image_lines = {}
+    plugin_commands = {}
+    for title, lines in plugins:
+        selected = list(lines)
+        if title == "学习设置":
+            selected = [line for line in selected if line.endswith(("开启学习", "停止学习"))] or selected
+        elif title == "群聊分析":
+            selected = [line for line in selected if line.endswith(("生成群报告", "查看分析设置"))] or selected
+        labels = [line.split("：", 1)[0] for line in selected if line.startswith("/")][:2]
+        if labels:
+            plugin_commands[title] = labels
+            plugin_lines[title] = f"{title}：" + "；".join(labels)
+            overview = next((line for line in lines if line.endswith("学习状态")), selected[0])
+            plugin_image_lines[title] = f"{title}：{overview.split('：', 1)[0]}"
+            if title == "学习设置" and overview.endswith("学习状态"):
+                plugin_lines[title] = f"{title}：{overview.split('：', 1)[0]}；开关：" + " / ".join(labels)
+
+    enabled_plugins = _enabled_menu_plugins(context, event)
+    in_group = bool(getattr(event, "get_group_id", lambda: "")())
+    is_admin = bool(getattr(event, "is_admin", lambda: False)())
+    # 普通用户仍能知道插件有哪些功能，但不展示无权限执行的管理命令。
+    for name, title, description in (
+        ("astrbot_plugin_self_learning", "学习设置", "表达 / 黑话（管理员设置）"),
+        ("astrbot_plugin_qq_group_daily_analysis", "群聊分析", "群日报（管理员设置）"),
+    ):
+        if name not in enabled_plugins or title in plugin_lines:
+            continue
+        if name == "astrbot_plugin_qq_group_daily_analysis" and not in_group:
+            continue
+        plugin_lines[title] = plugin_image_lines[title] = f"{title}：{description}"
+    if "astrbot_plugin_proactive_chat" in enabled_plugins:
+        description = "频率 / 免打扰（面板设置）" if is_admin else "闲时聊天（管理员设置）"
+        if "主动消息" not in plugin_lines:
+            plugin_lines["主动消息"] = plugin_image_lines["主动消息"] = f"主动消息：{description}"
+    else:
+        plugin_lines.pop("主动消息", None)
+        plugin_image_lines.pop("主动消息", None)
+
+    image_actions = []
+    if {"astrbot_plugin_private_companion", "astrbot_plugin_image_companion"} <= enabled_plugins:
+        photo_root = _find_plugin_command(
+            [item for item in _active_commands(context, event)
+             if item["plugin_name"] == "astrbot_plugin_private_companion"],
+            handler_names=("companion_command",), command_names=("陪伴",),
+        )
+        if photo_root:
+            root = "/" + photo_root["primary"]
+            from app.astrbot_plugin_status import companion_photo_requires_private
+
+            private_photo = in_group and companion_photo_requires_private(context, event)
+            if private_photo:
+                image_actions.extend((f"私聊生图：{root} 生图 描述", f"私聊自拍：{root} 自拍"))
+                plugin_lines["陪伴生图"] = f"陪伴生图（私聊）：{root} 生图 描述；{root} 自拍"
+            else:
+                image_actions.extend((f"生图：{root} 生图 画面描述", f"自拍：{root} 自拍"))
+                plugin_lines["陪伴生图"] = f"陪伴生图：{root} 生图 画面描述；{root} 自拍"
+    report_lines = next((lines for title, lines in plugins if title == "群聊分析"), ())
+    format_controls = [line.split("：", 1)[0] for line in report_lines
+                       if line.endswith(("设置报告格式", "设置报告模板"))]
+    if format_controls:
+        plugin_lines["群报设置"] = "群报设置：" + "；".join(format_controls[:2])
+    comic = next((line.split("：", 1)[0] for line in report_lines if line.endswith("生成群漫画")), "")
+    if comic:
+        image_actions.append("群漫画：" + comic)
+        plugin_lines["群漫画"] = "群漫画：" + comic
+    elif not is_admin and in_group and "astrbot_plugin_qq_group_daily_analysis" in enabled_plugins:
+        image_actions.append("群漫画：管理员设置")
+
+    # 原功能的独立卡片必须保留；只有角色全名单统一收进“可用角色”。
+    merged_titles = {"聊天陪伴", "语音翻唱", "点歌视频", "实用工具", "互动小游戏", "管理"}
+    catalog_titles = {"MyGO!!!!! 角色", "Ave Mujica 角色"}
+    extra_images = tuple(group for group in base_images if group[0] not in merged_titles | catalog_titles)
+    extra_text_lines = []
+    for title, _, _ in extra_images:
+        if title == "雀魂牌谱分析":
+            extra_text_lines.append("雀魂牌谱：雀魂分析＋官方链接；连接账号后读取整场；也支持 mjai/天凤JSON；/牌谱分析 帮助")
+        else:
+            content = next((lines for name, lines in base if name == title), ())
+            if content:
+                extra_text_lines.append(f"{title}：{content[0]}")
+
+    native = next((lines for title, lines in detailed if title == "AstrBot 聊天"), ())
+    controls = [line.split("：", 1)[0] for line in native if any(
+        word in line for word in ("新对话", "短上下文", "切换当前会话模型", "停止当前生成")
+    )][:2]
+    setting_lines = ["记住：内容 / 删除记忆 关键词"]
+    if controls:
+        setting_lines.append("会话：" + " / ".join(controls))
+    setting_lines.append("/bot on|off" if is_admin else "开启恋爱模式 / 关闭恋爱模式")
+    image_groups = (
+        ("聊天角色", ("@我聊天 / 随机故事", "可用角色 / 选择角色 名字"), (92, 117, 151)),
+        ("语音翻唱", ("启动语音 / 关闭语音", "翻唱片段 角色 歌名", "翻唱完整 角色 歌名"), (177, 108, 145)),
+        ("点歌视频", ("点歌 歌名 / 查歌词 歌名", "播放视频 关键词", "看视频：发视频＋总结一下"), (94, 147, 147)),
+        ("实用工具", ("天气 上海 / 翻译 内容", "搜索 关键词 / 今日热点"), (129, 133, 188)),
+        ("互动游戏", ("角色图鉴 名字 / 随机夺舍", "今日奥特曼 / 随机二次元角色"), (199, 151, 94)),
+        ("开关设置", tuple(setting_lines), (122, 137, 158)),
+        *extra_images,
+    )
+    chat_titles = [title for title in plugin_image_lines if title not in {"学习设置", "群聊分析"}]
+    chat_titles.sort(key=lambda title: ({"模拟人生": 0, "日常陪伴": 1, "主动消息": 2}.get(title, 3), title))
+    learning_lines = [plugin_image_lines[title] for title in ("学习设置", "群聊分析") if title in plugin_image_lines]
+    calendar_report_command = _find_plugin_command(
+        _active_commands(context, event), handler_names=("calendar_group_reports",), command_names=("群报",),
+    )
+    if "astrbot_plugin_qq_group_daily_analysis" in enabled_plugins and calendar_report_command:
+        report_line = "群报：昨天＋今天（截至上一分钟）"
+        learning_lines = [line for line in learning_lines if not line.startswith("群聊分析：")]
+        learning_lines.append(report_line)
+        plugin_lines["群聊分析"] = "群报：/群报（昨天＋今天）"
+    report_controls = plugin_commands.get("群聊分析", [])
+    if len(report_controls) > 1:
+        learning_lines.append("群报设置：" + report_controls[1])
+    for title, entries in (
+        ("插件 · 陪伴互动", [plugin_image_lines[title] for title in chat_titles]),
+        ("插件 · 学习群报", learning_lines),
+        ("生图与群漫画", image_actions),
+    ):
+        for offset in range(0, len(entries), 3):
+            image_groups += ((title, tuple(entries[offset:offset + 3]), (145, 117, 171)),)
+    lines = [
+        "聊天角色：@我；可用角色；选择角色 名字；随机故事",
+        "语音翻唱：启动语音 / 关闭语音；翻唱片段 角色 歌名",
+        "点歌视频：点歌 歌名；播放视频 关键词；发视频＋总结一下",
+        "实用工具：天气 上海；翻译 内容；搜索 关键词；今日热点",
+        "互动：角色图鉴 名字；随机二次元角色；随机夺舍",
+        "记忆：记住：内容；删除记忆 关键词",
+        *extra_text_lines,
+        *plugin_lines.values(),
+    ]
+    if controls:
+        lines.append("会话设置：" + "；".join(controls))
+    if is_admin:
+        lines.append("群管理：/bot on|off")
+    return image_groups, (("常用命令", tuple(lines)),)
 
 
 def is_text_menu_request(text: str) -> bool:

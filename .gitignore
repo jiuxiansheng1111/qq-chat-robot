@@ -12,3 +12,12 @@ logs/
 .test-tmp*/
 *.egg-info/
 *.pyc
+
+# Local run artifacts can contain private conversations and dependencies.
+/artifacts/*
+!/artifacts/dragon-maid-live2d/
+/artifacts/dragon-maid-live2d/*
+!/artifacts/dragon-maid-live2d/assets/
+!/artifacts/dragon-maid-design/
+/artifacts/dragon-maid-design/*
+!/artifacts/dragon-maid-design/dragon-maid-anime-sheet-v1.png

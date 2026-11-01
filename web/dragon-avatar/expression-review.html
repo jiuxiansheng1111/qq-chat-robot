@@ -1,0 +1,6 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>龙女仆表情校对</title><style>
+body{margin:0;padding:20px;background:#eee8f3;color:#594366;font:14px "Microsoft YaHei",sans-serif}h1{font-size:20px;margin:0 0 16px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.card{background:#faf7fd;border-radius:16px;overflow:hidden;text-align:center}iframe{border:0;width:100%;height:220px;display:block}.label{padding:0 0 12px}
+</style><h1>龙女仆 · 表情比例校对</h1><div class="grid" id="grid"></div><script>
+const expressions=[['neutral','日常'],['smile','微笑'],['angry','生气'],['pout','嘟嘴'],['cry','哭泣'],['shy','害羞'],['tsundere','傲娇'],['surprise','惊讶']];
+for(const [key,label] of expressions){const box=document.createElement('div');box.className='card';const frame=document.createElement('iframe');frame.title=label;frame.src='/avatar?expression-preview='+key+'&portrait=1';box.append(frame);const text=document.createElement('div');text.className='label';text.textContent=label;box.append(text);document.getElementById('grid').append(box);}
+</script></html>

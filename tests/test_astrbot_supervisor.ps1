@@ -112,6 +112,42 @@ try {
     Assert-Equal (Get-AstrbotHealth -Layout $layout).Status 'unhealthy' 'Hung HTTP response was ignored'
     $script:responsive = $true
     $script:dashboardOwner = 0; $script:wsOwner = 0
+    $script:processes[10003].CommandLine = 'foreign command'
+    Assert-Throws { Get-AstrbotHealth -Layout $layout } 'Changed identity without a new creation time was ignored'
+    $script:processes[10003].CommandLine = $originalCommand
+
+    # After reboot, old PIDs can belong to unrelated processes whose paths cannot be read.
+    $recordedProcesses = $script:processes.Clone()
+    try {
+        foreach ($processId in @(10001, 10002, 10003)) {
+            $original = $recordedProcesses[$processId]
+            $script:processes[$processId] = [pscustomobject]@{
+                ProcessId = $processId; ParentProcessId = 1
+                ExecutablePath = $null; CommandLine = $null
+                CreationDate = $original.CreationDate.AddDays(1)
+            }
+        }
+        Assert-Equal (@(Get-LiveRecordedIdentities -State $state @argsByPath).Count) 0 'Reused PIDs blocked a fresh start'
+        $health = Get-AstrbotHealth -Layout $layout
+        Assert-Equal $health.Status 'down' 'Stale state after reboot was not recoverable'
+        Assert-Equal (Get-AstrbotRecoveryDecision -Health $health -Now $now -UnhealthySince $now `
+            -NextAttempt ([datetime]::MinValue)) 'start' 'Reused PIDs prevented automatic recovery'
+        $script:dashboardOwner = 10003
+        Assert-Throws { Get-AstrbotHealth -Layout $layout } 'Foreign listener at a reused PID was accepted'
+        $script:dashboardOwner = 0
+        $script:processes[10001].CreationDate = $null
+        Assert-Throws { Get-LiveRecordedIdentities -State $state @argsByPath } 'Unknown creation time was treated as PID reuse'
+        $script:processes[10001] = $recordedProcesses[10001]
+        $live = @(Get-LiveRecordedIdentities -State $state @argsByPath)
+        Assert-Equal $live.Count 1 'Surviving AstrBot process was discarded with stale PIDs'
+        Assert-Equal $live[0].ProcessId 10001 'An unrelated process was claimed as AstrBot'
+        $script:processes[10001] = $recordedProcesses[10001].PSObject.Copy()
+        $script:processes[10001].CreationDate = $script:processes[10001].CreationDate.AddDays(1)
+        Assert-Equal (@(Get-LiveRecordedIdentities -State $state @argsByPath).Count) 0 'A later instance of the same executable was claimed'
+    } finally {
+        $script:processes = $recordedProcesses
+        $script:dashboardOwner = 0; $script:wsOwner = 0
+    }
     $script:processes.Remove(10003)
     Assert-Equal (New-AstrbotListenerWatch -Layout $layout) $null 'Exited listener was opened for a new watch'
     $health = Get-AstrbotHealth -Layout $layout

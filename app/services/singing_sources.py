@@ -19,6 +19,7 @@ from app.services.http_routing import outbound_http_client
 from app.services.music import (
     NeteaseTrack,
     choose_netease_track,
+    music_query_identity,
     music_query_suffixes,
     netease_artist_names,
     netease_title_names,
@@ -229,8 +230,8 @@ def _version_tags(value: str) -> set[str]:
 
 
 async def _search_track(query: str, settings: Settings) -> NeteaseTrack:
-    explicit = re.split(r"\s*[/／]\s*|\s+[-–—]\s+", query, maxsplit=1)
-    title_artist = (explicit[0].strip(), explicit[1].strip()) if len(explicit) == 2 else None
+    identity = music_query_identity(query)
+    title_artist = (identity.title, identity.artist) if identity else None
     if title_artist and all(title_artist):
         title, artist = title_artist
         candidates = [query, f"{artist} {title}", title]
@@ -255,7 +256,7 @@ async def _search_track(query: str, settings: Settings) -> NeteaseTrack:
         if selected:
             return selected
         selected = choose_netease_track(candidate, tracks, expected_title=candidate)
-        if selected and candidate != query:
+        if selected and candidate != query and netease_track_matches_query(query, selected):
             return selected
     raise SingingSourceError("未找到匹配的网易云歌曲，请提供歌名和歌手名")
 

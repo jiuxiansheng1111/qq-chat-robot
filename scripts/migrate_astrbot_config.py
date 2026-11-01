@@ -146,7 +146,7 @@ def _list_field(config: dict[str, Any], name: str) -> list[Any]:
 def _validate_owned_types(
     sources: dict[str, dict[str, Any]], models: dict[str, dict[str, Any]]
 ) -> None:
-    for ids in OWNED_MODELS.values():
+    for name, ids in OWNED_MODELS.items():
         source = sources.get(ids["source_id"])
         if source is not None and (
             source.get("provider") != "openai"
@@ -169,7 +169,7 @@ def _validate_owned_types(
                 raise MigrationError(f"来源 ID {ids['source_id']} 配置结构错误")
         model = models.get(ids["model_id"])
         if model is not None and (
-            model.get("type") != "openai_chat_completion"
+            model.get("type") not in {"openai_chat_completion", _model_adapter_type(name, model.get("model", ""))}
             or model.get("provider_source_id") != ids["source_id"]
             or model.get("provider_type", "chat_completion") != "chat_completion"
         ):
@@ -201,13 +201,20 @@ def _source_config(name: str, values: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _model_adapter_type(name: str, model: Any) -> str:
+    value = str(model).strip().casefold()
+    if name == "zhipu" and (value == "glm-4-flash" or value.startswith("glm-4-flash-")):
+        return "qqchat_glm_flash"
+    return "openai_chat_completion"
+
+
 def _model_config(name: str, values: dict[str, Any]) -> dict[str, Any]:
     ids = OWNED_MODELS[name]
     has_key = bool(values["key"])
     return {
         "id": ids["model_id"],
         "name": f"QQChat {name} chat",
-        "type": "openai_chat_completion",
+        "type": _model_adapter_type(name, values["model"]),
         "provider_type": "chat_completion",
         "provider_source_id": ids["source_id"],
         "model": values["model"],

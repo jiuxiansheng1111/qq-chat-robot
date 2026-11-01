@@ -56,13 +56,46 @@ class LLMManager:
                 self.semaphore.release()
             self.capacity.release()
 
-    async def _call(self, name: str, provider, messages: list[dict]) -> str:
+    async def ask_primary(self, messages: list[dict]) -> str:
+        """走当前主模型并沿用队列限制，不尝试备用模型。"""
+        try:
+            await asyncio.wait_for(
+                self.capacity.acquire(),
+                timeout=self.settings.llm_queue_timeout_seconds,
+            )
+        except TimeoutError as exc:
+            raise LLMError("llm_queue_full") from exc
+        running = False
+        try:
+            try:
+                await asyncio.wait_for(
+                    self.semaphore.acquire(),
+                    timeout=self.settings.llm_queue_timeout_seconds,
+                )
+                running = True
+            except TimeoutError as exc:
+                raise LLMError("llm_queue_timeout") from exc
+            return await self._call(self.provider_name, self.provider, messages, primary_only=True)
+        finally:
+            if running:
+                self.semaphore.release()
+            self.capacity.release()
+
+    async def _call(
+        self,
+        name: str,
+        provider,
+        messages: list[dict],
+        *,
+        primary_only: bool = False,
+    ) -> str:
         breaker = self.breakers[name]
         if not await breaker.allow():
             raise LLMError(f"{name} circuit open") from CircuitOpenError(name)
         started = time.perf_counter()
         try:
-            result = await provider.chat(messages)
+            chat = getattr(provider, "chat_primary", None) if primary_only else None
+            result = await (chat(messages) if callable(chat) else provider.chat(messages))
         except (LLMError, httpx.HTTPError) as exc:
             await breaker.failure()
             self.stats[name].record(

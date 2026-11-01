@@ -15,6 +15,7 @@ from app.services.mahjong.analysis import (
     ranking,
 )
 from app.services.mahjong.coach import coach_request, load_coach_prompt
+from app.services.mahjong.highlights import decision_digest, select_decisions
 from app.services.mahjong.knowledge import KnowledgeSource, load_sources, retrieve_passages
 from app.services.mahjong.records import RecordError, Replay, decision_input, seat_number
 from app.services.mahjong.tiles import shanten, tile, waits
@@ -29,6 +30,7 @@ class Review:
     coach_prompt_sha256: str | None = None
     coach_context: tuple[dict[str, str], ...] = ()
     coaching: CoachRun | None = None
+    overview: tuple[str, ...] = ()
 
 
 def noten_payments(tenpai: tuple[bool, ...], pool: int = 3000) -> tuple[int, ...]:
@@ -255,7 +257,7 @@ BOUNDARY = (
     "标准吃碰/食替与杠检查、荒牌流局R=3000。自定义房间不支持。"
     "未完成全役番符/临时振听/和牌优先级/抢杠裁定、四杠终止时机、连庄止/延长/飞人/同分顺序；"
     "仅称通过已实现规则检查，不宣称穷举全部合法动作或平台规则认证。"
-    "未执行神经网络训练，未安装策略权重，未调用LLM/第三方牌谱服务，未给出任何和牌/放铳概率。"
+    "未执行神经网络训练，未安装策略权重，未给出任何和牌/放铳概率；AI调用状态见下文。"
 )
 
 
@@ -295,8 +297,12 @@ def markdown(result: Review) -> str:
         lines.append(
             "引擎估计：本次没有使用策略引擎。确定计算：tiles.py向听/形状进张与公开牌去重。"
         )
+    if result.overview:
+        lines.extend(["## 整场走势与逐局得失", *result.overview])
+    lines.extend(["## 直接建议｜各局关键选择", *[decision_digest(d, n, result.coaching) for n, d in select_decisions(analysis.decisions)]])
     lines.append("## 关键节点与逐巡检查｜仅当时可见信息")
     for number, decision in enumerate(analysis.decisions, 1):
+        lines.append(decision_digest(decision, number, result.coaching))
         lines.append(decision_markdown(decision, number, sources=result.sources))
         if result.coaching is not None:
             lines.append(node_coaching(result.coaching, number, decision))
@@ -330,22 +336,22 @@ def markdown(result: Review) -> str:
 
 def summary(result: Review, job_id: str) -> str:
     a = result.analysis
-    keys = [str(i) for i, d in enumerate(a.decisions, 1) if d.key_reasons]
-    return (
-        f"雀魂{'东风' if a.match == 'tonpuu' else '半庄'}复盘 {job_id}｜本人开局座位{a.seat}\n"
-        f"已查{a.inspected_events}事件/{len(a.decisions)}决策；关键节点：{', '.join(keys[:12]) or '暂无'}"
-        + ("…" if len(keys) > 12 else "")
-        + "\n"
-        "方法：向听/可见形状进张的规则基线；无策略权重，不输出胜率或放铳率。决策与事后暗牌已隔离。\n"
-        + (
-            "专业教练MD和本地主题教材已读取。\n"
-            if result.coach_prompt_sha256
-            else "教练/教材MD未加载，已降级为纯规则计算。\n"
-        )
-        + coach_status(result.coaching) + "\n"
-        + f"展开：/牌谱分析 详情 {job_id} 1；分页追加页码；导出：/牌谱分析 导出 {job_id}\n"
-        "牌谱为片段时仅分析片段；完整计分与全部平台细则尚未实现。"
-    )
+    selected = select_decisions(a.decisions)
+    lines = [f"雀魂{'东风' if a.match == 'tonpuu' else '半庄'}复盘 {job_id}｜本人开局座位{'东南西北'[a.seat]}",
+             f"已查{a.inspected_events}事件/{len(a.decisions)}决策；下面直接列各局关键选择。"]
+    if result.overview:
+        lines.extend(result.overview[:2])
+    lines.extend([coach_status(result.coaching),
+                  "建议基于当时本人手牌和公开信息；未见有效牌不是实际山余枚数或胜率。"])
+    if not result.coach_prompt_sha256:
+        lines.append("教练/教材MD未加载，已降级为纯规则计算。")
+    for number, decision in selected:
+        lines.append("\n" + decision_digest(decision, number, result.coaching))
+    if len(result.overview) > 2:
+        lines.extend(["\n【逐局结果｜用于回顾，不作为当时切牌依据】", *result.overview[2:]])
+    lines.append(f"\n全部逐巡候选：/牌谱分析 导出 {job_id}；单节点展开：/牌谱分析 详情 {job_id} 节点号")
+    lines.append("无完整策略引擎；牌效候选与Luna判断分别标明，不把不同选择一律判错。")
+    return "\n".join(lines)
 
 
 def brief_decision(result: Review, number: int, page: int) -> str:
@@ -362,6 +368,8 @@ def brief_decision(result: Review, number: int, page: int) -> str:
         f"实际：{chosen.action}；第{page}/{pages}页。",
         f"本人手牌：{' '.join(view.hand)}；当前四家点数{view.scores}。",
     ]
+    if page == 1:
+        lines.insert(0, decision_digest(decision, number, result.coaching))
     for candidate in decision.candidates[(page - 1) * 2 : page * 2]:
         outs = " ".join(f"{t}×{n}" for t, n in candidate.ukeire) or "无已算出的降向听进张"
         lines.extend(

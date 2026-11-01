@@ -76,7 +76,7 @@ flowchart TD
 | `SINGING_MIN_VOICED_RECALL` / `SINGING_MIN_ENERGY_RECALL` / `SINGING_MAX_MISSING_VOCAL_SECONDS` | `0.88` / `0.90` / `1.2` | 有声帧、活跃能量覆盖与局部近静音缺失检查；失败仅重试当前段 |
 | `SINGING_MAX_SONG_SECONDS` | `600` | 原曲实际时长上限，超出时停止 |
 | `SINGING_MAX_SOURCE_BYTES` | `104857600` | 本地或网易云原曲大小上限（100 MiB） |
-| `SINGING_QUEUE_SIZE` / `SINGING_COOLDOWN_SECONDS` | `3` / `120` | 待处理队列和同一用户再次提交的冷却秒数 |
+| `SINGING_QUEUE_SIZE` / `SINGING_COOLDOWN_SECONDS` | `3` / `15` | 待处理队列和同一用户成功完成后再次提交的冷却秒数；失败或取消可直接重试 |
 | `SINGING_DIFFUSION_STEPS` / `SINGING_INFERENCE_CFG_RATE` | `35` / `0.7` | Seed-VC 初次转换参数 |
 | `SINGING_INFERENCE_CFG_RATE_BY_PROFILE_JSON` | `{}` | 按角色覆盖引导强度，数值范围0–2；未填的角色沿用通用值 |
 | `SINGING_SEMITONE_SHIFT_BY_PROFILE_JSON` | `{}` | 角色到人声移调半音数的映射，整数 −12 到 +12；未配置且无自动目标时使用原调 |
@@ -94,6 +94,7 @@ flowchart TD
 @机器人 唱歌音色
 @机器人 唱歌状态
 @机器人 取消唱歌
+@机器人 暂停翻唱
 ```
 
 `唱歌` 使用当前选中的角色；`翻唱 角色名` 临时指定角色，默认唱整首。`翻唱片段` 只生成约 20 秒的几句歌词，`翻唱完整` 生成整首。也支持 `翻唱 片段 角色名 歌名`、`翻唱 角色名 片段 歌名`、`唱几句` 和 `唱一段`。歌名与歌手名用 `/` 分开可避免同名歌曲选错；DJ 版等版本需明确写出。只有试听或超过原曲时长上限时仍停止，片段模式不会拿平台试听片段冒充完整源。

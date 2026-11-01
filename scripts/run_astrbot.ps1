@@ -1,6 +1,6 @@
 ﻿#requires -Version 5.1
 [CmdletBinding()]
-param([switch]$Stop, [switch]$Restart, [switch]$Recovery)
+param([switch]$Stop, [switch]$Restart, [switch]$Recovery, [switch]$ReuseExistingConfig)
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'astrbot_windows_common.ps1')
@@ -29,6 +29,9 @@ try {
     $statePath = Join-Path $layout.Root 'astrbot-owned-run.json'
     $legacyStatePath = Join-Path $layout.Root 'astrbot-listen.pid'
     $configureScript = Join-Path $layout.ProjectRoot 'scripts\configure_astrbot.py'
+    if ($ReuseExistingConfig -and -not (Test-Path -LiteralPath (Join-Path $layout.Instance 'data\cmd_config.json') -PathType Leaf)) {
+        throw 'ReuseExistingConfig requires an existing AstrBot configuration; no process was stopped.'
+    }
     $bridgeScript = Join-Path $layout.ProjectRoot 'scripts\start_netease_member.ps1'
     $stdoutPath = Join-Path $layout.Logs 'astrbot-service.stdout.log'
     $stderrPath = Join-Path $layout.Logs 'astrbot-service.stderr.log'
@@ -139,8 +142,12 @@ try {
     $env:PYTHONUTF8 = '1'
     $env:PYTHONUNBUFFERED = '1'
     $env:PYTHONFAULTHANDLER = '1'
-    Invoke-AstrbotLoggedCommand -FilePath $toolPythonPath -ArgumentList @($configureScript) `
-        -WorkingDirectory $layout.ProjectRoot -LogPrefix 'configure-astrbot' -LogDirectory $layout.Logs | Out-Null
+    if (-not $ReuseExistingConfig) {
+        Invoke-AstrbotLoggedCommand -FilePath $toolPythonPath -ArgumentList @($configureScript) `
+            -WorkingDirectory $layout.ProjectRoot -LogPrefix 'configure-astrbot' -LogDirectory $layout.Logs | Out-Null
+    } else {
+        Write-Host 'Using existing AstrBot configuration unchanged; configure_astrbot.py was skipped.'
+    }
 
     # 只检查或启动 3010 桥接服务；不会打开登录页、启动旧 Uvicorn 或触碰 QQ/TTS。
     & $bridgeScript -Port $bridgePort

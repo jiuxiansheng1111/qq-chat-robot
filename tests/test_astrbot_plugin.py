@@ -17,6 +17,8 @@ PLUGIN_MAIN = PROJECT_ROOT / "main.py"
 
 def _load_plugin(monkeypatch: pytest.MonkeyPatch):
     """Load main.py against a tiny AstrBot API stub, so tests need no AstrBot install."""
+    monkeypatch.setattr("app.astrbot_flash_provider.register_flash_provider", lambda: None)
+    monkeypatch.setattr("app.astrbot_chatgpt_provider.register_chatgpt_provider", lambda: None)
     astrbot = types.ModuleType("astrbot")
     astrbot.__path__ = []
     api = types.ModuleType("astrbot.api")
@@ -45,6 +47,10 @@ def _load_plugin(monkeypatch: pytest.MonkeyPatch):
         return decorate
 
     class FakeFilter:
+        class CustomFilter:
+            def __init__(self, *args, **kwargs):
+                pass
+
         EventMessageType = FakeEventMessageType
         PlatformAdapterType = FakePlatformAdapterType
         event_message_type = staticmethod(decorator_factory)
@@ -53,6 +59,12 @@ def _load_plugin(monkeypatch: pytest.MonkeyPatch):
         on_plugin_loaded = staticmethod(decorator_factory)
         on_plugin_unloaded = staticmethod(decorator_factory)
         on_decorating_result = staticmethod(decorator_factory)
+        on_llm_request = staticmethod(decorator_factory)
+        on_llm_response = staticmethod(decorator_factory)
+        llm_tool = staticmethod(decorator_factory)
+        command = staticmethod(decorator_factory)
+        custom_filter = staticmethod(decorator_factory)
+        after_message_sent = staticmethod(decorator_factory)
 
     event_api.AstrMessageEvent = type("AstrMessageEvent", (), {})
     event_api.filter = FakeFilter
@@ -76,6 +88,66 @@ def _load_plugin(monkeypatch: pytest.MonkeyPatch):
     return module
 
 
+def _isolate_minecraft_bridge(monkeypatch, plugin_module):
+    """入口生命周期测试不启动已有游戏桥的真实监听端口。"""
+    bridge_module = types.ModuleType("app.minecraft_bridge")
+
+    class Bridge:
+        def __init__(self, *args, **kwargs):
+            self.closed = False
+
+        async def start(self):
+            pass
+
+        async def close(self):
+            self.closed = True
+
+    bridge_module.MinecraftBridge = Bridge
+    monkeypatch.setitem(sys.modules, bridge_module.__name__, bridge_module)
+    monkeypatch.setattr(plugin_module.importlib, "reload", lambda module: module)
+
+
+async def test_native_search_tool_forwards_session_and_respects_plugin_switch(monkeypatch):
+    module = _load_plugin(monkeypatch)
+    calls = []
+    context = object()
+    settings = object()
+    event = object()
+
+    async def search(ctx, evt, query, recency, **kwargs):
+        calls.append((ctx, evt, query, recency, kwargs))
+        return '{"status":"ok"}'
+
+    monkeypatch.setattr("app.astrbot_search.native_web_search", search)
+    plugin = module.QQChatPlugin(context, {"legacy_chat": False, "web_search_enabled": True})
+    plugin.runtime = SimpleNamespace(_core=SimpleNamespace(settings=settings))
+    assert await plugin.qqchat_web_search(event, "latest game", "oneWeek") == '{"status":"ok"}'
+    assert calls == [(context, event, "latest game", "oneWeek", {"settings": settings})]
+    assert plugin.qqchat_web_search._test_filter_calls == [((), {"name": "qqchat_web_search"})]
+    plugin.config["web_search_enabled"] = False
+    assert '"disabled"' in await plugin.qqchat_web_search(event, "query")
+    assert len(calls) == 1
+
+
+async def test_group_reply_hook_runs_after_other_context_hooks_and_keeps_legacy_guard(monkeypatch):
+    module = _load_plugin(monkeypatch)
+    calls = []
+    context, event, request, settings = object(), object(), object(), object()
+
+    async def prepare(ctx, evt, req, **kwargs):
+        calls.append((ctx, evt, req, kwargs))
+
+    monkeypatch.setattr("app.astrbot_search.prepare_group_search_context", prepare)
+    plugin = module.QQChatPlugin(context, {"legacy_chat": False, "web_search_enabled": True})
+    plugin.runtime = SimpleNamespace(_core=SimpleNamespace(settings=settings))
+    await plugin.prepare_group_reply(event, request)
+    assert calls == [(context, event, request, {"settings": settings, "enabled": True})]
+    assert plugin.prepare_group_reply._test_filter_calls[0][1]["priority"] < -260000
+    plugin.legacy_chat = True
+    await plugin.prepare_group_reply(event, request)
+    assert len(calls) == 1
+
+
 class FakeEvent:
     def __init__(self, raw_event: dict[str, Any], *, result: Any = None, stopped=False):
         self.message_obj = SimpleNamespace(raw_message=raw_event)
@@ -93,6 +165,9 @@ class FakeEvent:
 
     def get_result(self):
         return self._result
+
+    def clear_result(self):
+        self._result = None
 
     def is_stopped(self) -> bool:
         return self._stopped
@@ -256,6 +331,22 @@ async def test_unhandled_group_event_passes_to_astrbot_llm_when_legacy_chat_is_d
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("requested", [False, True])
+async def test_only_explicit_legacy_chat_entry_wakes_native_model(monkeypatch, requested):
+    plugin_module = _load_plugin(monkeypatch)
+    plugin = plugin_module.QQChatPlugin(context=object(), config={"legacy_chat": False})
+    event = FakeEvent({"post_type": "message", "message_type": "group", "message": []})
+    event.is_at_or_wake_command = False
+    plugin.runtime = FakeRuntime({"handled": False, "native_chat_requested": requested})
+
+    await plugin.on_onebot_message(event)
+
+    assert event.is_at_or_wake_command is requested
+    assert event.stop_calls == 0
+    assert event.llm_calls == []
+
+
+@pytest.mark.asyncio
 async def test_prior_result_is_not_dispatched_and_legacy_mode_suppresses_llm(monkeypatch):
     plugin_module = _load_plugin(monkeypatch)
     plugin = plugin_module.QQChatPlugin(context=object(), config={"legacy_chat": True})
@@ -325,12 +416,16 @@ async def test_prior_send_is_not_dispatched_even_if_astrbot_cleared_the_result(m
 @pytest.mark.asyncio
 async def test_plugin_initialize_and_terminate_own_runtime_lifecycle(monkeypatch, tmp_path):
     plugin_module = _load_plugin(monkeypatch)
+    _isolate_minecraft_bridge(monkeypatch, plugin_module)
     monkeypatch.setattr(sys, "path", list(sys.path))
     state: dict[str, Any] = {}
 
     class LifecycleRuntime:
         def __init__(self, *, project_root, legacy_chat):
             state["args"] = (project_root, legacy_chat)
+            self._core = SimpleNamespace(
+                settings=object(), app=SimpleNamespace(state=SimpleNamespace(llm=object())),
+            )
 
         async def initialize(self):
             state["initialized"] = True
@@ -356,12 +451,15 @@ async def test_plugin_initialize_and_terminate_own_runtime_lifecycle(monkeypatch
 @pytest.mark.asyncio
 async def test_failed_initialize_closes_partial_runtime_and_can_retry(monkeypatch, tmp_path):
     plugin_module = _load_plugin(monkeypatch)
+    _isolate_minecraft_bridge(monkeypatch, plugin_module)
     monkeypatch.setattr(sys, "path", list(sys.path))
     state = {"attempts": 0, "closed": 0}
 
     class RetryRuntime:
         def __init__(self, *, project_root, legacy_chat):
-            pass
+            self._core = SimpleNamespace(
+                settings=object(), app=SimpleNamespace(state=SimpleNamespace(llm=object())),
+            )
 
         async def initialize(self):
             state["attempts"] += 1

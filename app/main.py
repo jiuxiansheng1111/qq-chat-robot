@@ -193,6 +193,7 @@ from app.services.voice import (
 from app.services.voice_persona import (
     character_invocation,
     has_voice_persona,
+    is_self_introduction_request,
     resolve_voice_persona_alias,
     voice_persona_prompt,
     voice_persona_romance_prompt,
@@ -1557,16 +1558,12 @@ def ensure_default_murasame_voice(
         compact = re.sub(r"\s+", " ", answer).strip()
         first = re.split(r"[。！？!?\n]", compact, maxsplit=1)[0].strip()
         return (first or "不想说")[:12]
-    if not any(marker in answer for marker in ("吾辈", "苟修金", "汝")):
-        answer = "苟修金，吾辈来说：" + answer
-    if should_add_murasame_tsundere(seed, prompt) and "杂鱼~杂鱼~" not in answer:
-        tail = "哼，才不是特意告诉汝的呢 (｀へ´) 杂鱼~杂鱼~"
-        if "\n\n来源：" in answer:
-            body, sources = answer.split("\n\n来源：", 1)
-            answer = f"{body}\n{tail}\n\n来源：{sources}"
-        else:
-            answer = f"{answer}\n{tail}"
-    return answer
+    if is_self_introduction_request(prompt):
+        return answer
+    # 普通聊天不再补角色称呼或随机傲娇尾句。只移除旧版固定包装，
+    # 不替换正文中的词，避免改坏引用、角色资料或代码。
+    answer = re.sub(r"^\s*苟修金，吾辈来说：\s*", "", answer)
+    return answer.strip()
 
 
 def repeat_echo_candidate(
@@ -2908,7 +2905,7 @@ async def _send_ultraman_character_lookup(
         await send_group_image(group_id, card, caption)
     except (RuntimeError, httpx.HTTPError) as exc:
         logger.warning("Ultraman lookup image failed for %s: %s", hero.name, exc)
-        await send_group_message(group_id, caption + "\n暂无可靠的对应图片，吾辈不会拿其他形态冒充。")
+        await send_group_message(group_id, caption + "\n暂时没有可靠的对应图片，我不会拿其他形态冒充。")
 
 
 async def _handle_pending_character_confirmation(
@@ -3538,8 +3535,8 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
                 )
 
         action_replies = {
-            "摸头": "……只准摸一下，别把吾辈当小孩子。",
-            "牵手": "手给汝了，苟修金可别乱跑。",
+            "摸头": "……只准摸一下，别把我当小孩子。",
+            "牵手": "手给你了，可别乱跑。",
             "拥抱": "……过来吧。只抱一会儿，听见没。",
             "亲吻": "等、等一下……这次就不躲了。",
         }
@@ -3560,7 +3557,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
                     "action",
                 ),
             )
-            reply = action_replies.get(action_name, "……行吧，这次就依汝。")
+            reply = action_replies.get(action_name, "……行吧，这次就依你。")
             if notice:
                 reply += "\n" + notice
             await send_group_message(group_id, reply)
@@ -3733,7 +3730,16 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
     if plugin_result:
         plugin_name, reply = plugin_result
         if reply:
-            await send_group_message(group_id, reply)
+            if plugin_name == "mahjong_review":
+                from app.services.mahjong.cards import report_messages
+                owner = (str(event.get("self_id", "")), str(group_id), str(user_id))
+                for part in await report_messages(request.app.state, reply, owner):
+                    if part.image:
+                        await send_group_image(group_id, part.image.as_uri(), part.text)
+                    else:
+                        await send_group_message(group_id, part.text)
+            else:
+                await send_group_message(group_id, reply)
         return {"ok": True, "plugin": plugin_name}
 
     if text in {"/bot off", "/机器人关闭"} and is_admin:
@@ -3754,7 +3760,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
             await send_group_message(
                 group_id,
                 f"现在的好感度是 {current_affection}/100。等到 {MEMORY_UNLOCK_SCORE} 以上，"
-                "吾辈才愿意替汝开启记忆功能。(￣^￣)ゞ",
+                "就可以开启记忆功能了。",
             )
         else:
             await request.app.state.db.set_memory_enabled(group_id, user_id, True)
@@ -3790,7 +3796,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
             await send_group_message(
                 group_id,
                 f"好感度 {current_affection}/100，还没到 {MEMORY_UNLOCK_SCORE}。"
-                "这种要吾辈认真记住的事，等再熟一点再说吧。",
+                "这种要认真记住的事，等再熟一点再说吧。",
             )
         elif not memory_content:
             await send_group_message(group_id, "要记住什么呀？例如：@我 记住：我喜欢科幻电影")
@@ -3804,7 +3810,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
             await send_group_message(
                 group_id,
                 f"好感度 {current_affection}/100。至少到 {MEMORY_UNLOCK_SCORE}，"
-                "吾辈才会把这种关系认真记进本群记忆里。",
+                "才可以把这种关系记进本群记忆里。",
             )
         elif not group_memory:
             await send_group_message(group_id, "要记住什么？例如：@我 记住，hzh 是 Cat#")
@@ -3836,12 +3842,12 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
                 if target_user_id == user_id:
                     await send_group_message(
                         group_id,
-                        f"记住了。以后在本群问到汝是谁，吾辈会按“{alias}”来认，不会把QQ号报出来。",
+                        f"记住了。以后在本群问到你是谁，我会按“{alias}”来认，不会把QQ号报出来。",
                     )
                 else:
                     await send_group_message(
                         group_id,
-                        f"记住了这名群友与“{alias}”的对应关系；正常回答时吾辈不会报QQ号。",
+                        f"记住了这名群友与“{alias}”的对应关系；正常回答时我不会报QQ号。",
                     )
             else:
                 current_possession = await request.app.state.db.daily_possession(
@@ -3864,19 +3870,19 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
         if aliases:
             await send_group_message(
                 group_id,
-                "吾辈记得汝在本群绑定过这些身份/称呼："
+                "我记得你在本群绑定过这些身份/称呼："
                 + "、".join(f"“{item}”" for item in aliases[:10])
                 + "。QQ号只用于内部定位，正常回答不会念出来。",
             )
         else:
-            await send_group_message(group_id, "吾辈还没有给汝保存身份/称呼绑定。")
+            await send_group_message(group_id, "我还没有给你保存身份/称呼绑定。")
     elif text in MEMBER_IDENTITY_CLEAR_COMMANDS and (
         text.startswith("/") or bot_mentioned(event)
     ):
         await request.app.state.db.clear_group_member_identities(group_id, user_id)
         await send_group_message(
             group_id,
-            "汝在本群的身份/称呼绑定已经清空；普通群记忆和长期记忆没有动。",
+            "你在本群的身份/称呼绑定已经清空；普通群记忆和长期记忆没有动。",
         )
     elif text in MEMBER_IDENTITY_ADMIN_CLEAR_COMMANDS and (
         text.startswith("/") or bot_mentioned(event)
@@ -3980,14 +3986,14 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
             )
             await send_group_message(
                 group_id,
-                f"吾辈记得，汝在本群说过自己是“{latest}”{extra}。"
-                "至于QQ号，吾辈认得就行，不拿出来念。",
+                f"我记得，你在本群说过自己是“{latest}”{extra}。"
+                "至于QQ号，我认得就行，不拿出来念。",
             )
         else:
             await send_group_message(
                 group_id,
-                f"吾辈目前只认得汝的群名片“{sender_display_name(event)}”；"
-                "若想固定一个身份，可以对吾辈说“记住，我是xxx”。",
+                f"我目前只认得你的群名片“{sender_display_name(event)}”；"
+                "想固定一个身份的话，可以对我说“记住，我是xxx”。",
             )
     elif bot_mentioned(event) and is_identity_question(text):
         possession = await request.app.state.db.daily_possession(group_id, today)
@@ -4041,7 +4047,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
         else:
             await send_group_message(group_id, "今天还没有候选人：群友当天发言达到 15 条才会加入随机抽取。")
     elif is_text_menu_request(text):
-        await send_group_message(group_id, concise_text_menu())
+        await send_group_message(group_id, concise_text_menu(settings=settings))
     elif text in HELP_COMMANDS or is_help_menu_request(text):
         try:
             menu = await prepare_help_menu_file(settings)
@@ -4143,6 +4149,13 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
                     if has_voice_persona(profile_id)
                     else f"已选择音色：{label}。该角色的人格提示词尚未配置，文字对话暂时仍使用小丛雨人格。"
                 )
+                if profiles[profile_id].get("tts_enabled") is False:
+                    selection_notice = (
+                        f"已选择角色：{label}。后续使用该角色进行文字聊天；"
+                        f"@我 翻唱 {label} 歌名 可以指定翻唱。"
+                    )
+                    if profiles[profile_id].get("singing_enabled") is False:
+                        selection_notice = f"已选择角色：{label}。该角色目前仅支持文字聊天。"
                 await send_group_message(
                     group_id,
                     selection_notice,
@@ -4572,7 +4585,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
             await send_group_image(group_id, card, caption)
         except (RuntimeError, httpx.HTTPError) as exc:
             logger.warning("official Ultraman image failed: %s", exc)
-            await send_group_message(group_id, caption + "\n暂无可靠的对应图片，吾辈不会拿视频封面或其他形态图片冒充。")
+            await send_group_message(group_id, caption + "\n暂时没有可靠的对应图片，我不会拿视频封面或其他形态图片冒充。")
     elif text in MY_ULTRAMAN_COMMANDS or (
         bot_mentioned(event) and text in MY_ULTRAMAN_COMMANDS
     ):
@@ -4624,7 +4637,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
         recent_ultraman = ULTRAMAN_BY_NAME.get(recent_ultraman_name)
         if recent_ultraman is not None:
             caption = (
-                f"Ciallo～，苟修金。吾辈把【{recent_ultraman.name}】的图找来了。\n"
+                f"我把【{recent_ultraman.name}】的图找来了。\n"
                 f"{ultraman_profile_text(recent_ultraman)}"
             )
             try:
@@ -4641,7 +4654,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
                 logger.warning("Ultraman follow-up image failed: %s", exc)
                 await send_group_message(
                     group_id,
-                    f"苟修金，【{recent_ultraman.name}】目前没有可靠的对应图片，吾辈不会拿视频封面冒充。",
+                    f"【{recent_ultraman.name}】目前没有可靠的对应图片，我不会拿视频封面冒充。",
                 )
     elif text in CAT_IMAGE_COMMANDS or mentioned_image_command(event, CAT_IMAGE_COMMANDS):
         try:
@@ -4818,6 +4831,9 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
             except (ValueError, RuntimeError, httpx.HTTPError) as exc:
                 logger.warning("web search failed: %s", exc)
                 await send_group_message(group_id, "联网搜索暂时不可用，稍后再试一下吧。")
+    elif not allow_chat and (text.startswith(("/ai ", "/AI ")) or (addressed_to_character and text)):
+        # 原生流程仍需识别既有的角色召唤、引用回复与 /ai 入口。
+        return {"ok": True, "native_chat_requested": True}
     elif allow_chat and (text.startswith(("/ai ", "/AI ")) or (addressed_to_character and text)):
         prompt = text.split(" ", 1)[1].strip() if text.startswith(("/ai ", "/AI ")) else text
         if invocation:

@@ -10,22 +10,25 @@ REQUEST = re.compile(
     r"(?:牌谱|对局|牌局)(?:吧|呀|啊|呗)?[。！!？?，,:：]*"
 )
 PARAMETER = re.compile(r"(?:^|\s)(座位|赛制|文件|链接|AI)\s*[=＝]\s*([^\s]+)")
+PREFIXES = ("/牌谱分析", "牌谱分析", "/雀魂复盘", "雀魂复盘", "/雀魂分析", "雀魂分析")
 
 
 def normalize_intent(text: str) -> str | None:
     text = str(text).strip()
     if NEGATIVE.search(text):
         return None
-    if text.startswith(("/牌谱分析", "牌谱分析", "/雀魂复盘", "雀魂复盘")):
+    if text.startswith(PREFIXES):
         prefix = next(
-            p for p in ("/牌谱分析", "牌谱分析", "/雀魂复盘", "雀魂复盘") if text.startswith(p)
+            p for p in PREFIXES if text.startswith(p)
         )
         tail = text[len(prefix) :]
         if tail and not tail[0].isspace() and tail[0] not in "：:，,。！!":
             return None
-        return "/牌谱分析" + (
-            " " + tail.lstrip(" ：:，,。！!") if tail.strip(" ：:，,。！!") else ""
-        )
+        tail = tail.lstrip(" ：:，,。！!")
+        tail = re.sub(r"^(?:雀魂)?牌谱\s*[:：]\s*", "", tail)
+        if tail.startswith("https://"):
+            tail = "链接=" + tail
+        return "/牌谱分析" + (" " + tail if tail else "")
     marker = re.search(r"(?:座位|赛制|文件|链接|JSON|AI)\s*[=＝]|https://", text)
     phrase = text[: marker.start()] if marker else text
     tail = text[marker.start() :] if marker else ""
@@ -111,9 +114,9 @@ def complete_request(state, event: dict, args: str) -> tuple[str | None, str | N
     elif "文件" in dict(pairs) or "链接" in dict(pairs):
         merged.pop("JSON", None)
     missing = []
-    if "座位" not in merged:
+    if "座位" not in merged and "链接" not in merged:
         missing.append("座位=东/南/西/北（开局固定座位）")
-    if "赛制" not in merged:
+    if "赛制" not in merged and "链接" not in merged:
         missing.append("赛制=东风/半庄")
     if not any(k in merged for k in ("文件", "链接", "JSON")):
         missing.append("已导出的JSON/JSONL文件，或官方牌谱链接")
@@ -126,7 +129,7 @@ def complete_request(state, event: dict, args: str) -> tuple[str | None, str | N
         return None, (
             "可以，本地文字复盘还需要：" + "；".join(missing) + "。\n"
             "请在5分钟内由同一用户、同一会话补充。附件需已由可信本地流程放入data/mahjong/inbox；"
-            "不会下载消息中任意URL。官方链接当前仅识别，未实现原生抓取解码。"
+            "官方雀魂链接会通过已连接账号读取整场记录，赛制和玩家视角优先自动识别；不需要截图。"
         )
     pending.pop(key, None)
     prepared = " ".join(f"{k}={v}" for k, v in merged.items() if k != "JSON")

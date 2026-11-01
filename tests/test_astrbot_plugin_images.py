@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+import ast
+from pathlib import Path
+from unittest.mock import AsyncMock
 from typing import Any
 
 import pytest
@@ -18,6 +21,9 @@ from app.astrbot_plugin_images import (
     "text",
     [
         "随机二次元图片",
+        "来一份二次元图片",
+        "来份二次元图片",
+        "/来一份二次元图片",
         "来张二次元图",
         "随机动漫图",
         "来张随机二次元图片",
@@ -71,7 +77,7 @@ class FakeImagePlugin:
 
 
 @pytest.mark.asyncio
-async def test_forwards_alias_to_loaded_plugin_random_command() -> None:
+async def test_forwards_alias_to_loaded_plugin_random_command(monkeypatch) -> None:
     event = FakeEvent("来张随机二次元图片")
     plugin = FakeImagePlugin()
     context = SimpleNamespace(
@@ -79,6 +85,9 @@ async def test_forwards_alias_to_loaded_plugin_random_command() -> None:
             name=name, activated=True, star_cls=plugin
         )
     )
+    monkeypatch.setattr("app.astrbot_menu._active_commands", lambda *_args: [
+        {"plugin_name": IMAGE_PLUGIN_NAME, "handler_name": "cmd_p"}
+    ])
 
     iterator = await forward_anime_image(event, context)
 
@@ -132,3 +141,30 @@ async def test_returns_none_when_registry_lookup_fails_or_command_is_missing() -
         event,
         SimpleNamespace(get_registered_star=lambda _name: SimpleNamespace()),
     ) is None
+
+
+@pytest.mark.asyncio
+async def test_upstream_stop_does_not_discard_qq_image(monkeypatch):
+    source = Path(__file__).resolve().parents[1] / "main.py"
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "QQChatPlugin")
+    method = next(n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "on_anime_image")
+    method.decorator_list = []
+    event = SimpleNamespace(
+        stopped=False, should_call_llm=lambda _value: None,
+        stop_event=lambda: setattr(event, "stopped", True), send=AsyncMock(),
+    )
+    async def handler():
+        event.stop_event()
+        yield "image"
+    async def forward(_event, _context):
+        return handler()
+    monkeypatch.setattr("app.astrbot_plugin_images.forward_anime_image", forward)
+    monkeypatch.setattr("app.astrbot_menu._raw_event_for_reset", lambda *_args: {})
+    plugin = SimpleNamespace(runtime=object(), context=object(), _legacy_event_allowed=AsyncMock(return_value=True))
+    namespace = {"AstrMessageEvent": object, "_is_stopped": lambda e: e.stopped,
+                 "_get_result_or_none": lambda _e: None, "_result_has_reply": lambda _r: False}
+    exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), "exec"), namespace)
+    await namespace["on_anime_image"](plugin, event)
+    event.send.assert_awaited_once_with("image")
+    assert event.stopped

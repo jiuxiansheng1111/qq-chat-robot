@@ -4,6 +4,7 @@ from app.services.voice_persona import (
     Invocation,
     character_invocation,
     has_voice_persona,
+    is_self_introduction_request,
     resolve_voice_persona_alias,
 )
 
@@ -70,3 +71,16 @@ def test_legacy_rena_profile_id_uses_lena_persona_and_aliases():
     assert has_voice_persona("rena")
     assert character_invocation("蕾娜", profiles) == Invocation("rena", "")
     assert resolve_voice_persona_alias("lena", profiles) == "rena"
+
+
+@pytest.mark.parametrize("prompt", ["你是谁？", "小丛雨，介绍一下你自己", "请自我介绍一下", "你叫什么名字呀"])
+def test_explicit_self_introductions_allow_role_voice(prompt):
+    assert is_self_introduction_request(prompt)
+
+
+@pytest.mark.parametrize("prompt", [
+    "你知道我是谁吗", "今天吃什么", "不要自我介绍", "解释一下‘吾辈’这个词",
+    "你是谁写的", "帮我写一段人物自我介绍", "介绍一下芳乃", "我叫什么名字",
+])
+def test_normal_chat_and_third_person_questions_are_not_self_introductions(prompt):
+    assert not is_self_introduction_request(prompt)

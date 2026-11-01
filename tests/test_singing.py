@@ -55,6 +55,13 @@ def test_singing_requires_explicit_request_and_preserves_song_title():
         assert parse_singing_command(control, PROFILES, addressed=True).action in {"status", "cancel", "voices"}
 
 
+@pytest.mark.parametrize("control", ["暂停翻唱", "停止翻唱", "暂停唱歌", "暂停"])
+def test_pause_commands_cancel_only_when_addressed(control):
+    assert parse_singing_command(control, PROFILES, addressed=True).action == "cancel"
+    assert parse_singing_command("/" + control, PROFILES, addressed=False).action == "cancel"
+    assert parse_singing_command(control, PROFILES, addressed=False) is None
+
+
 def test_qq_chunk_limit_is_validated_even_when_config_is_wrong():
     assert Settings().singing_chunk_seconds == 115
     assert Settings(singing_chunk_seconds=115).singing_chunk_seconds == 115
@@ -584,7 +591,10 @@ async def test_generation_retries_with_same_shift_and_mixes_equivalent_accompani
 
 
 @pytest.mark.asyncio
-async def test_command_admission_returns_before_long_gpu_work_and_cancel_stops_it(monkeypatch):
+@pytest.mark.parametrize("cancel_command", ["取消唱歌", "暂停翻唱", "暂停"])
+async def test_command_admission_returns_before_long_gpu_work_and_cancel_stops_it(
+    monkeypatch, cancel_command
+):
     from app import main
     from app.services.onebot_routing import set_current_onebot_self_id
 
@@ -604,6 +614,7 @@ async def test_command_admission_returns_before_long_gpu_work_and_cancel_stops_i
         started.set()
         try:
             await asyncio.Event().wait()
+            await send("group", "后续翻唱消息")
         finally:
             stopped.set()
 
@@ -616,9 +627,11 @@ async def test_command_admission_returns_before_long_gpu_work_and_cancel_stops_i
         assert handled
         assert send.await_count == 1
         await asyncio.wait_for(started.wait(), 1)
-        assert await main._handle_singing_command(request, {}, "取消唱歌", "group", "user", "murasame")
+        assert await main._handle_singing_command(request, {}, cancel_command, "group", "user", "murasame")
         await asyncio.wait_for(stopped.wait(), 1)
         assert manager.status(("bot-2", "group", "user")).status == "cancelled"
+        assert send.await_count == 2
+        assert send.await_args.args[1] == "已取消你的翻唱任务。"
     finally:
         await manager.aclose()
         set_current_onebot_self_id("")

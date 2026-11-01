@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>雀魂账号设置 · QQ 机器人</title>
+<style>
+:root{color-scheme:light;font-family:system-ui,"Microsoft YaHei",sans-serif;color:#23352f;background:#eef3ef}
+body{margin:0;padding:48px 20px}main{max-width:700px;margin:auto;background:white;border:1px solid #dce6df;border-radius:22px;overflow:hidden;box-shadow:0 18px 60px #183d2110}
+header{padding:30px 36px;background:#153e32;color:#fff}.eyebrow{font-size:12px;letter-spacing:2px;color:#b9dbc7}h1{font-size:28px;margin:10px 0}header p{color:#d7e8de;line-height:1.7;margin:0}
+section{padding:28px 36px}.badge{background:#f0f5f1;padding:14px 18px;border-radius:10px;margin-bottom:24px;color:#335d45}label{display:block;font-weight:600;font-size:14px;margin:18px 0 8px}input:not([type=checkbox]){box-sizing:border-box;width:100%;padding:13px;border:1px solid #c3d1c8;border-radius:8px;font:inherit}input:focus{outline:2px solid #6d9e83;outline-offset:2px}
+.check{display:flex;gap:10px;align-items:flex-start;line-height:1.6;font-weight:400}.check input{margin-top:5px;accent-color:#245e44}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:25px}button{border:1px solid #b9cbbf;border-radius:8px;background:#fff;color:#28503c;padding:11px 17px;font:inherit;cursor:pointer}button.primary{background:#245e44;color:white;border-color:#245e44}button:disabled{opacity:.55;cursor:wait}.muted{font-size:13px;line-height:1.8;color:#62746a}.status{line-height:1.7;white-space:pre-wrap}footer{padding:0 36px 24px}.status.error{color:#a1372f}.status.success{color:#245e44}@media(max-width:500px){body{padding:16px 10px}header,section{padding:24px}footer{padding:0 24px 20px}}
+</style></head><body><main>
+<header><div class="eyebrow">QQ CHAT ROBOT / MAHJONG SOUL</div><h1>连接雀魂账号</h1><p>连接后，向机器人发送雀魂牌谱链接，即可读取整场对局并复盘。</p></header>
+<section><div id="connection" class="badge">正在检查连接状态…</div>
+<form id="form"><label for="account">雀魂国服账号</label><input id="account" name="account" autocomplete="username" placeholder="填写你注册的账号" maxlength="254" required>
+<label for="password">密码</label><input id="password" name="password" type="password" autocomplete="off" placeholder="填写账号密码" maxlength="256" required>
+<label class="check"><input id="auto-open" type="checkbox" checked><span>收到牌谱分析请求时，在这台电脑打开对应的雀魂页面<br><span class="muted">牌谱读取自动进行；网页注册、登录或验证码由你完成。</span></span></label>
+<div class="actions"><button class="primary" id="save" type="submit">保存并验证</button><button id="open" type="button">打开雀魂官网 / 注册</button><button id="forget" type="button">清除已保存账号</button></div></form>
+<p id="status" class="status" role="status" aria-live="polite"></p>
+<p class="muted">账号信息加密保存在这台电脑，不发送到 QQ 聊天中。这里只支持雀魂国服账号密码登录；第三方扫码账号请先在官方客户端绑定可用的账号密码。</p>
+</section><footer class="muted">使用方式：私聊机器人或在群里 @机器人，发送「雀魂分析」和牌谱链接。支持已结束的标准匹配四人东风、半庄；暂不支持三麻、活动与自定义规则。链接有玩家视角时自动选择，无视角时再补开局座位。</footer>
+</main><script nonce="__CSRF__">
+const token='__CSRF__';const $=id=>document.getElementById(id);
+function notice(text,error=false){$('status').textContent=text;$('status').className='status '+(error?'error':'success');}
+async function request(path,data){const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-QQChat-CSRF':token},body:JSON.stringify(data||{})});const result=await response.json();if(!response.ok)throw Error(result.error||'操作未完成');return result;}
+async function refresh(){const response=await fetch('/status');const data=await response.json();$('connection').textContent=data.configured?'已连接 · '+data.account_hint:'尚未连接 · 注册账号后在下方填写';if(data.configured)$('auto-open').checked=data.auto_open;if(data.error)notice(data.error,true);}
+$('form').addEventListener('submit',async event=>{event.preventDefault();$('save').disabled=true;notice('正在验证雀魂登录，请稍候…');try{await request('/account',{account:$('account').value,password:$('password').value,auto_open:$('auto-open').checked});notice('连接成功。现在可以把整场牌谱链接发给机器人。');await refresh();}catch(error){notice(error.message,true);}finally{$('password').value='';$('save').disabled=false;}});
+$('open').addEventListener('click',async()=>{try{await request('/open');notice('已在默认浏览器打开雀魂官网。注册并完成首次登录后，回来填写账号。');}catch(error){notice(error.message,true);}});
+$('forget').addEventListener('click',async()=>{try{await request('/forget');$('account').value='';$('password').value='';notice('已清除本机保存的雀魂账号。');await refresh();}catch(error){notice(error.message,true);}});
+refresh().catch(()=>notice('无法连接本机设置服务，请确认 QQ 机器人正在运行。',true));
+</script></body></html>

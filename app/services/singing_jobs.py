@@ -50,7 +50,7 @@ class SingingJobManager:
     公开方法必须在同一个事件循环中调用。``submit`` 不含 await，因此准入检查和入队在该循环内是原子操作。
     """
 
-    def __init__(self, max_pending: int = 3, cooldown_seconds: float = 120) -> None:
+    def __init__(self, max_pending: int = 3, cooldown_seconds: float = 15) -> None:
         if max_pending < 1 or cooldown_seconds < 0:
             raise ValueError("max_pending must be positive and cooldown_seconds nonnegative")
         self.max_pending = max_pending

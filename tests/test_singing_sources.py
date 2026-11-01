@@ -45,6 +45,50 @@ async def test_explicit_title_artist_selects_original_and_retries_title(monkeypa
     assert queries == ["春泥棒 / ヨルシカ", "ヨルシカ 春泥棒", "春泥棒"]
 
 
+@pytest.mark.parametrize("query", [
+    "yolushika parade", "Yorushika Parade", "yolushika的parade", "夜鹿 parade",
+    "パレード ヨルシカ", "Parade / Yorushika",
+])
+async def test_parade_keeps_named_artist_even_in_title_fallback(monkeypatch, query):
+    wrong = NeteaseTrack("701280", "パレード", ("CHABA",), "", "", 294)
+    original = NeteaseTrack("1357628744", "パレード", ("ヨルシカ",), "", "", 299)
+
+    async def search(candidate, settings):
+        return [wrong, original] if candidate == "パレード" else []
+
+    monkeypatch.setattr(sources, "search_netease_music", search)
+    assert await sources._search_track(query, SETTINGS) == original
+
+    async def only_wrong(candidate, settings):
+        return [wrong]
+
+    monkeypatch.setattr(sources, "search_netease_music", only_wrong)
+    with pytest.raises(sources.SingingSourceError, match="未找到匹配"):
+        await sources._search_track(query, SETTINGS)
+
+
+async def test_title_only_retains_search_relevance_instead_of_lowest_id(monkeypatch):
+    original = NeteaseTrack("1357628744", "パレード", ("ヨルシカ",), "", "", 299)
+    wrong = NeteaseTrack("701280", "パレード", ("CHABA",), "", "", 294)
+
+    async def search(candidate, settings):
+        return [original, wrong]
+
+    monkeypatch.setattr(sources, "search_netease_music", search)
+    assert await sources._search_track("パレード", SETTINGS) == original
+
+
+async def test_unknown_artist_is_not_discarded_by_suffix_fallback(monkeypatch):
+    wrong = NeteaseTrack("1", "Parade", ("CHABA",), "", "", 294)
+
+    async def search(candidate, settings):
+        return [wrong]
+
+    monkeypatch.setattr(sources, "search_netease_music", search)
+    with pytest.raises(sources.SingingSourceError):
+        await sources._search_track("UnknownArtist Parade", SETTINGS)
+
+
 async def test_dj_request_requires_dj_title_and_plain_request_rejects_it(monkeypatch):
     plain = NeteaseTrack("1", "朋友的酒", ("李晓杰",), "", "", 230)
     dj = NeteaseTrack("2", "朋友的酒（DJ版）", ("李晓杰",), "", "", 230)

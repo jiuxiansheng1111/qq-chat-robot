@@ -79,3 +79,22 @@ def test_poll_interval_is_capped_at_half_second():
     assert singing_gpu._poll_seconds(3) == 0.5
     with pytest.raises(ValueError):
         singing_gpu._poll_seconds(0)
+
+
+@pytest.mark.asyncio
+async def test_same_cover_can_synthesize_reference_but_child_tasks_cannot_bypass_lock(tmp_path, monkeypatch):
+    monkeypatch.setattr(singing_gpu, "GPU_LOCK_PATH", tmp_path / "gpu.lock")
+    async with singing_gpu.async_gpu_lock():
+        assert singing_gpu.gpu_is_busy()
+        async with singing_gpu.async_gpu_lock(blocking=False):
+            pass
+
+        async def competing_request():
+            async with singing_gpu.async_gpu_lock(blocking=False):
+                pytest.fail("A separate task must not inherit GPU ownership")
+
+        with pytest.raises(singing_gpu.GpuBusyError):
+            await asyncio.create_task(competing_request())
+    assert not singing_gpu.gpu_is_busy()
+    async with singing_gpu.async_gpu_lock(blocking=False):
+        pass

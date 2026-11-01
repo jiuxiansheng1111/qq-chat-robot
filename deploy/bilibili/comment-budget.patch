@@ -1,0 +1,1314 @@
+diff --git a/_conf_schema.json b/_conf_schema.json
+index d6739e0..77fed78 100644
+--- a/_conf_schema.json
++++ b/_conf_schema.json
+@@ -2000,6 +2000,14 @@
+       "BEHAVIOR_BUDGET_ENABLED": true
+     }
+   },
++  "COMMENT_SHARED_DAILY_LIMIT": {
++    "description": "【评论安全上限】每日评论写入合计上限",
++    "type": "int",
++    "default": 100,
++    "min": 0,
++    "max": 100,
++    "hint": "按北京时间每日重置；评论回复、主动评论和工具评论共用此硬上限，主动推荐的评论区@也计入。可设为 0-100；0 表示禁止这些评论动作。即使关闭统一行为预算或动作标记为豁免，此上限仍生效。"
++  },
+   "BEHAVIOR_ACTION_TIMEOUT_SECONDS": {
+     "description": "【行为调度】单个发送动作超时秒数",
+     "type": "int",
+diff --git a/core/behavior_budget.py b/core/behavior_budget.py
+index 3484567..8d602f9 100644
+--- a/core/behavior_budget.py
++++ b/core/behavior_budget.py
+@@ -8,7 +8,7 @@ reservations so concurrent pollers cannot all pass the same last free slot.
+ from __future__ import annotations
+ 
+ from dataclasses import dataclass
+-from datetime import datetime
++from datetime import datetime, timedelta, timezone
+ from typing import Any
+ 
+ 
+@@ -29,6 +29,16 @@ class BudgetReservation:
+ class BehaviorBudget:
+     """Build and atomically reserve the budgets that apply to an action."""
+ 
++    # Use a fixed UTC+8 offset instead of the host's local timezone (or the
++    # optional system zone database) so the shared comment cap always rolls
++    # over at Beijing midnight, including on Windows hosts.
++    _BEIJING_TZ = timezone(timedelta(hours=8), name="Asia/Shanghai")
++    _SHARED_COMMENT_KINDS = {
++        "comment_reply",
++        "proactive_comment",
++        "tool_comment",
++    }
++
+     def __init__(self, config_getter) -> None:
+         self._get = config_getter
+ 
+@@ -64,6 +74,11 @@ class BehaviorBudget:
+         current = datetime.fromtimestamp(at)
+         return current.strftime("%Y-%m-%d"), current.strftime("%Y-%m-%dT%H:%M")
+ 
++    @classmethod
++    def beijing_day_key(cls, at: float) -> str:
++        """Return the calendar date in Beijing time for a shared comment cap."""
++        return datetime.fromtimestamp(at, tz=cls._BEIJING_TZ).strftime("%Y-%m-%d")
++
+     @staticmethod
+     def _effective_limit(primary: int, secondary: int) -> int:
+         if primary and secondary:
+@@ -72,14 +87,34 @@ class BehaviorBudget:
+ 
+     def rules_for(self, request, at: float) -> list[tuple[str, str, int]]:
+         metadata = dict(getattr(request, "metadata", {}) or {})
++        kind = str(getattr(request, "kind", "") or "").strip().lower()
++        rules: list[tuple[str, str, int]] = []
++
++        # The user-authorized shared ceiling is a safety cap. It therefore
++        # remains active when the general behavior budget is disabled and for
++        # otherwise-exempt comment actions (such as moderation notices).
++        if kind in self._SHARED_COMMENT_KINDS or bool(
++            metadata.get("comment_write")
++        ):
++            try:
++                shared_limit = int(self._get("COMMENT_SHARED_DAILY_LIMIT", 100) or 0)
++            except (TypeError, ValueError):
++                shared_limit = 100
++            shared_limit = max(0, min(100, shared_limit))
++            rules.append(
++                (
++                    "behavior:comment_shared:day",
++                    self.beijing_day_key(at),
++                    shared_limit,
++                )
++            )
++
+         if not bool(self._get("BEHAVIOR_BUDGET_ENABLED", True)) or metadata.get(
+             "budget_exempt"
+         ):
+-            return []
++            return rules
+ 
+         day_key, minute_key = self.window_keys(at)
+-        kind = str(getattr(request, "kind", "") or "").strip().lower()
+-        rules: list[tuple[str, str, int]] = []
+ 
+         global_minute = self._int("BEHAVIOR_GLOBAL_MAX_PER_MINUTE", 12)
+         global_daily = self._int("BEHAVIOR_GLOBAL_DAILY_LIMIT", 200)
+diff --git a/core/layered_runtime.py b/core/layered_runtime.py
+index 2b2bdf6..e249052 100644
+--- a/core/layered_runtime.py
++++ b/core/layered_runtime.py
+@@ -615,14 +615,19 @@ class LayeredRuntime:
+ 
+         return await self.db.run(_reserve)
+ 
+-    async def on_action_started(self, request: ActionRequest) -> None:
++    async def on_action_started(self, request: ActionRequest) -> bool:
+         if not self.is_open:
+-            return
+-        await self.db.execute(
+-            "UPDATE actions SET state='running',attempts=attempts+1,updated_at=? "
+-            "WHERE key=? AND state='queued'",
+-            (now(), request.key),
+-        )
++            return False
++        def _mark_running(conn):
++            cursor = conn.execute(
++                "UPDATE actions SET state='running',attempts=attempts+1,updated_at=? "
++                "WHERE key=? AND state='queued'",
++                (now(), request.key),
++            )
++            return cursor.rowcount
++
++        updated = await self.db.run(_mark_running)
++        return updated == 1
+ 
+     async def on_action_finished(
+         self, request: ActionRequest, state: ActionState | str, reason: str = ""
+diff --git a/core/private_messages.py b/core/private_messages.py
+index c4e1bb0..4847a32 100644
+--- a/core/private_messages.py
++++ b/core/private_messages.py
+@@ -28,6 +28,7 @@ from .config import (
+     REPLY_LOG_FILE,
+ )
+ from .runtime import ActionRequest, EventState, InboundEvent
++from .owner_controls import HELP as OWNER_CONTROL_HELP, owner_status, parse_owner_control
+ 
+ 
+ _URL_RE = re.compile(
+@@ -264,6 +265,16 @@ class PrivateMessageMixin:
+         prefix = f"[B站视频分享] {title}" if title else "[B站视频分享]"
+         return f"{prefix}\n{video_url}", "video_share"
+ 
++    @staticmethod
++    def _private_is_follow_notice(content, msg_source=None):
++        # B站互关提示也使用文本消息类型；现场返回 msg_source=17。
++        # 只匹配这条固定提示。保留已知来自用户输入的相同文字，旧队列无来源时兼容过滤。
++        text = unicodedata.normalize("NFKC", str(content or "")).strip().rstrip("~!。.")
++        return (
++            text == "我们已互相关注,开始聊天吧"
++            and (msg_source is None or str(msg_source) == "17")
++        )
++
+     def _private_sender_protected(self, mid):
+         uid = str(mid or "").strip()
+         protected = {
+@@ -858,6 +869,10 @@ query 只保留用于B站搜索的关键词或UP主名字，不要包含“帮
+                 )
+                 if not content:
+                     continue
++                if content_type == "text" and self._private_is_follow_notice(
++                    content, message.get("msg_source")
++                ):
++                    continue
+                 account = session.get("account_info") or {}
+                 queued_message = {
+                     "msg_key": msg_key,
+@@ -868,6 +883,7 @@ query 只保留用于B站搜索的关键词或UP主名字，不要包含“帮
+                     "username": account.get("name") or account.get("uname") or f"UID {talker_id}",
+                     "content": content,
+                     "content_type": content_type,
++                    "msg_source": message.get("msg_source"),
+                     "timestamp": timestamp,
+                     "retry_count": 0,
+                     "next_retry_at": 0,
+@@ -1264,6 +1280,48 @@ query 只保留用于B站搜索的关键词或UP主名字，不要包含“帮
+             else:
+                 self._finish_private_message(message)
+ 
++    async def _handle_private_owner_control(self, message, event_key):
++        # Identity comes exclusively from the B站 inbox, never model text or a
++        # user-supplied UID in a command. This path does not expose write tools.
++        owner = str(self.config.get("OWNER_MID", "") or "").strip()
++        if not owner or str(message.get("sender_uid", "")) != owner:
++            return None
++        if message.get("content_type") != "text":
++            return None
++        command = parse_owner_control(message.get("content"))
++        if command is None:
++            return None
++        action, updates, reply = command
++        if action == "help":
++            reply = OWNER_CONTROL_HELP
++        elif action == "status":
++            reply = owner_status(self.config, getattr(self, "_running", False))
++        elif action == "set":
++            # Every operation sets an explicit value, so a failed acknowledgement
++            # and later inbox retry cannot toggle it back or reset daily usage.
++            absent = object()
++            previous = {key: self.config.get(key, absent) for key in updates}
++            try:
++                self.config.update(updates)
++                self.config.save_config()
++            except Exception as exc:
++                for key, value in previous.items():
++                    if value is absent:
++                        self.config.pop(key, None)
++                    else:
++                        self.config[key] = value
++                logger.warning("[BiliBot] 主人私信设置保存失败：%s", type(exc).__name__)
++                reply = "这次设置没保存成功，请稍后重试。"
++        outcome = await self.event_runtime.execute(
++            ActionRequest(
++                key=f"private_owner_control_reply:{message['msg_key']}",
++                kind="private_reply", event_key=event_key, target_id=owner,
++                priority=0, metadata={"budget_exempt": True, "control_reply": True},
++            ),
++            lambda: self._send_bili_private_message(owner, reply),
++        )
++        return bool(outcome.success or outcome.state == "unknown")
++
+     async def _handle_private_message(self, message, trusted_domains):
+         mid = str(message["sender_uid"])
+         username = message["username"]
+@@ -1278,6 +1336,13 @@ query 只保留用于B站搜索的关键词或UP主名字，不要包含“帮
+                 f"[BiliBot] 私信事件运行时去重：{message['msg_key']} ({claim.reason})"
+             )
+             return True
++        if message.get("content_type") == "text" and self._private_is_follow_notice(
++            content, message.get("msg_source")
++        ):
++            await self.event_runtime.transition(
++                claim.event_key, EventState.IGNORED, "automatic_follow_notice"
++            )
++            return True
+         decision = assess_private_message(content, trusted_domains)
+         if decision.should_block:
+             if self._private_sender_protected(mid):
+@@ -1339,6 +1404,10 @@ query 只保留用于B站搜索的关键词或UP主名字，不要包含“帮
+                 )
+             return True
+ 
++        controlled = await self._handle_private_owner_control(message, claim.event_key)
++        if controlled is not None:
++            return controlled
++
+         if (
+             not self.config.get("PRIVATE_MESSAGE_AUTO_REPLY", False)
+             or not self._private_reply_scope_allows(mid)
+diff --git a/core/proactive.py b/core/proactive.py
+index 6c11400..e054c9f 100644
+--- a/core/proactive.py
++++ b/core/proactive.py
+@@ -1205,7 +1205,7 @@ want_dynamic判断：看完是否真有话想在自己的B站动态里说——
+ - 不要为了像B站而硬塞“哈哈哈”“绷不住了”“泪目”或网络梗；内容确实支持时才用
+ - 内容一般时可以写一个真实的小观察，也可以保持克制，不硬夸
+ - 允许很短；没有真正想说的细节就保持沉默，不要为了完成任务硬评
+-- 12-38字，通常一句，不堆感叹号
++- 最多20字，通常一句，不堆感叹号；一句很短的话就够了
+ {PROACTIVE_COMMENT_SCHEMA_PROMPT}"""
+         custom_proactive_inst = self.config.get("CUSTOM_PROACTIVE_INSTRUCTION", "")
+         if custom_proactive_inst:
+@@ -1218,7 +1218,13 @@ want_dynamic判断：看完是否真有话想在自己的B站动态里说——
+         except ContentProtocolError as exc:
+             logger.warning(f"[BiliBot] 主动评论结构校验失败，保持沉默: {exc}")
+             return None
+-        return parsed["text"] if parsed["decision"] == "comment" else None
++        if parsed["decision"] != "comment":
++            return None
++        text = parsed["text"]
++        if len(text) > 20:
++            logger.info("[BiliBot] 主动评论超过20字，保持沉默")
++            return None
++        return text
+ 
+     def _owner_recommend_delivery(self):
+         # The boolean switch is the page-level capability toggle.  Keep the
+@@ -1849,6 +1855,7 @@ want_dynamic判断：看完是否真有话想在自己的B站动态里说——
+                             "proactive_owner_recommend",
+                             bvid,
+                             lambda: self._send_comment(oid, rec_msg),
++                            metadata={"comment_write": True},
+                         )
+                     ).success:
+                         actions.append("📢评论区推荐给主人")
+diff --git a/core/runtime.py b/core/runtime.py
+index dc7cb12..b7b291e 100644
+--- a/core/runtime.py
++++ b/core/runtime.py
+@@ -272,8 +272,42 @@ class EventRuntime:
+         except asyncio.CancelledError:
+             raise
+         except Exception as exc:
+-            # Persistence/telemetry is fail-open: a damaged auxiliary database must
+-            # never take the existing comment, DM or live reply chain down with it.
++            if (
++                method == "on_action_started"
++                and args
++                and self._requires_comment_budget(args[0])
++            ):
++                self._recent_failures.append(
++                    {
++                        "kind": "runtime_observer",
++                        "key": method,
++                        "reason": str(exc)[:300],
++                        "at": time.time(),
++                    }
++                )
++                raise RuntimeError(
++                    f"comment_budget_start_unavailable:{type(exc).__name__}"
++                ) from exc
++            # Persistent comment reservations are a hard safety ceiling. Do not
++            # let an observer failure fall through to an external comment write.
++            if (
++                method == "before_action"
++                and args
++                and self._requires_comment_budget(args[0])
++            ):
++                self._recent_failures.append(
++                    {
++                        "kind": "runtime_observer",
++                        "key": method,
++                        "reason": str(exc)[:300],
++                        "at": time.time(),
++                    }
++                )
++                raise RuntimeError(
++                    f"comment_budget_unavailable:{type(exc).__name__}"
++                ) from exc
++
++            # Other behavior persistence/telemetry remains fail-open.
+             self._recent_failures.append(
+                 {
+                     "kind": "runtime_observer",
+@@ -284,6 +318,16 @@ class EventRuntime:
+             )
+             return None
+ 
++    @staticmethod
++    def _requires_comment_budget(request: ActionRequest) -> bool:
++        metadata = dict(getattr(request, "metadata", {}) or {})
++        kind = str(getattr(request, "kind", "") or "").strip().lower()
++        return kind in {
++            "comment_reply",
++            "proactive_comment",
++            "tool_comment",
++        } or bool(metadata.get("comment_write"))
++
+     def _prune_locked(self, now: Optional[float] = None):
+         now = time.monotonic() if now is None else now
+         while self._events:
+@@ -432,7 +476,52 @@ class EventRuntime:
+         ``unknown``，不会盲目重试可能已经被平台接收的请求。
+         """
+ 
+-        persistent = await self._notify_observer("before_action", request)
++        requires_comment_budget = self._requires_comment_budget(request)
++        try:
++            persistent = await self._notify_observer("before_action", request)
++        except Exception as exc:
++            if not requires_comment_budget:
++                raise
++            return ActionOutcome(
++                False,
++                request.key,
++                reason=f"comment_budget_unavailable:{type(exc).__name__}",
++                state=ActionState.FAILED.value,
++            )
++
++        if requires_comment_budget:
++            # The persistent observer must explicitly confirm a successful
++            # reservation (or a prior success/known denial). Missing, malformed,
++            # or ambiguous responses cannot authorize an external comment.
++            valid_reservation = (
++                isinstance(persistent, tuple)
++                and len(persistent) >= 4
++                and type(persistent[0]) is bool
++                and type(persistent[2]) is bool
++                and isinstance(persistent[3], str)
++            )
++            if not valid_reservation:
++                return ActionOutcome(
++                    False,
++                    request.key,
++                    reason="comment_budget_unavailable:reservation_not_confirmed",
++                    state=ActionState.FAILED.value,
++                )
++            if persistent[0] and persistent[3] != ActionState.QUEUED.value:
++                return ActionOutcome(
++                    False,
++                    request.key,
++                    reason="comment_budget_unavailable:invalid_reservation_state",
++                    state=ActionState.FAILED.value,
++                )
++            if not persistent[0] and persistent[2] and persistent[3] != ActionState.SUCCEEDED.value:
++                return ActionOutcome(
++                    False,
++                    request.key,
++                    reason="comment_budget_unavailable:invalid_duplicate_state",
++                    state=ActionState.FAILED.value,
++                )
++
+         if persistent is not None:
+             allowed = (
+                 bool(persistent[0])
+@@ -593,7 +682,31 @@ class EventRuntime:
+                 event_record.updated_at = now
+                 sending_event = event_record.event
+ 
+-        await self._notify_observer("on_action_started", request)
++        requires_comment_budget = self._requires_comment_budget(request)
++        try:
++            start_confirmed = await self._notify_observer(
++                "on_action_started", request
++            )
++        except Exception as exc:
++            if not requires_comment_budget:
++                raise
++            reason = f"comment_budget_start_unavailable:{type(exc).__name__}"
++            await self._finish_action(request, ActionState.FAILED, None, reason)
++            return ActionOutcome(
++                False,
++                request.key,
++                reason=reason,
++                state=ActionState.FAILED.value,
++            )
++        if requires_comment_budget and start_confirmed is not True:
++            reason = "comment_budget_start_not_confirmed"
++            await self._finish_action(request, ActionState.FAILED, None, reason)
++            return ActionOutcome(
++                False,
++                request.key,
++                reason=reason,
++                state=ActionState.FAILED.value,
++            )
+         if sending_event is not None:
+             await self._notify_observer(
+                 "on_event_transition", sending_event, EventState.SENDING, ""
+diff --git a/main.py b/main.py
+index 210b8b6..d8f25a6 100644
+--- a/main.py
++++ b/main.py
+@@ -275,6 +275,12 @@ class BiliBiliBot(Star, UtilsMixin, LLMMixin, VisionMixin, MemoryMixin, Affectio
+                 # 支持跨午夜的休眠区间（例如 23 → 7）。
+                 in_sleep = (ss <= h < se) if ss <= se else (h >= ss or h < se)
+                 if in_sleep:
++                    # Quiet hours pause autonomous activity, not replies to new
++                    # inbound messages. Keep each channel's cooldown and budget.
++                    if self.config.get("ENABLE_PRIVATE_MESSAGES", False):
++                        await self._poll_private_messages()
++                    if self.config.get("ENABLE_REPLY", True):
++                        await self._poll_unified()
+                     # ── 日终清算：在睡眠时段触发 ──
+                     if self._consolidation.should_run_today():
+                         if self._consolidation_task is None or self._consolidation_task.done():
+diff --git a/tests/snapshots/proactive_flows.json b/tests/snapshots/proactive_flows.json
+index 087ae89..0725355 100644
+--- a/tests/snapshots/proactive_flows.json
++++ b/tests/snapshots/proactive_flows.json
+@@ -132,7 +132,7 @@
+    ],
+    [
+     "llm",
+-    "当前时间：2026-10-25 14:30\n\n你刚看完一个B站视频，现在想在评论区留一条评论。\n\n视频信息：\n- UP主：接口UP11\n- 标题：接口标题11\n- 视频内容：接口标题11的画面分析：手绘过渡和配乐。细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节\n\n写评论的要点：\n- 先选一个最想回应的具体细节，只写一个中心，不概括整部视频\n- 像真正的B站用户看完顺手留一句：可以接梗、吐槽、追问或说瞬间感受，不写影评\n- 不照抄标题/简介，不假装亲历视频里没有提供的信息，不编造UP主背景\n- 禁止万能夸奖和任务腔：不要写“UP主辛苦了”“视频很好”“学到了”“感谢分享”“期待下一期”\n- 不用“作为……”“整体来说”“不得不说”“让人不禁”这类书面转折，也不要说明自己正在评论\n- 不要为了像B站而硬塞“哈哈哈”“绷不住了”“泪目”或网络梗；内容确实支持时才用\n- 内容一般时可以写一个真实的小观察，也可以保持克制，不硬夸\n- 允许很短；没有真正想说的细节就保持沉默，不要为了完成任务硬评\n- 12-38字，通常一句，不堆感叹号\n只输出完整JSON：{\"decision\":\"comment|skip\",\"text\":\"评论正文\"}。真有一个具体细节想回应才用comment；不想硬评或资料不足用skip且text留空。",
++    "当前时间：2026-10-25 14:30\n\n你刚看完一个B站视频，现在想在评论区留一条评论。\n\n视频信息：\n- UP主：接口UP11\n- 标题：接口标题11\n- 视频内容：接口标题11的画面分析：手绘过渡和配乐。细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节\n\n写评论的要点：\n- 先选一个最想回应的具体细节，只写一个中心，不概括整部视频\n- 像真正的B站用户看完顺手留一句：可以接梗、吐槽、追问或说瞬间感受，不写影评\n- 不照抄标题/简介，不假装亲历视频里没有提供的信息，不编造UP主背景\n- 禁止万能夸奖和任务腔：不要写“UP主辛苦了”“视频很好”“学到了”“感谢分享”“期待下一期”\n- 不用“作为……”“整体来说”“不得不说”“让人不禁”这类书面转折，也不要说明自己正在评论\n- 不要为了像B站而硬塞“哈哈哈”“绷不住了”“泪目”或网络梗；内容确实支持时才用\n- 内容一般时可以写一个真实的小观察，也可以保持克制，不硬夸\n- 允许很短；没有真正想说的细节就保持沉默，不要为了完成任务硬评\n- 最多20字，通常一句，不堆感叹号；一句很短的话就够了\n只输出完整JSON：{\"decision\":\"comment|skip\",\"text\":\"评论正文\"}。真有一个具体细节想回应才用comment；不想硬评或资料不足用skip且text留空。",
+     "persona",
+     120
+    ],
+@@ -1365,7 +1365,7 @@
+    ],
+    [
+     "llm",
+-    "当前时间：2026-10-25 14:30\n\n你刚看完一个B站视频，现在想在评论区留一条评论。\n\n视频信息：\n- UP主：接口UP81\n- 标题：接口标题81\n- 视频内容：接口标题81的画面分析：手绘过渡和配乐。细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节\n\n写评论的要点：\n- 先选一个最想回应的具体细节，只写一个中心，不概括整部视频\n- 像真正的B站用户看完顺手留一句：可以接梗、吐槽、追问或说瞬间感受，不写影评\n- 不照抄标题/简介，不假装亲历视频里没有提供的信息，不编造UP主背景\n- 禁止万能夸奖和任务腔：不要写“UP主辛苦了”“视频很好”“学到了”“感谢分享”“期待下一期”\n- 不用“作为……”“整体来说”“不得不说”“让人不禁”这类书面转折，也不要说明自己正在评论\n- 不要为了像B站而硬塞“哈哈哈”“绷不住了”“泪目”或网络梗；内容确实支持时才用\n- 内容一般时可以写一个真实的小观察，也可以保持克制，不硬夸\n- 允许很短；没有真正想说的细节就保持沉默，不要为了完成任务硬评\n- 12-38字，通常一句，不堆感叹号\n只输出完整JSON：{\"decision\":\"comment|skip\",\"text\":\"评论正文\"}。真有一个具体细节想回应才用comment；不想硬评或资料不足用skip且text留空。",
++    "当前时间：2026-10-25 14:30\n\n你刚看完一个B站视频，现在想在评论区留一条评论。\n\n视频信息：\n- UP主：接口UP81\n- 标题：接口标题81\n- 视频内容：接口标题81的画面分析：手绘过渡和配乐。细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节细节\n\n写评论的要点：\n- 先选一个最想回应的具体细节，只写一个中心，不概括整部视频\n- 像真正的B站用户看完顺手留一句：可以接梗、吐槽、追问或说瞬间感受，不写影评\n- 不照抄标题/简介，不假装亲历视频里没有提供的信息，不编造UP主背景\n- 禁止万能夸奖和任务腔：不要写“UP主辛苦了”“视频很好”“学到了”“感谢分享”“期待下一期”\n- 不用“作为……”“整体来说”“不得不说”“让人不禁”这类书面转折，也不要说明自己正在评论\n- 不要为了像B站而硬塞“哈哈哈”“绷不住了”“泪目”或网络梗；内容确实支持时才用\n- 内容一般时可以写一个真实的小观察，也可以保持克制，不硬夸\n- 允许很短；没有真正想说的细节就保持沉默，不要为了完成任务硬评\n- 最多20字，通常一句，不堆感叹号；一句很短的话就够了\n只输出完整JSON：{\"decision\":\"comment|skip\",\"text\":\"评论正文\"}。真有一个具体细节想回应才用comment；不想硬评或资料不足用skip且text留空。",
+     "persona",
+     120
+    ],
+diff --git a/tests/test_event_runtime.py b/tests/test_event_runtime.py
+index 102afb7..fdb2846 100644
+--- a/tests/test_event_runtime.py
++++ b/tests/test_event_runtime.py
+@@ -14,6 +14,18 @@ sys.modules[SPEC.name] = runtime
+ SPEC.loader.exec_module(runtime)
+ 
+ 
++class ApprovedBudgetObserver:
++    """Explicit test-only approval for comments in in-memory runtime tests."""
++
++    async def before_action(self, request):
++        if runtime.EventRuntime._requires_comment_budget(request):
++            return True, "", False, "queued"
++        return None
++
++    async def on_action_started(self, request):
++        return runtime.EventRuntime._requires_comment_budget(request)
++
++
+ def load_private_message_module(data_dir):
+     package_name = "bilibot_private_runtime_test"
+     package = types.ModuleType(package_name)
+@@ -211,7 +223,7 @@ class EventRuntimeTests(unittest.IsolatedAsyncioTestCase):
+         self.assertEqual(calls, 2)
+ 
+     async def test_action_queue_serializes_different_side_effects(self):
+-        manager = runtime.EventRuntime()
++        manager = runtime.EventRuntime(observer=ApprovedBudgetObserver())
+         active = 0
+         peak = 0
+ 
+@@ -582,7 +594,9 @@ class CommentReplyCommitTests(unittest.IsolatedAsyncioTestCase):
+                     "ENABLE_AFFECTION": True,
+                     "ENABLE_AUTO_BLOCK": False,
+                 }
+-                self.event_runtime = runtime.EventRuntime()
++                self.event_runtime = runtime.EventRuntime(
++                    observer=ApprovedBudgetObserver()
++                )
+                 self._affection = {"42": 10}
+                 self.profile_updates = 0
+                 self.memory_writes = 0
+diff --git a/tests/test_reliability.py b/tests/test_reliability.py
+index 9a172d7..04c1e9e 100644
+--- a/tests/test_reliability.py
++++ b/tests/test_reliability.py
+@@ -243,6 +243,85 @@ class PrivateMessageReliabilityTests(unittest.TestCase):
+             ["message-1"],
+         )
+ 
++    def test_follow_notice_does_not_take_reply_slot_or_hide_next_message(self):
++        bot = self.Bot()
++        bot.config["PRIVATE_MESSAGE_MAX_PER_POLL"] = 1
++        state = bot._default_private_message_state("999")
++        state.update(initialized=True, sessions={"1:123": 10})
++        bot._save_json(self.state_file, state)
++        bot._get_private_sessions = mock.AsyncMock(return_value=[
++            {"talker_id": 123, "session_type": 1, "max_seqno": 12}
++        ])
++        bot._fetch_private_session_messages = mock.AsyncMock(return_value={
++            "max_seqno": 12,
++            "messages": [
++                {"msg_key": "hello", "msg_seqno": 12, "sender_uid": 123,
++                 "msg_type": 1, "msg_source": 2, "timestamp": int(time.time()),
++                 "content": '{"content":"你好"}'},
++                {"msg_key": "follow", "msg_seqno": 11, "sender_uid": 123,
++                 "msg_type": 1, "msg_source": 17, "timestamp": int(time.time()),
++                 "content": '{"content":"我们已互相关注，开始聊天吧~"}'},
++            ],
++        })
++        fetched = asyncio.run(bot._poll_private_inbox())
++        self.assertEqual([item["msg_key"] for item in fetched], ["hello"])
++        self.assertEqual(fetched[0]["msg_source"], 2)
++        saved = bot._load_json(self.state_file, {})
++        self.assertEqual(saved["sessions"]["1:123"], 12)
++        self.assertEqual([item["msg_key"] for item in saved["pending_messages"]], ["hello"])
++
++    def test_follow_notice_alone_advances_cursor_without_queueing(self):
++        bot = self.Bot()
++        state = bot._default_private_message_state("999")
++        state.update(initialized=True, sessions={"1:123": 10})
++        bot._save_json(self.state_file, state)
++        bot._get_private_sessions = mock.AsyncMock(return_value=[
++            {"talker_id": 123, "session_type": 1, "max_seqno": 11}
++        ])
++        bot._fetch_private_session_messages = mock.AsyncMock(return_value={
++            "max_seqno": 11, "messages": [
++                {"msg_key": "follow", "msg_seqno": 11, "sender_uid": 123,
++                 "msg_type": 1, "msg_source": 17, "timestamp": int(time.time()),
++                 "content": '{"content":"我们已互相关注，开始聊天吧~"}'},
++            ],
++        })
++        self.assertEqual(asyncio.run(bot._poll_private_inbox()), [])
++        saved = bot._load_json(self.state_file, {})
++        self.assertEqual(saved["sessions"]["1:123"], 11)
++        self.assertEqual(saved["pending_messages"], [])
++        bot._fetch_private_session_messages.reset_mock()
++        self.assertEqual(asyncio.run(bot._poll_private_inbox()), [])
++        bot._fetch_private_session_messages.assert_not_awaited()
++
++    def test_pending_follow_notice_is_acknowledged_without_reply(self):
++        bot = self.Bot()
++        message = self._message()
++        message["content"] = "我们已互相关注，开始聊天吧～"
++        self._write_pending_state(bot, message)
++        bot._private_runtime_event = lambda _message: object()
++        bot.event_runtime = types.SimpleNamespace(
++            claim=mock.AsyncMock(return_value=types.SimpleNamespace(
++                accepted=True, event_key="event-follow")),
++            transition=mock.AsyncMock(),
++        )
++        self.assertTrue(asyncio.run(bot._handle_private_message(message, None)))
++        bot.event_runtime.transition.assert_awaited_once_with(
++            "event-follow", self.module.EventState.IGNORED, "automatic_follow_notice"
++        )
++        bot._finish_private_message(message)
++        self.assertEqual(bot._load_json(self.state_file, {})["pending_messages"], [])
++
++    def test_user_messages_about_following_are_not_filtered(self):
++        bot = self.Bot()
++        for text, source in [
++            ("我们已互相关注，开始聊天吧~", 2),
++            ("为什么显示我们已互相关注，开始聊天吧~", 17),
++            ("我们互相关注吧", None),
++            ("你好", 17),
++        ]:
++            with self.subTest(text=text, source=source):
++                self.assertFalse(bot._private_is_follow_notice(text, source))
++
+     def test_poll_loop_only_acknowledges_completed_handler(self):
+         bot = self.Bot()
+         bot.config.update({
+--- /dev/null
++++ b/core/owner_controls.py
+@@ -0,0 +1,58 @@
++"""Deterministic controls for the configured owner's real Bilibili DM sender."""
++import re
++import unicodedata
++
++
++HELP = (
++    "主人控制菜单：\n运行状态\n暂停主动活动 / 恢复主动活动\n"
++    "关闭主动评论 / 开启主动评论\n关闭评论回复 / 开启评论回复\n"
++    "主动评论上限 5（每天1～10条）\n"
++    "也可以直接发视频让我总结，或说“找几个关于……的视频”。\n"
++    "这些开关会保存；暂停主动活动后，私信控制仍可使用。"
++)
++
++
++def parse_owner_control(content):
++    text = re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(content or "")))
++    text = text.strip("/。.!！")
++    text = re.sub(r"^(?:请|帮我)", "", text)
++    if text in {"控制菜单", "主人菜单", "主人帮助", "bili控制", "bili帮助"}:
++        return "help", {}, ""
++    if text in {"运行状态", "bili状态", "查看运行状态"}:
++        return "status", {}, ""
++    switches = {
++        "暂停主动活动": ("ENABLE_PROACTIVE", False, "主动活动已暂停，私信仍可正常聊天和控制。"),
++        "关闭主动活动": ("ENABLE_PROACTIVE", False, "主动活动已暂停，私信仍可正常聊天和控制。"),
++        "停止主动活动": ("ENABLE_PROACTIVE", False, "主动活动已暂停，私信仍可正常聊天和控制。"),
++        "恢复主动活动": ("ENABLE_PROACTIVE", True, "主动活动已恢复，会遵守原有时段和次数上限。"),
++        "开启主动活动": ("ENABLE_PROACTIVE", True, "主动活动已恢复，会遵守原有时段和次数上限。"),
++        "关闭主动评论": ("PROACTIVE_COMMENT", False, "主动评论已关闭。"),
++        "暂停主动评论": ("PROACTIVE_COMMENT", False, "主动评论已关闭。"),
++        "开启主动评论": ("PROACTIVE_COMMENT", True, "主动评论已开启，仍遵守每日上限。"),
++        "恢复主动评论": ("PROACTIVE_COMMENT", True, "主动评论已开启，仍遵守每日上限。"),
++        "关闭评论回复": ("ENABLE_REPLY", False, "评论自动回复已关闭，私信控制保留。"),
++        "暂停评论回复": ("ENABLE_REPLY", False, "评论自动回复已关闭，私信控制保留。"),
++        "开启评论回复": ("ENABLE_REPLY", True, "评论自动回复已开启。"),
++        "恢复评论回复": ("ENABLE_REPLY", True, "评论自动回复已开启。"),
++    }
++    if text in switches:
++        key, value, reply = switches[text]
++        return "set", {key: value}, reply
++    limit = re.fullmatch(r"(?:每天)?主动评论(?:上限|最多)(\d{1,4})(?:条)?", text)
++    if limit:
++        count = int(limit[1])
++        if not 1 <= count <= 10:
++            return "error", {}, "主动评论每天可设1～10条；要停止评论，请发“关闭主动评论”。"
++        return "set", {"PROACTIVE_COMMENT_DAILY_LIMIT": count}, f"主动评论已设为每天最多{count}条，不会为了凑数发送。"
++    return None
++
++
++def owner_status(config, running):
++    on = lambda key: "开" if config.get(key, False) else "关"
++    return (
++        f"运行：{'正常' if running else '未运行'}\n"
++        f"主动活动：{on('ENABLE_PROACTIVE')}；主动评论：{on('PROACTIVE_COMMENT')}\n"
++        f"评论回复：{on('ENABLE_REPLY')}；私信回复：{on('PRIVATE_MESSAGE_AUTO_REPLY')}\n"
++        f"主动评论每日上限：{config.get('PROACTIVE_COMMENT_DAILY_LIMIT', 10)}条\n"
++        f"主动休息时段：{config.get('SLEEP_START', 23)}点～{config.get('SLEEP_END', 8)}点（北京时间）"
++    )
+--- /dev/null
++++ b/tests/test_qqchat_owner_controls.py
+@@ -0,0 +1,115 @@
++import types
++from unittest.mock import AsyncMock
++
++import pytest
++import test_reliability as harness
++
++
++class Config(dict):
++    def save_config(self):
++        if getattr(self, "fail", False):
++            raise OSError("disk unavailable")
++        self.saved = dict(self)
++
++
++@pytest.fixture
++def bot():
++    case = harness.PrivateMessageReliabilityTests()
++    case.setUp()
++    instance = case.Bot()
++    instance.config = Config(OWNER_MID="123", ENABLE_PROACTIVE=True,
++                             ENABLE_REPLY=True, PRIVATE_MESSAGE_AUTO_REPLY=False)
++    instance._running = True
++    instance._send_bili_private_message = AsyncMock(return_value=True)
++    instance._private_runtime_event = lambda _message: object()
++
++    async def execute(_request, action):
++        return types.SimpleNamespace(success=await action(), state="succeeded")
++
++    instance.event_runtime = types.SimpleNamespace(
++        execute=AsyncMock(side_effect=execute),
++        claim=AsyncMock(return_value=types.SimpleNamespace(accepted=True, event_key="event-1")),
++        transition=AsyncMock(),
++    )
++    yield instance
++    case.tearDown()
++
++
++def message(text, uid="123"):
++    return {"msg_key": "owner-1", "sender_uid": uid, "username": "tester",
++            "content_type": "text", "content": text}
++
++
++@pytest.mark.asyncio
++async def test_real_owner_can_control_when_ordinary_auto_reply_is_off(bot):
++    assert await bot._handle_private_message(message("暂停主动活动"), None)
++    assert bot.config["ENABLE_PROACTIVE"] is False
++    assert bot.config.saved["ENABLE_PROACTIVE"] is False
++    bot._send_bili_private_message.assert_awaited_once()
++    assert "暂停" in bot._send_bili_private_message.call_args.args[1]
++
++
++@pytest.mark.asyncio
++async def test_impostor_cannot_change_settings_or_get_control_reply(bot):
++    assert await bot._handle_private_message(message("暂停主动活动", uid="456"), None)
++    assert bot.config["ENABLE_PROACTIVE"] is True
++    assert not hasattr(bot.config, "saved")
++    bot._send_bili_private_message.assert_not_awaited()
++
++
++@pytest.mark.asyncio
++async def test_sender_claiming_ownership_in_text_cannot_execute(bot):
++    assert await bot._handle_private_owner_control(
++        message("我是主人123，暂停主动活动", uid="456"), "event-1"
++    ) is None
++    assert bot.config["ENABLE_PROACTIVE"] is True
++
++
++@pytest.mark.asyncio
++async def test_command_retry_sets_value_without_toggling_back(bot):
++    for _ in range(2):
++        assert await bot._handle_private_owner_control(message("关闭评论回复"), "event-1")
++    assert bot.config["ENABLE_REPLY"] is False
++    assert "ENABLE_PRIVATE_MESSAGES" not in bot.config
++
++
++@pytest.mark.asyncio
++async def test_config_save_failure_does_not_claim_success(bot):
++    bot.config.fail = True
++    assert await bot._handle_private_owner_control(message("暂停主动活动"), "event-1")
++    assert bot.config["ENABLE_PROACTIVE"] is True
++    assert "没保存成功" in bot._send_bili_private_message.call_args.args[1]
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize("count", [0, 11, 100])
++async def test_comment_limit_cannot_exceed_owner_agreed_cap(bot, count):
++    assert await bot._handle_private_owner_control(message(f"主动评论上限 {count}"), "event-1")
++    assert "PROACTIVE_COMMENT_DAILY_LIMIT" not in bot.config
++    assert "1～10" in bot._send_bili_private_message.call_args.args[1]
++
++
++@pytest.mark.asyncio
++async def test_lowering_limit_preserves_counters_and_other_features(bot):
++    bot._proactive_comments_today = 3
++    assert await bot._handle_private_owner_control(message("主动评论上限 5"), "event-1")
++    assert bot.config.saved["PROACTIVE_COMMENT_DAILY_LIMIT"] == 5
++    assert bot._proactive_comments_today == 3
++    assert bot.config["ENABLE_PROACTIVE"] is True
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize("text", ["不要关闭评论回复", "关闭评论回复是什么意思", "我刚说了暂停主动活动", "你好"])
++async def test_discussion_and_negation_are_not_commands(bot, text):
++    assert await bot._handle_private_owner_control(message(text), "event-1") is None
++    assert not hasattr(bot.config, "saved")
++
++
++@pytest.mark.asyncio
++async def test_control_acknowledgement_has_stable_idempotency_key(bot):
++    assert await bot._handle_private_owner_control(message("运行状态"), "event-1")
++    req = bot.event_runtime.execute.call_args.args[0]
++    assert req.target_id == "123"
++    assert req.key == "private_owner_control_reply:owner-1"
++    assert req.metadata["control_reply"]
++    assert not hasattr(bot.config, "saved")
+--- /dev/null
++++ b/tests/test_proactive_comment_length.py
+@@ -0,0 +1,44 @@
++import unittest
++
++from test_autonomous_ranges import _install_astrbot_stub
++
++_install_astrbot_stub()
++
++from core.proactive import ProactiveMixin
++
++
++class ProactiveCommentLengthTests(unittest.IsolatedAsyncioTestCase):
++    class Probe(ProactiveMixin):
++        config = {}
++
++        async def _get_system_prompt(self):
++            return ""
++
++        async def _llm_call(self, prompt, **kwargs):
++            self.prompt = prompt
++            return self.response
++
++    async def _generate(self, response):
++        probe = self.Probe()
++        probe.response = response
++        text = await probe._generate_proactive_comment(
++            {"up_name": "UP", "title": "标题"}, "视频里有一个转场。"
++        )
++        return probe, text
++
++    async def test_short_comment_is_allowed_and_prompt_sets_20_character_limit(self):
++        probe, text = await self._generate(
++            '{"decision":"comment","text":"这个转场很妙"}'
++        )
++        self.assertEqual(text, "这个转场很妙")
++        self.assertIn("最多20字", probe.prompt)
++
++    async def test_comment_over_20_characters_is_skipped_without_truncation(self):
++        probe, text = await self._generate(
++            '{"decision":"comment","text":"这个转场的节奏处理得很巧妙，看完之后还想再回去看一遍细节"}'
++        )
++        self.assertIsNone(text)
++
++
++if __name__ == "__main__":
++    unittest.main()
+--- /dev/null
++++ b/tests/test_qqchat_comment_budget.py
+@@ -0,0 +1,393 @@
++"""Shared daily comment ceiling regression tests."""
++
++import asyncio
++import json
++import tempfile
++import unittest
++from datetime import datetime, timezone
++from pathlib import Path
++
++from core.behavior_budget import BehaviorBudget
++from core.layered_runtime import LayeredRuntime
++from core.runtime import ActionRequest, EventRuntime, WriteResultUnknownError
++
++
++class SharedCommentBudgetTests(unittest.IsolatedAsyncioTestCase):
++    async def asyncSetUp(self):
++        self.temp_dir = tempfile.TemporaryDirectory()
++        self.database_path = Path(self.temp_dir.name) / "bilibot.sqlite3"
++        self.config = {
++            "COMMENT_SHARED_DAILY_LIMIT": 1,
++            "BEHAVIOR_GLOBAL_MAX_PER_MINUTE": 0,
++            "BEHAVIOR_GLOBAL_DAILY_LIMIT": 0,
++            "AUTONOMOUS_REPLY_DAILY_LIMIT": 0,
++            "PROACTIVE_COMMENT_DAILY_LIMIT": 0,
++        }
++        self.layers = LayeredRuntime(self.config, self.database_path)
++        await self.layers.open()
++        self.runtime = EventRuntime(observer=self.layers)
++
++    async def asyncTearDown(self):
++        await self.layers.close()
++        self.temp_dir.cleanup()
++
++    async def test_concurrent_mixed_comments_share_the_last_slot(self):
++        calls = 0
++
++        async def send():
++            nonlocal calls
++            calls += 1
++            await asyncio.sleep(0)
++            return True
++
++        outcomes = await asyncio.gather(
++            self.runtime.execute(
++                ActionRequest(key="reply:1", kind="comment_reply"), send
++            ),
++            self.runtime.execute(
++                ActionRequest(key="proactive:1", kind="proactive_comment"), send
++            ),
++        )
++
++        self.assertEqual(sum(outcome.success for outcome in outcomes), 1)
++        denied = next(outcome for outcome in outcomes if not outcome.success)
++        self.assertIn("behavior:comment_shared:day", denied.reason)
++        self.assertEqual(calls, 1)
++        row = await self.layers.db.fetch_one(
++            "SELECT count FROM counters WHERE bucket=?",
++            ("behavior:comment_shared:day",),
++        )
++        self.assertEqual(row["count"], 1)
++
++    async def test_shared_count_survives_layered_runtime_restart(self):
++        first = await self.runtime.execute(
++            ActionRequest(key="reply:before-restart", kind="comment_reply"),
++            lambda: True,
++        )
++        self.assertTrue(first.success)
++
++        await self.layers.close()
++        self.layers = LayeredRuntime(self.config, self.database_path)
++        await self.layers.open()
++        self.runtime = EventRuntime(observer=self.layers)
++
++        second = await self.runtime.execute(
++            ActionRequest(key="proactive:after-restart", kind="proactive_comment"),
++            lambda: True,
++        )
++
++        self.assertFalse(second.success)
++        self.assertIn("behavior:comment_shared:day", second.reason)
++
++    async def test_shared_day_changes_at_utc_1600(self):
++        before_midnight_beijing = datetime(
++            2026, 10, 26, 15, 59, tzinfo=timezone.utc
++        ).timestamp()
++        midnight_beijing = datetime(
++            2026, 10, 26, 16, 0, tzinfo=timezone.utc
++        ).timestamp()
++        request = ActionRequest(key="day-key", kind="comment_reply")
++
++        first_rules = self.layers.behavior_budget.rules_for(
++            request, before_midnight_beijing
++        )
++        next_rules = self.layers.behavior_budget.rules_for(request, midnight_beijing)
++        shared_bucket = "behavior:comment_shared:day"
++
++        self.assertIn(
++            (shared_bucket, "2026-10-26", 1), first_rules
++        )
++        self.assertIn(
++            (shared_bucket, "2026-10-27", 1), next_rules
++        )
++        # Existing local-time windows remain unchanged for unrelated buckets.
++        self.assertEqual(
++            BehaviorBudget.window_keys(midnight_beijing)[0],
++            datetime.fromtimestamp(midnight_beijing).strftime("%Y-%m-%d"),
++        )
++
++    async def test_unknown_send_keeps_shared_reservation(self):
++        async def unknown_send():
++            raise WriteResultUnknownError("platform response lost")
++
++        unknown = await self.runtime.execute(
++            ActionRequest(key="reply:unknown", kind="comment_reply"), unknown_send
++        )
++        denied = await self.runtime.execute(
++            ActionRequest(key="proactive:after-unknown", kind="proactive_comment"),
++            lambda: True,
++        )
++
++        self.assertEqual(unknown.state, "unknown")
++        self.assertFalse(denied.success)
++        row = await self.layers.db.fetch_one(
++            "SELECT count FROM counters WHERE bucket=?",
++            ("behavior:comment_shared:day",),
++        )
++        self.assertEqual(row["count"], 1)
++
++    async def test_budget_exempt_comment_still_counts_even_when_general_budget_off(self):
++        await self.layers.close()
++        self.config["BEHAVIOR_BUDGET_ENABLED"] = False
++        self.layers = LayeredRuntime(self.config, self.database_path)
++        await self.layers.open()
++        self.runtime = EventRuntime(observer=self.layers)
++
++        first = await self.runtime.execute(
++            ActionRequest(
++                key="reply:exempt",
++                kind="comment_reply",
++                metadata={"budget_exempt": True},
++            ),
++            lambda: True,
++        )
++        second = await self.runtime.execute(
++            ActionRequest(key="proactive:normal", kind="proactive_comment"),
++            lambda: True,
++        )
++
++        self.assertTrue(first.success)
++        self.assertFalse(second.success)
++        self.assertIn("behavior:comment_shared:day", second.reason)
++
++    async def test_all_comment_write_kinds_use_the_shared_bucket(self):
++        cases = (
++            ActionRequest(key="reply", kind="comment_reply"),
++            ActionRequest(key="proactive", kind="proactive_comment"),
++            ActionRequest(key="tool", kind="tool_comment"),
++            ActionRequest(
++                key="owner-comment",
++                kind="proactive_owner_recommend",
++                metadata={"comment_write": True},
++            ),
++        )
++        shared_bucket = "behavior:comment_shared:day"
++
++        for request in cases:
++            with self.subTest(kind=request.kind, key=request.key):
++                self.assertIn(
++                    shared_bucket,
++                    {bucket for bucket, _, _ in self.layers.behavior_budget.rules_for(request, 0)},
++                )
++
++        # The same action kind is also used for private/QQ delivery. Those paths
++        # must not consume a Bilibili comment slot.
++        owner_message = ActionRequest(
++            key="owner-private", kind="proactive_owner_recommend"
++        )
++        self.assertNotIn(
++            shared_bucket,
++            {
++                bucket
++                for bucket, _, _ in self.layers.behavior_budget.rules_for(
++                    owner_message, 0
++                )
++            },
++        )
++
++    async def test_comment_write_fails_closed_when_database_is_closed(self):
++        await self.layers.close()
++        calls = 0
++
++        async def send():
++            nonlocal calls
++            calls += 1
++            return True
++
++        result = await self.runtime.execute(
++            ActionRequest(key="comment:db-closed", kind="tool_comment"), send
++        )
++
++        self.assertFalse(result.success)
++        self.assertIn("comment_budget_unavailable", result.reason)
++        self.assertEqual(calls, 0)
++
++    async def test_comment_write_fails_closed_when_before_action_raises(self):
++        class BrokenObserver:
++            async def before_action(self, _request):
++                raise OSError("sqlite unavailable")
++
++        calls = 0
++
++        async def send():
++            nonlocal calls
++            calls += 1
++            return True
++
++        result = await EventRuntime(observer=BrokenObserver()).execute(
++            ActionRequest(key="comment:observer-error", kind="proactive_comment"),
++            send,
++        )
++
++        self.assertFalse(result.success)
++        self.assertIn("comment_budget_unavailable", result.reason)
++        self.assertEqual(calls, 0)
++
++    async def test_comment_write_fails_closed_for_missing_or_unknown_reservation(self):
++        class NoReservationObserver:
++            async def before_action(self, _request):
++                return None
++
++        class UnknownReservationObserver:
++            async def before_action(self, _request):
++                return False, "send_state_unknown", False, "unknown"
++
++        class MalformedReservationObserver:
++            async def before_action(self, _request):
++                return True
++
++        observers = (
++            NoReservationObserver(),
++            UnknownReservationObserver(),
++            MalformedReservationObserver(),
++            None,
++        )
++        for index, observer in enumerate(observers):
++            with self.subTest(observer=type(observer).__name__ if observer else "none"):
++                calls = 0
++
++                async def send():
++                    nonlocal calls
++                    calls += 1
++                    return True
++
++                result = await EventRuntime(observer=observer).execute(
++                    ActionRequest(
++                        key=f"comment:no-reservation:{index}",
++                        kind="proactive_owner_recommend",
++                        metadata={"comment_write": True},
++                    ),
++                    send,
++                )
++
++                self.assertFalse(result.success)
++                self.assertEqual(calls, 0)
++
++    async def test_comment_write_fails_closed_when_start_observer_raises(self):
++        layers = self.layers
++
++        class StartFailureObserver:
++            async def before_action(self, request):
++                return await layers.before_action(request)
++
++            async def on_action_started(self, _request):
++                raise OSError("sqlite update failed")
++
++            async def on_action_finished(self, request, state, reason=""):
++                await layers.on_action_finished(request, state, reason)
++
++        calls = 0
++
++        async def send():
++            nonlocal calls
++            calls += 1
++            return True
++
++        result = await EventRuntime(observer=StartFailureObserver()).execute(
++            ActionRequest(key="comment:start-error", kind="tool_comment"), send
++        )
++
++        self.assertFalse(result.success)
++        self.assertIn("comment_budget_start_unavailable", result.reason)
++        self.assertEqual(calls, 0)
++        count = await self.layers.db.fetch_value(
++            "SELECT count FROM counters WHERE bucket=?",
++            ("behavior:comment_shared:day",),
++            default=0,
++        )
++        self.assertEqual(count, 0)
++
++    async def test_comment_write_fails_closed_when_start_is_not_confirmed(self):
++        layers = self.layers
++
++        class StartNotConfirmedObserver:
++            async def before_action(self, request):
++                return await layers.before_action(request)
++
++            async def on_action_started(self, _request):
++                return None
++
++            async def on_action_finished(self, request, state, reason=""):
++                await layers.on_action_finished(request, state, reason)
++
++        calls = 0
++
++        async def send():
++            nonlocal calls
++            calls += 1
++            return True
++
++        result = await EventRuntime(observer=StartNotConfirmedObserver()).execute(
++            ActionRequest(key="comment:start-missing", kind="comment_reply"), send
++        )
++
++        self.assertFalse(result.success)
++        self.assertEqual(result.reason, "comment_budget_start_not_confirmed")
++        self.assertEqual(calls, 0)
++        count = await self.layers.db.fetch_value(
++            "SELECT count FROM counters WHERE bucket=?",
++            ("behavior:comment_shared:day",),
++            default=0,
++        )
++        self.assertEqual(count, 0)
++
++    async def test_successful_start_marks_action_running_before_comment_send(self):
++        observed = []
++
++        async def send():
++            row = await self.layers.db.fetch_one(
++                "SELECT state,attempts FROM actions WHERE key=?",
++                ("comment:start-confirmed",),
++            )
++            observed.append((row["state"], row["attempts"]))
++            return True
++
++        result = await self.runtime.execute(
++            ActionRequest(key="comment:start-confirmed", kind="comment_reply"),
++            send,
++        )
++        final = await self.layers.db.fetch_one(
++            "SELECT state,attempts FROM actions WHERE key=?",
++            ("comment:start-confirmed",),
++        )
++
++        self.assertTrue(result.success)
++        self.assertEqual(observed, [("running", 1)])
++        self.assertEqual(final["state"], "succeeded")
++        self.assertEqual(final["attempts"], 1)
++
++    async def test_non_comment_action_does_not_consume_shared_comment_slot(self):
++        unrelated = await self.runtime.execute(
++            ActionRequest(key="like:1", kind="like"), lambda: True
++        )
++        comment = await self.runtime.execute(
++            ActionRequest(key="reply:after-like", kind="comment_reply"),
++            lambda: True,
++        )
++
++        self.assertTrue(unrelated.success)
++        self.assertTrue(comment.success, comment.reason)
++        row = await self.layers.db.fetch_one(
++            "SELECT count FROM counters WHERE bucket=?",
++            ("behavior:comment_shared:day",),
++        )
++        self.assertEqual(row["count"], 1)
++
++    async def test_schema_and_runtime_clamp_shared_limit_to_100(self):
++        schema_path = Path(__file__).resolve().parents[1] / "_conf_schema.json"
++        schema = json.loads(schema_path.read_text(encoding="utf-8"))
++        self.assertEqual(schema["COMMENT_SHARED_DAILY_LIMIT"]["default"], 100)
++        self.assertEqual(schema["COMMENT_SHARED_DAILY_LIMIT"]["max"], 100)
++
++        self.config["COMMENT_SHARED_DAILY_LIMIT"] = 500
++        request = ActionRequest(key="clamp", kind="comment_reply")
++        rule = next(
++            item
++            for item in self.layers.behavior_budget.rules_for(request, 0)
++            if item[0] == "behavior:comment_shared:day"
++        )
++        self.assertEqual(rule[2], 100)
++
++
++if __name__ == "__main__":
++    unittest.main()
+--- /dev/null
++++ b/tests/test_qqchat_quiet_inbound.py
+@@ -0,0 +1,76 @@
++"""Quiet hours pause proactive activity while keeping inbound replies alive."""
++import ast
++import asyncio
++import time
++import traceback
++import types
++import unittest
++from datetime import datetime
++from pathlib import Path
++from unittest.mock import AsyncMock, MagicMock
++
++
++class QuietInboundTests(unittest.IsolatedAsyncioTestCase):
++    async def run_one_loop(self, hour, *, enabled=True):
++        source = Path(__file__).resolve().parents[1] / "main.py"
++        tree = ast.parse(source.read_text(encoding="utf-8-sig"))
++        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "BiliBiliBot")
++        method = next(n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "_main_loop")
++
++        class Clock:
++            @staticmethod
++            def now():
++                return datetime(2026, 10, 27, hour, 0)
++
++        bot = types.SimpleNamespace(
++            _running=True,
++            config={"SLEEP_START": 23, "SLEEP_END": 8,
++                    "ENABLE_PRIVATE_MESSAGES": enabled, "ENABLE_REPLY": enabled,
++                    "ENABLE_PROACTIVE": hour < 8, "POLL_INTERVAL": 60},
++            _maybe_evolve_personality=AsyncMock(),
++            _ensure_autonomous_daily_plan=AsyncMock(),
++            _poll_private_messages=AsyncMock(),
++            _poll_unified=AsyncMock(),
++            _consolidation=types.SimpleNamespace(should_run_today=lambda: False),
++            _consolidation_task=None,
++            _maybe_daily_summary=AsyncMock(),
++            _maybe_weekly_summary=AsyncMock(),
++            _last_cookie_check=time.time(),
++            _check_and_refresh_cookie=AsyncMock(),
++            _run_proactive=AsyncMock(),
++        )
++
++        async def sleep(_seconds):
++            bot._running = False
++
++        log = MagicMock()
++        namespace = {
++            "datetime": Clock, "time": time, "traceback": traceback,
++            "logger": log,
++            "asyncio": types.SimpleNamespace(sleep=sleep, CancelledError=asyncio.CancelledError),
++        }
++        exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), "exec"), namespace)
++        await namespace["_main_loop"](bot)
++        log.error.assert_not_called()
++        bot._run_proactive.assert_not_awaited()
++        self.assertFalse(bot._running)
++        return bot
++
++    async def test_sleep_hours_still_poll_comments_and_private_messages(self):
++        bot = await self.run_one_loop(2)
++        bot._poll_private_messages.assert_awaited_once()
++        bot._poll_unified.assert_awaited_once()
++
++    async def test_sleep_hours_honor_disabled_reply_channels(self):
++        bot = await self.run_one_loop(2, enabled=False)
++        bot._poll_private_messages.assert_not_awaited()
++        bot._poll_unified.assert_not_awaited()
++
++    async def test_daytime_does_not_double_poll(self):
++        bot = await self.run_one_loop(12)
++        bot._poll_private_messages.assert_awaited_once()
++        bot._poll_unified.assert_awaited_once()
++
++
++if __name__ == "__main__":
++    unittest.main()

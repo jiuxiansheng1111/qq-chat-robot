@@ -2,8 +2,8 @@
 # 2026-10-04 核对的最新正式版是 AstrBot 4.28.2。
 
 $script:AstrBotPinnedVersion = '4.28.2'
-$script:UvPinnedVersion = '0.12.23'
-$script:UvPinnedSha256X64 = '75d05de6762778c31ee183398de7dd15093fad0ed90b1f236d8205ea5ec00c90'
+$script:UvPinnedVersion = '0.13.4'
+$script:UvPinnedSha256X64 = 'ccec7508a07d9933d7cb1261880633efcf1f30d6e6eddab21823f1dae6f23225'
 
 function Get-AstrbotLayout {
     [CmdletBinding()]
@@ -141,6 +141,24 @@ function Set-AstrbotUvEnvironment {
     $env:UV_TOOL_BIN_DIR = [string]$Layout.UvToolBin
     $env:UV_PYTHON_INSTALL_DIR = [string]$Layout.UvPythonDir
     Remove-Item Env:UV_PYTHON_PREFERENCE -ErrorAction SilentlyContinue
+    # Third-party media plugins call ffmpeg/ffprobe by name. Reuse the existing
+    # project tools for this process and its children only, without editing the
+    # user's or machine's persisted PATH.
+    $mediaBin = [IO.Path]::GetFullPath((Join-Path $Layout.ProjectRoot 'data\singing\runtime\bin'))
+    Assert-AstrbotProjectPath -Layout $Layout -Path $mediaBin
+    if ((Test-Path -LiteralPath (Join-Path $mediaBin 'ffmpeg.exe') -PathType Leaf) -and
+        (Test-Path -LiteralPath (Join-Path $mediaBin 'ffprobe.exe') -PathType Leaf) -and
+        ($env:PATH -split ';' -notcontains $mediaBin)) {
+        $env:PATH = $mediaBin + ';' + $env:PATH
+    }
+    # uv tool run does not necessarily expose dependency console scripts to
+    # subprocesses. Video plugins launch the installed yt-dlp executable by name.
+    $toolScripts = [IO.Path]::GetFullPath((Join-Path $Layout.UvToolDir 'astrbot\Scripts'))
+    Assert-AstrbotProjectPath -Layout $Layout -Path $toolScripts
+    if ((Test-Path -LiteralPath (Join-Path $toolScripts 'yt-dlp.exe') -PathType Leaf) -and
+        ($env:PATH -split ';' -notcontains $toolScripts)) {
+        $env:PATH = $toolScripts + ';' + $env:PATH
+    }
 }
 
 function Assert-AstrbotProjectPath {

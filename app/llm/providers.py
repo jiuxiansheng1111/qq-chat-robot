@@ -38,14 +38,14 @@ def describe_llm_error(exc: Exception) -> str:
 def llm_failure_reply(exc: Exception) -> str:
     reason = describe_llm_error(exc)
     if reason in {"queue_full", "queue_timeout", "rate_limited"}:
-        return "苟修金，聊天请求有点多，请稍后再试一下吧。"
+        return "聊天请求有点多，请稍后再试一下吧。"
     if reason in {"connect_error", "network_error"}:
-        return "苟修金，吾辈暂时连不上聊天模型，请稍后再试一下吧。"
+        return "暂时连不上聊天模型，请稍后再试一下吧。"
     if reason == "timeout":
-        return "苟修金，聊天模型回复超时了，请稍后再试一下吧。"
+        return "聊天模型回复超时了，请稍后再试一下吧。"
     if reason == "circuit_open":
-        return "苟修金，聊天模型连续调用失败，吾辈会在稍后重新尝试。"
-    return "苟修金，聊天模型暂时出错了，请稍后再试一下吧。"
+        return "聊天模型连续调用失败，稍后会重新尝试。"
+    return "聊天模型暂时出错了，请稍后再试一下吧。"
 
 
 class OpenAICompatibleProvider:

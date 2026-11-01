@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.config import Settings
+from app.services.band_characters import BAND_CHARACTERS
 
 _PROMPT_ROOT = Path(__file__).resolve().parents[2] / "prompts" / "voice_personas"
 
@@ -31,6 +32,9 @@ _ROLE_ALIASES = {
     "koharu": ("鞍马小春", "小春"),
 }
 
+_PERSONA_FILES.update({profile_id: profile_id + ".txt" for profile_id, *_ in BAND_CHARACTERS})
+_ROLE_ALIASES.update({profile_id: (label, *aliases) for profile_id, label, aliases, *_ in BAND_CHARACTERS})
+
 
 @dataclass(frozen=True)
 class Invocation:
@@ -46,6 +50,23 @@ _THIRD_PERSON_QUERY_START = re.compile(
     r"^(?:是谁|是什么|哪个角色|介绍|讲讲|说说|查找|查询|搜索|"
     r"她|他|这个角色|这名角色|该角色|原作|作品|设定|背景|资料|信息)"
 )
+
+
+def is_self_introduction_request(prompt: str) -> bool:
+    """只把明确询问机器人自身身份的短请求识别为自我介绍。"""
+    compact = re.sub(r"[\s，,。.!！?？~～]", "", str(prompt or ""))
+    if not compact or len(compact) > 60:
+        return False
+    if re.search(r"(?:别|不要|不用|无需|不必).*(?:介绍|你是谁|你叫什么)", compact):
+        return False
+    compact = re.sub(r"^(?:小?丛雨[:：]?|请问|请你|麻烦你|请)+", "", compact)
+    return bool(re.fullmatch(
+        r"(?:你是谁|你叫什么(?:名字)?|你的名字(?:是什么|叫什么)|"
+        r"你是什么身份|介绍(?:一下|下)?你自己|介绍(?:一下|下)?自己|"
+        r"(?:做(?:一下|个)?|来(?:一下|个)?)?自我介绍(?:一下|下)?)"
+        r"(?:呀|啊|呢|吧|吗)?",
+        compact,
+    ))
 
 
 def _canonical_profile_id(profile_id: str) -> str:

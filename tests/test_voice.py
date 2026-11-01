@@ -259,6 +259,27 @@ def _mapped_gpt_sovits_settings(tmp_path, endpoint="http://voice.test:19880"):
     )
 
 
+@pytest.mark.asyncio
+async def test_local_speech_falls_back_during_cover_but_remote_speech_and_cover_reference_work(monkeypatch, tmp_path):
+    from app.services import singing_gpu, voice
+    monkeypatch.setattr(singing_gpu, "GPU_LOCK_PATH", tmp_path / "gpu.lock")
+    monkeypatch.setattr(voice.httpx, "AsyncClient", _RecordingGptSovitsClient)
+    _RecordingGptSovitsClient.events = []
+    settings = _mapped_gpt_sovits_settings(tmp_path, "http://127.0.0.1:19880")
+
+    async def competing_speech():
+        with pytest.raises(RuntimeError, match="正在翻唱或训练"):
+            await synthesize_voice("你好", settings)
+
+    async with singing_gpu.async_gpu_lock():
+        await asyncio.create_task(competing_speech())
+        assert _RecordingGptSovitsClient.events == []
+        # A reference requested by the cover task must not deadlock.
+        assert (await synthesize_voice("你好", settings)).startswith("base64://")
+        remote = settings.model_copy(update={"voice_api_url": "http://voice.test:19880"})
+        assert (await synthesize_voice("你好", remote)).startswith("base64://")
+
+
 def test_gpt_sovits_language_weight_map_uses_e13_for_chinese_and_e12_for_ja_en(tmp_path):
     settings = _mapped_gpt_sovits_settings(tmp_path)
     weights = gpt_sovits_language_weights(settings)
@@ -776,6 +797,7 @@ async def test_profile_sampling_overrides_are_local_to_each_role(monkeypatch, tm
                 "temperature": 1.0,
                 "parallel_infer": False,
                 "split_bucket": False,
+                "use_cuda_graph": False,
                 "text_split_method": "cut5",
             },
         }
@@ -788,13 +810,14 @@ async def test_profile_sampling_overrides_are_local_to_each_role(monkeypatch, tm
 
     assert {
         key: pilot_payload[key]
-        for key in ("seed", "top_k", "temperature", "parallel_infer", "split_bucket", "text_split_method")
+        for key in ("seed", "top_k", "temperature", "parallel_infer", "split_bucket", "use_cuda_graph", "text_split_method")
     } == {
         "seed": 20260929,
         "top_k": 5,
         "temperature": 1.0,
         "parallel_infer": False,
         "split_bucket": False,
+        "use_cuda_graph": False,
         "text_split_method": "cut5",
     }
     assert legacy_payload["seed"] == 123
@@ -802,6 +825,7 @@ async def test_profile_sampling_overrides_are_local_to_each_role(monkeypatch, tm
     assert legacy_payload["temperature"] == 0.7
     assert "parallel_infer" not in legacy_payload
     assert "split_bucket" not in legacy_payload
+    assert "use_cuda_graph" not in legacy_payload
     assert "text_split_method" not in legacy_payload
 
 
@@ -821,6 +845,7 @@ async def test_profile_sampling_overrides_are_local_to_each_role(monkeypatch, tm
         ("temperature", float("inf")),
         ("parallel_infer", 0),
         ("split_bucket", "false"),
+        ("use_cuda_graph", "false"),
     ],
 )
 @pytest.mark.asyncio

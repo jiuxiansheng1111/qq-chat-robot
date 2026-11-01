@@ -454,7 +454,8 @@ def test_report_scope_and_summary():
     for other in (("bot2", "group", "user"), ("bot", "group2", "user"), ("bot", "group", "user2")):
         with pytest.raises(RecordError):
             store.get(other, job)
-    assert len(summary(result, job)) < 600
+    assert "场况：" in summary(result, job) and "实际：" in summary(result, job)
+    assert "牌效候选" in summary(result, job)
     assert "未声称训练完成" in markdown(result)
     assert result.coach_prompt_sha256 and result.coach_context
 

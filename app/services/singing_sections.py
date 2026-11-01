@@ -101,8 +101,24 @@ def plan_paused_sections(
             end = boundaries[-1]
             reason, pause = "歌词换句位置，段尾补短停顿", 0.18
         else:
-            _, end = min(choices)
-            reason, pause = "歌词附近的人声停顿", 0
+            # 优先选择还能在最少段数内完成的停顿，避免提前收段后
+            # 剩下一小段只有分离残留的尾奏，误触人声质量检查。
+            remaining_count = math.ceil((duration_seconds - start) / (max_seconds - 0.2))
+            remaining_capacity = (remaining_count - 1) * (max_seconds - 0.2)
+            compact_choices = [
+                choice for choice in choices
+                if duration_seconds - choice[1] <= remaining_capacity
+            ]
+            compact_lyrics = [
+                time for time in lyric_times
+                if minimum <= time <= hard_end and duration_seconds - time <= remaining_capacity
+            ]
+            if not compact_choices and compact_lyrics:
+                end = min(compact_lyrics, key=lambda time: abs(time - target))
+                reason, pause = "歌词换句位置，段尾补短停顿", 0.18
+            else:
+                _, end = min(compact_choices or choices)
+                reason, pause = "歌词附近的人声停顿", 0
         if not start < end <= hard_end:
             raise ValueError("人声分段位置无效")
         sections.append(SingingExcerpt(start, end, reason, pause))

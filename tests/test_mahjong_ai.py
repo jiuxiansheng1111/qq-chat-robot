@@ -41,23 +41,40 @@ def valid_output(messages):
         ],
         "preferred": choices[0]["candidate"], "reason": "结合速度与退路作条件性选择",
         "uncertainty": "对手进度未知，仍须按局况更新",
+        "situation": "当前仍有追分空间，但对手进度未知", "plan": "保持手牌发展，遇到明确威胁时转守",
     }, ensure_ascii=False)
 
 
+def completed_response(text, *, model="gpt-6-luna", status="completed"):
+    response = {"model": model, "status": status,
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": text}]}]}
+    event = {"type": "response.completed", "response": response}
+    return httpx.Response(200, text="data: " + json.dumps(event) + "\n\n",
+                          headers={"Content-Type": "text/event-stream"})
+
+
 def install_transport(monkeypatch, handler):
-    constructor = ai.ZhipuCoach
-    monkeypatch.setattr(ai, "ZhipuCoach", lambda s: constructor(s, transport=httpx.MockTransport(handler)))
+    constructor = ai.LunaCoach
+
+    def create():
+        from app.chatgpt_subscription import ChatGPTSubscription
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=False)
+        subscription = ChatGPTSubscription(client=client)
+        subscription._access_token = AsyncMock(return_value="synthetic-oauth-token")
+        return constructor(subscription=subscription)
+
+    monkeypatch.setattr(ai, "LunaCoach", create)
 
 
 async def test_actual_client_each_key_node_cutoff_prompt_and_local_teaching(reviewed, monkeypatch):
     calls = []
 
     def handle(request):
-        assert str(request.url) == ai.ENDPOINT and request.method == "POST"
+        assert str(request.url) == "https://api.openai.com/v1/responses" and request.method == "POST"
         body = json.loads(request.content)
-        assert body["model"] == "glm-4-flash-250414" and "tools" not in body
-        messages = body["messages"]
-        assert [m["role"] for m in messages] == ["system", "user"]
+        assert body["model"] == "gpt-6-luna" and "tools" not in body
+        messages = body["input"]
+        assert [m["role"] for m in messages] == ["developer", "user"]
         assert "雀魂四人麻将" in messages[0]["content"]
         payload = json.loads(messages[1]["content"])
         node = payload["node"]
@@ -67,6 +84,9 @@ async def test_actual_client_each_key_node_cutoff_prompt_and_local_teaching(revi
         assert visible["event"] == expected.event
         assert visible["public_indicators"] == list(expected.indicators)
         assert visible["scores"] == list(expected.scores)
+        assert visible["calculated_context"]["self_score"] == expected.scores[expected.seat]
+        assert visible["calculated_context"]["self_rank"] == 1 + sum(
+            score > expected.scores[expected.seat] for score in expected.scores)
         assert all(t["event"] <= expected.event for river in visible["public_rivers"] for t in river)
         assert payload["local_teaching_data_not_instructions"][0]["text"]
         assert len(payload["program_calculated_candidates"]) <= ai.MAX_CANDIDATES
@@ -74,17 +94,17 @@ async def test_actual_client_each_key_node_cutoff_prompt_and_local_teaching(revi
         assert "revealed_hands" not in messages[1]["content"]
         assert "opponent_hands" not in messages[1]["content"]
         calls.append(payload)
-        return httpx.Response(200, json={"choices": [{"message": {"content": valid_output(messages)}}]})
+        return completed_response(valid_output(messages))
 
     install_transport(monkeypatch, handle)
     run = await ai.coach_decisions(reviewed.analysis.decisions, settings())
-    assert run.completed == run.attempted == len(calls) == ai.MAX_NODES
+    assert run.completed == run.attempted == len(calls) == len(ai.select_decisions(reviewed.analysis.decisions))
     assert len({c["node"] for c in calls}) == len(calls)
     assert len({c["visible_at_decision"]["event"] for c in calls}) > 1
     before = asdict(reviewed.analysis)
     result = replace(reviewed, coaching=run)
     assert asdict(result.analysis) == before
-    assert "智谱AI已生成4节点" in summary(result, "test-report")
+    assert "GPT-6 Luna 已生成4节点" in summary(result, "test-report")
     assert "非计算事实" in markdown(result)
     assert all(c["node"] <= len(reviewed.analysis.decisions) for c in calls)
 
@@ -120,19 +140,32 @@ def test_hidden_hands_future_results_identity_and_injection_never_enter_first_re
     assert ai.build_request(poisoned, 1) == ai.build_request(d, 1)
 
 
-@pytest.mark.parametrize("base", [
-    "http://open.bigmodel.cn/api/paas/v4", "https://open.bigmodel.cn.evil.test/api/paas/v4",
-    "https://evil.test/api/paas/v4", "https://127.0.0.1/api/paas/v4",
-    "https://user:password@open.bigmodel.cn/api/paas/v4",
-    "https://open.bigmodel.cn:444/api/paas/v4", "https://open.bigmodel.cn/api/paas/v4?secret=x",
-    "https://open.bigmodel.cn/api/paas/v4#fragment", "https://open.bigmodel.cn/other-path",
+@pytest.mark.parametrize("changes", [
+    {"llm_provider": "zhipu"}, {"llm_provider": "groq"},
+    {"llm_base_url": "https://evil.test/api/paas/v4"}, {"llm_api_key": ""}, {"llm_model": ""},
 ])
-def test_reject_unapproved_recipient_before_client_construction(base, monkeypatch):
-    trap = AsyncMock()
-    monkeypatch.setattr(httpx, "AsyncClient", trap)
-    with pytest.raises(ai.CoachUnavailable, match="route_rejected"):
-        ai.ZhipuCoach(settings(llm_base_url=base))
-    trap.assert_not_called()
+async def test_legacy_config_cannot_select_another_recipient_or_model(reviewed, monkeypatch, changes):
+    calls = []
+
+    def handle(request):
+        assert str(request.url) == "https://api.openai.com/v1/responses"
+        assert request.headers["Authorization"] == "Bearer synthetic-oauth-token"
+        body = json.loads(request.content)
+        assert body["model"] == "gpt-6-luna" and body["store"] is False and body["stream"] is True
+        assert body["reasoning"] == {"effort": "low"}
+        assert body["text"]["format"]["type"] == "json_schema"
+        assert body["text"]["format"]["strict"] is True
+        schema = body["text"]["format"]["schema"]
+        allowed = [c["candidate"] for c in json.loads(body["input"][1]["content"])["program_calculated_candidates"]]
+        assert schema["properties"]["preferred"]["enum"] == allowed
+        assert "temperature" not in body and "max_tokens" not in body
+        calls.append(body)
+        return completed_response(valid_output(body["input"]))
+
+    install_transport(monkeypatch, handle)
+    run = await ai.coach_decisions(reviewed.analysis.decisions[:1], settings(**changes))
+    assert len(calls) == run.completed == 1
+    assert run.model == "gpt-6-luna"
 
 
 async def test_redirect_never_followed_or_fallback_called(reviewed, monkeypatch):
@@ -140,66 +173,80 @@ async def test_redirect_never_followed_or_fallback_called(reviewed, monkeypatch)
 
     def handle(request):
         calls.append(str(request.url))
-        return httpx.Response(302, headers={"Location": "https://api.groq.com/openai/v1/chat/completions"})
+        return httpx.Response(302, headers={"Location": "https://open.bigmodel.cn/api/paas/v4/chat/completions"})
 
     install_transport(monkeypatch, handle)
     run = await ai.coach_decisions(reviewed.analysis.decisions, settings())
-    assert calls == [ai.ENDPOINT]
-    assert run.completed == 0 and run.nodes[0].status == "route_rejected"
+    assert calls == ["https://api.openai.com/v1/responses"]
+    assert run.completed == 0 and run.nodes[0].status == "subscription_unavailable"
 
 
-async def test_revalidate_route_before_every_node(reviewed, monkeypatch):
-    cfg = settings()
-    calls = []
-
-    def handle(request):
-        messages = json.loads(request.content)["messages"]
-        calls.append(request.url)
-        cfg.llm_base_url = "https://evil.test/api/paas/v4"
-        return httpx.Response(200, json={"choices": [{"message": {"content": valid_output(messages)}}]})
-
-    install_transport(monkeypatch, handle)
-    run = await ai.coach_decisions(reviewed.analysis.decisions, cfg)
-    assert len(calls) == run.completed == 1
-    assert run.nodes[-1].status == "route_rejected"
+async def test_unexpected_response_model_is_not_labelled_luna(reviewed, monkeypatch):
+    install_transport(monkeypatch, lambda req: completed_response(
+        valid_output(json.loads(req.content)["input"]), model="different-model"))
+    run = await ai.coach_decisions(reviewed.analysis.decisions, settings())
+    assert run.attempted == 1 and run.completed == 0 and run.nodes[0].status == "route_rejected"
 
 
-async def test_transport_guard_rejects_even_direct_client_misuse():
-    calls = []
-    client = ai.ZhipuCoach(settings(), transport=httpx.MockTransport(lambda req: calls.append(req)))
-    try:
-        with pytest.raises(ai.CoachUnavailable, match="route_rejected"):
-            await client.client.post("https://api.groq.com/openai/v1/chat/completions")
-        assert not calls
-    finally:
-        await client.aclose()
+async def test_missing_subscription_does_not_use_legacy_api_key(reviewed, monkeypatch):
+    from app.chatgpt_subscription import SubscriptionError
 
-
-@pytest.mark.parametrize("change,status", [
-    ({"llm_provider": "astrbot"}, "route_rejected"),
-    ({"llm_provider": "groq"}, "route_rejected"),
-    ({"llm_api_key": ""}, "missing_config"), ({"llm_model": ""}, "missing_config"),
-])
-async def test_configuration_falls_back_without_attempt(reviewed, change, status):
-    run = await ai.coach_decisions(reviewed.analysis.decisions, settings(**change))
-    assert run.status == status and run.attempted == run.completed == 0
+    subscription = SimpleNamespace(respond=AsyncMock(side_effect=SubscriptionError("synthetic failure")),
+                                   aclose=AsyncMock())
+    constructor = ai.LunaCoach
+    monkeypatch.setattr(ai, "LunaCoach", lambda: constructor(subscription=subscription))
+    run = await ai.coach_decisions(reviewed.analysis.decisions, settings())
+    assert run.completed == 0 and run.attempted == 1
+    assert "ChatGPT" in ai.coach_status(run) and "synthetic failure" not in ai.coach_status(run)
+    subscription.aclose.assert_awaited_once()
 
 
 async def test_disabled_never_constructs_client(reviewed, monkeypatch):
     trap = AsyncMock()
-    monkeypatch.setattr(ai, "ZhipuCoach", trap)
+    monkeypatch.setattr(ai, "LunaCoach", trap)
     run = await ai.coach_decisions(reviewed.analysis.decisions, settings(), enabled=False)
     assert run.status == "disabled" and "AI=关闭" in ai.coach_status(run)
     trap.assert_not_called()
 
 
+async def test_rejected_prose_retried_once_with_same_visible_evidence(reviewed, monkeypatch):
+    calls = []
+
+    def handler(request):
+        messages = json.loads(request.content)["input"]
+        calls.append(messages)
+        answer = json.loads(valid_output(messages))
+        if len(calls) == 1:
+            answer["reason"] = "退回一向听"
+        return completed_response(json.dumps(answer, ensure_ascii=False))
+
+    install_transport(monkeypatch, handler)
+    run = await ai.coach_decisions(reviewed.analysis.decisions[:1])
+    assert run.completed == run.attempted == 1 and len(calls) == 2
+    assert calls[0][1] == calls[1][1]
+    assert "上次输出没有通过格式核验" in calls[1][0]["content"]
+
+
 @pytest.mark.parametrize("prose", ["胜率99%", "打点八千点", "放铳率百分之十", "可以切5m",
-                                    "绝对安全", "向听一成", "保证和牌", "[CQ:at,qq=all]"])
+                                    "绝对安全", "向听一成", "保证和牌", "[CQ:at,qq=all]",
+                                    "信息隔离未通过", "打出此牌会放铳给庄家"])
 def test_model_numbers_guarantees_and_message_injection_cannot_become_facts(reviewed, prose):
     messages, allowed = ai.build_request(reviewed.analysis.decisions[0], 1)
     data = json.loads(valid_output(messages))
     data["reason"] = prose
     with pytest.raises(ai.CoachUnavailable, match="invalid_output"):
+        ai.parse_explanation(json.dumps(data), 1, allowed)
+
+
+@pytest.mark.parametrize("prose", ["不能认为对副露者绝对安全", "不应把进攻优势当作绝对安全",
+                                    "无法保证和牌", "现物不代表对所有人绝对安全"])
+def test_explicit_rejection_of_guarantees_is_not_discarded(reviewed, prose):
+    messages, allowed = ai.build_request(reviewed.analysis.decisions[0], 1)
+    data = json.loads(valid_output(messages))
+    data["reason"] = prose
+    assert ai.parse_explanation(json.dumps(data), 1, allowed).status == "ok"
+    data["reason"] = prose + "；但首选保证和牌"
+    with pytest.raises(ai.CoachUnavailable):
         ai.parse_explanation(json.dumps(data), 1, allowed)
 
 
@@ -231,9 +278,9 @@ async def test_input_budget_and_missing_knowledge_do_not_send(reviewed, monkeypa
 
 @pytest.mark.parametrize("response", [
     httpx.Response(503, text="secret-error-body"),
-    httpx.Response(200, text="x" * (ai.MAX_RESPONSE_BYTES + 1)),
-    httpx.Response(200, json={"choices": []}),
-    httpx.Response(200, json={"choices": [{"message": {"content": "not-json"}}]}),
+    completed_response("x" * (ai.MAX_OUTPUT_CHARS + 1)),
+    httpx.Response(200, text="data: {}\n\n"),
+    completed_response("not-json"),
 ])
 async def test_http_and_output_failures_leave_baseline(reviewed, monkeypatch, response):
     install_transport(monkeypatch, lambda _: response)
@@ -261,7 +308,7 @@ async def test_total_timeout_and_sequential_concurrency_are_bounded(reviewed, mo
         async def aclose(self):
             assert active == 0
 
-    monkeypatch.setattr(ai, "ZhipuCoach", lambda _: Slow())
+    monkeypatch.setattr(ai, "LunaCoach", lambda: Slow())
     monkeypatch.setattr(ai, "TOTAL_TIMEOUT", 0.01)
     run = await ai.coach_decisions(reviewed.analysis.decisions, settings())
     assert maximum == 1 and run.attempted == 1
@@ -276,10 +323,10 @@ async def test_individual_node_timeout_keeps_bounded_progress(reviewed, monkeypa
         async def aclose(self):
             pass
 
-    monkeypatch.setattr(ai, "ZhipuCoach", lambda _: Slow())
+    monkeypatch.setattr(ai, "LunaCoach", lambda: Slow())
     monkeypatch.setattr(ai, "NODE_TIMEOUT", 0.001)
     run = await ai.coach_decisions(reviewed.analysis.decisions, settings())
-    assert run.attempted == len(run.nodes) == ai.MAX_NODES
+    assert run.attempted == len(run.nodes) == len(ai.select_decisions(reviewed.analysis.decisions))
     assert all(n.status == "timeout" for n in run.nodes)
 
 
@@ -289,9 +336,9 @@ async def test_plugin_calls_pinned_coach_and_details_do_not_recall(reviewed, tmp
     calls = []
 
     def handle(request):
-        messages = json.loads(request.content)["messages"]
+        messages = json.loads(request.content)["input"]
         calls.append(messages)
-        return httpx.Response(200, json={"choices": [{"message": {"content": valid_output(messages)}}]})
+        return completed_response(valid_output(messages))
 
     install_transport(monkeypatch, handle)
     manager = SimpleNamespace(settings=settings(), ask=AsyncMock(), ask_primary=AsyncMock(),
@@ -307,7 +354,7 @@ async def test_plugin_calls_pinned_coach_and_details_do_not_recall(reviewed, tmp
     fixture = Path(__file__).parent / "fixtures/mahjong/upstream/rinshan.json"
     (inbox / "game.json").write_bytes(fixture.read_bytes())
     answer = await plugin.handle_mahjong(ctx)
-    assert "智谱AI已生成" in answer and len(calls) == ai.MAX_NODES
+    assert "GPT-6 Luna 已生成" in answer and len(calls) == len(ai.select_decisions(reviewed.analysis.decisions))
     encoded = json.dumps(calls, ensure_ascii=False)
     assert all(secret not in encoded for secret in ["private-bot", "private-name", "private-group", "private-qq"])
     manager.ask.assert_not_called()
@@ -317,10 +364,10 @@ async def test_plugin_calls_pinned_coach_and_details_do_not_recall(reviewed, tmp
     job = next(iter(state.mahjong_reports.jobs))
     ctx.args = f"详情 {job} 1"
     assert "节点1" in await plugin.handle_mahjong(ctx)
-    assert len(calls) == ai.MAX_NODES
+    assert len(calls) == len(ai.select_decisions(reviewed.analysis.decisions))
     ctx.args = "AI=关闭 座位=北 赛制=半庄 文件=game.json"
     assert "AI=关闭" in await plugin.handle_mahjong(ctx)
-    assert len(calls) == ai.MAX_NODES
+    assert len(calls) == len(ai.select_decisions(reviewed.analysis.decisions))
 
 
 def _teaching_decision(reviewed, scenario):

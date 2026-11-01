@@ -1304,15 +1304,18 @@ async def test_image_send_retries_with_normalized_jpeg(monkeypatch, tmp_path):
     assert calls[1].startswith("file://")
 
 
-def test_default_murasame_voice_uses_chinese_markers():
-    assert ensure_default_murasame_voice("这题答案是 42") == "苟修金，吾辈来说：这题答案是 42"
+def test_default_murasame_voice_does_not_wrap_normal_chat_in_role_markers():
+    assert ensure_default_murasame_voice("这题答案是 42", prompt="这题怎么算") == "这题答案是 42"
+    assert ensure_default_murasame_voice("苟修金，吾辈来说：已经好了", prompt="修好了吗") == "已经好了"
+    assert ensure_default_murasame_voice("吾辈是小丛雨", prompt="你是谁") == "吾辈是小丛雨"
     assert ensure_default_murasame_voice("吾辈已经看过了") == "吾辈已经看过了"
     assert ensure_default_murasame_voice("苟修金，这个没问题") == "苟修金，这个没问题"
 
 
-def test_persona_uses_苟修金_with_light_japanese_flavor():
+def test_persona_keeps_role_flavor_only_for_self_introductions():
     persona = settings.persona_prompt()
-    assert "称提问者为「苟修金」" in persona
+    assert "普通聊天自称“我”" in persona
+    assert "只有对方明确要求你自我介绍" in persona
     assert "吾辈" in persona
     assert "Ciallo～" in persona
     assert "主体必须是自然中文" in persona
@@ -1468,7 +1471,7 @@ def test_ultraman_followup_reuses_last_resolved_form(monkeypatch, tmp_path):
             assert len(sent) == 2
             assert all("欧布奥特曼·暗耀形态" in caption for _, caption in sent)
             assert sent[-1][0] == "card://欧布奥特曼·暗耀形态"
-            assert "吾辈把【欧布奥特曼·暗耀形态】的图找来了" in sent[-1][1]
+            assert "我把【欧布奥特曼·暗耀形态】的图找来了" in sent[-1][1]
     finally:
         settings.database_path = previous_database_path
         settings.onebot_api_base = previous_onebot_api_base

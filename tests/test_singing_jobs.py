@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +17,34 @@ async def _until(predicate) -> None:
             await asyncio.sleep(0.001)
 
     await asyncio.wait_for(wait(), 2)
+
+
+async def test_default_cooldown_expires_after_fifteen_seconds(monkeypatch):
+    from app.services import singing_jobs
+
+    now = 100.0
+    monkeypatch.setattr(singing_jobs, "time", SimpleNamespace(
+        monotonic=lambda: now, time=lambda: now,
+    ))
+    manager = SingingJobManager()
+
+    async def done(_job):
+        pass
+
+    key = ("bot", "group", "user")
+    try:
+        first = manager.submit(key, "first", done)
+        await _until(lambda: first.status == "succeeded")
+        with pytest.raises(QueueError, match="15 秒"):
+            manager.submit(key, "second", done)
+        now += 14.9
+        with pytest.raises(QueueError, match="1 秒"):
+            manager.submit(key, "second", done)
+        now += 0.1
+        second = manager.submit(key, "second", done)
+        await _until(lambda: second.status == "succeeded")
+    finally:
+        await manager.aclose()
 
 
 @pytest.mark.asyncio
@@ -151,7 +180,8 @@ async def test_completed_history_is_bounded_without_losing_active():
 
 
 @pytest.mark.asyncio
-async def test_close_terminates_a_running_audio_subprocess(tmp_path):
+@pytest.mark.parametrize("action", ["cancel", "close"])
+async def test_cancel_and_close_terminate_a_running_audio_subprocess(tmp_path, action):
     manager = SingingJobManager()
     started = tmp_path / "started"
     survived = tmp_path / "survived"
@@ -167,7 +197,11 @@ async def test_close_terminates_a_running_audio_subprocess(tmp_path):
 
     job = manager.submit(("self", "group", "user"), "song", operation)
     await _until(started.exists)
-    await manager.aclose()
+    if action == "cancel":
+        assert await manager.cancel(job.key)
+    else:
+        await manager.aclose()
     assert job.status == "cancelled"
     await asyncio.sleep(2.1)
     assert not survived.exists()
+    await manager.aclose()

@@ -18,7 +18,7 @@
 
 使用已包含 FunASR 的 GPT-SoVITS Python 环境运行：
 
-    .venv_cpu\\Scripts\\python.exe scripts/accept_voice_audio.py \\\\
+    .venv\\Scripts\\python.exe scripts/accept_voice_audio.py \\\\
       --model-path C:\\Users\\...\\.cache\\modelscope\\hub\\iic\\SenseVoiceSmall
 """
 

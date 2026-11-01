@@ -14,9 +14,7 @@ from pathlib import Path
 from app.services.mahjong.ai_coach import coach_decisions
 from app.services.mahjong.intent import complete_request
 from app.services.mahjong.records import (
-    LinkNeedsExport,
     RecordError,
-    import_link,
     inbox_file,
     parse_record,
     read_local,
@@ -25,14 +23,15 @@ from app.services.mahjong.records import (
 from app.services.mahjong.review import Review, brief_decision, markdown, review, summary
 
 HELP = (
-    "雀魂四麻牌谱复盘（规则计算＋智谱匿名当时局面教学）\n"
+    "雀魂四麻牌谱复盘（规则计算＋GPT-6 Luna 匿名当时局面教学）\n"
     "/牌谱分析 座位=东 赛制=半庄 文件=sample.json\n"
     "或 /牌谱分析 座位=0 赛制=东风 JSON={...}\n"
     "座位是开局固定座位0东1南2西3北；支持标准mjai及tenhou.net/6兼容导出（内部格式仅供调试）。\n"
     "文件须先由本机放入项目data/mahjong/inbox；群消息不能读取任意本机路径或任意附件URL。\n"
-    "官方链接可校验，但原生解码未实现；不需要账号密码。群内只给摘要，详情按节点/页展开。\n"
-    "默认最多4个关键节点发智谱open.bigmodel.cn：脱敏当时局面、计算与相关本地教材；使用现有API额度。"
-    "不发QQ身份、原谱、暗手、未来或结局，不走备用；失败回本地。AI=关闭 可仅用本地规则版。"
+    "也可直接发：雀魂分析 雀魂牌谱:https://game.maj-soul.com/1/?paipu=...\n"
+    "管理员先在本机‘雀魂账号设置’连接账号。链接自动识别赛制与玩家视角，读取全部局次；不需要截图。\n"
+    "逐局挑选关键节点交给 GPT-6 Luna：脱敏当时局面、计算与相关本地教材；复用已连接的 ChatGPT 订阅。"
+    "默认发送逐局图文卡片，直接列出具体切牌、保留牌与场况计划；图片生成失败自动分段发文字。不发QQ身份、原谱、暗手、未来或结局，不走备用；失败回本地。AI=关闭 可仅用本地规则版。"
 )
 
 
@@ -71,21 +70,21 @@ def _root(context) -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def _arguments(text: str) -> tuple[int, str, str, str]:
+def _arguments(text: str) -> tuple[int | None, str | None, str, str]:
     header, marker, body = text.partition(" JSON=")
     matches = re.findall(r"(?:^|\s)(座位|赛制|文件|链接|AI)=([^\s]+)", header)
     params = dict(matches)
     if len(matches) != len(params):
         raise RecordError("参数重复，请只提供一个座位、赛制和输入")
-    if "座位" not in params or "赛制" not in params:
+    if "链接" not in params and ("座位" not in params or "赛制" not in params):
         raise RecordError("请明确座位=东/南/西/北和赛制=东风/半庄")
-    seat = seat_number(params["座位"])
+    seat = seat_number(params["座位"]) if "座位" in params else None
     sources = [(k, params[k]) for k in ("文件", "链接") if k in params]
     if marker:
         sources.append(("JSON", body))
     if len(sources) != 1:
         raise RecordError("请提供且仅提供一个 文件= / 链接= / JSON= 输入")
-    return seat, params["赛制"], *sources[0]
+    return seat, params.get("赛制"), *sources[0]
 
 
 async def handle_mahjong(context) -> str:
@@ -139,7 +138,7 @@ async def handle_mahjong(context) -> str:
                 f"完整复盘已保存到本机 data/mahjong/reports/{parts[1]}.md；群内可继续按节点查看。"
             )
         if args.startswith("https://"):
-            import_link(args)
+            args = "链接=" + args
         identity_event = {**context.event, "group_id": context.group_id, "user_id": context.user_id}
         prepared, prompt = complete_request(state, identity_event, args)
         if prompt:
@@ -150,26 +149,33 @@ async def handle_mahjong(context) -> str:
             raise RecordError("AI参数只支持 AI=开启 或 AI=关闭")
         ai_enabled = ai_option is None or ai_option[1] == "开启"
         seat, match, kind, source = _arguments(args)
-        if kind == "链接":
-            import_link(source)
+        if state.mahjong_review_lock.locked():
+            return "正在处理另一份牌谱，请稍后再试。"
         if kind == "JSON":
             if len(source.encode("utf-8")) > 64 * 1024:
                 raise RecordError("群内JSON上限64KiB，请使用本地导出文件")
             payload = source.encode("utf-8")
-        else:
+        elif kind == "文件":
             payload = read_local(inbox_file(_root(context), source))
-        replay = parse_record(payload, match=match)
-        if state.mahjong_review_lock.locked():
-            return "正在处理另一份牌谱，请稍后再试。"
         async with state.mahjong_review_lock:
+            overview = ()
+            if kind == "链接":
+                from app.services.mahjong.majsoul_client import service_for
+                from app.services.mahjong.majsoul_records import convert_game, whole_game_overview
+
+                head, records, target_id = await service_for(_root(context)).fetch(source)
+                replay, seat = convert_game(head, records, target_id, seat, match)
+                overview = whole_game_overview(replay, seat)
+            else:
+                replay = parse_record(payload, match=match)
             result = await asyncio.to_thread(review, replay, seat)
-            # Never call the mutable general chat manager, AstrBot provider, or its fallbacks.
-            configured = getattr(getattr(state, "llm", None), "settings", None)
-            coaching = await coach_decisions(result.analysis.decisions, configured, enabled=ai_enabled)
+            result = replace(result, overview=overview)
+            # Keep this explicit Luna route independent of general chat and media providers.
+            coaching = await coach_decisions(result.analysis.decisions, enabled=ai_enabled)
             result = replace(result, coaching=coaching)
         job_id = store.put(owner, result)
         return summary(result, job_id)
-    except (RecordError, LinkNeedsExport) as exc:
+    except RecordError as exc:
         return "牌谱分析：" + str(exc)
     except (OSError, ValueError, RecursionError, json.JSONDecodeError):
         return "牌谱分析：输入数据或本地文件不完整，已停止；未将原始牌谱发送给第三方。"

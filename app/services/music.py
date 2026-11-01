@@ -88,13 +88,53 @@ def normalize_music_text(value: str) -> str:
     return "".join(character for character in value if character.isalnum())
 
 
+_ARTIST_NAMES = {"ヨルシカ": ("ヨルシカ", "yorushika", "yolushika", "夜鹿")}
+# 官方曲目：https://yorushika.com/discography/detail/6/
+_TITLE_NAMES = {("ヨルシカ", "parade"): "パレード"}
+
+
+def canonical_music_artist(value: str) -> str:
+    normalized = normalize_music_text(value)
+    for name, aliases in _ARTIST_NAMES.items():
+        if normalized in {normalize_music_text(alias) for alias in aliases}:
+            return name
+    return value.strip()
+
+
+def music_query_identity(query: str) -> MusicIdentity | None:
+    """保留明确的歌手约束；只使用核实过的跨语言别名。"""
+    explicit = re.split(r"\s*[/／]\s*|\s+[-–—]\s+", query, maxsplit=1)
+    if len(explicit) == 2 and all(part.strip() for part in explicit):
+        title, artist = explicit[0].strip(), canonical_music_artist(explicit[1])
+    else:
+        artist = title = ""
+        for name, aliases in _ARTIST_NAMES.items():
+            for alias in aliases:
+                # 英文别名需要词边界，避免把相似长单词当成歌手。
+                pattern = re.escape(alias)
+                if alias.isascii():
+                    pattern = rf"(?<![a-z0-9_]){pattern}(?![a-z0-9_])"
+                match = re.search(pattern, query, re.IGNORECASE)
+                if match:
+                    artist = name
+                    title = (query[:match.start()] + query[match.end():]).strip(" 的：:-–—")
+                    break
+            if artist:
+                break
+        if not artist or not title:
+            return None
+    title = _TITLE_NAMES.get((artist, normalize_music_text(title)), title)
+    return MusicIdentity(title, artist, f"{artist} {title}")
+
+
 def netease_title_names(track: NeteaseTrack) -> tuple[str, ...]:
     """别名也可能是用户熟悉的英文歌名。"""
     return (track.title, *track.title_aliases)
 
 
 def netease_artist_names(track: NeteaseTrack) -> tuple[str, ...]:
-    return (*track.artists, *track.artist_aliases)
+    names = (*track.artists, *track.artist_aliases)
+    return tuple(dict.fromkeys((*names, *(canonical_music_artist(name) for name in names))))
 
 
 def _music_aliases(item: dict, *fields: str) -> tuple[str, ...]:
@@ -183,8 +223,12 @@ def rank_netease_tracks(
     query: str, tracks: list[NeteaseTrack], expected_artist: str = "", expected_title: str = ""
 ) -> list[NeteaseTrack]:
     """稳定选择目标歌曲；除非用户明确点名版本，否则排除翻唱。"""
+    identity = music_query_identity(query)
+    if identity is not None:
+        expected_artist = expected_artist or identity.artist
+        expected_title = expected_title or identity.title
     query_norm = normalize_music_text(query)
-    artist_norm = normalize_music_text(expected_artist)
+    artist_norm = normalize_music_text(canonical_music_artist(expected_artist))
     title_norm = normalize_music_text(expected_title)
     requested_version = any(marker in query.casefold() for marker in UNOFFICIAL_VERSION_MARKERS)
     ranked: list[tuple[tuple[int, int, int, int], NeteaseTrack]] = []
@@ -195,7 +239,7 @@ def rank_netease_tracks(
             continue
         track_titles = [normalize_music_text(title) for title in netease_title_names(track)]
         track_artists = [normalize_music_text(artist) for artist in netease_artist_names(track)]
-        exact_title = bool(title_norm and title_norm in track_titles)
+        exact_title = (title_norm or query_norm) in track_titles
         artist_match = bool(
             artist_norm
             and any(
@@ -208,21 +252,20 @@ def rank_netease_tracks(
         if title_norm and not exact_title:
             continue
         query_match = any(title and title in query_norm for title in track_titles)
-        try:
-            stable_id = int(track.song_id)
-        except ValueError:
-            stable_id = 10**20 + index
         score = (
             0 if artist_match else 1,
             0 if exact_title else 1,
             0 if query_match else 1,
-            stable_id,
+            index,
         )
         ranked.append((score, track))
     return [item[1] for item in sorted(ranked, key=lambda item: item[0])]
 
 
 def netease_track_matches_query(query: str, track: NeteaseTrack) -> bool:
+    identity = music_query_identity(query)
+    if identity is not None:
+        return bool(rank_netease_tracks(query, [track], identity.artist, identity.title))
     query_norm = normalize_music_text(query)
     titles = [normalize_music_text(title) for title in netease_title_names(track)]
     if not query_norm:

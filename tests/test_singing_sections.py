@@ -44,3 +44,22 @@ def test_no_lyrics_and_no_pause_reports_missing_boundary(tmp_path):
     pcm(vocal, np.full(12_000, .2))
     with pytest.raises(ValueError, match='逐句歌词'):
         plan_paused_sections(vocal, (), 12, 7)
+
+
+@pytest.mark.parametrize("late_pause", [False, True])
+def test_long_song_avoids_an_unnecessary_short_outro_section(tmp_path, late_pause):
+    vocal = tmp_path / 'long.wav'
+    levels = np.full(333_704, .2)
+    pauses = [(107_000, 109_000), (207_000, 209_000), (310_000, 330_000)]
+    if late_pause:
+        pauses.append((219_000, 221_000))
+    for first, last in pauses:
+        levels[first:last] = 0
+    pcm(vocal, levels)
+    lines = tuple(LyricLine(time, '歌词') for time in (108.588, 216.9, 222.516, 296.796))
+    sections = plan_paused_sections(vocal, lines, 333.704, 115)
+    assert len(sections) == 3
+    assert sections[-1].end_seconds == 333.704
+    assert sections[-1].start_seconds <= 222.516
+    assert all(section.duration_seconds + section.pause_seconds <= 115 for section in sections)
+    assert all(a.end_seconds == b.start_seconds for a, b in pairwise(sections))

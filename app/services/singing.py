@@ -25,6 +25,7 @@ from app.services.audio_chunks import (
 from app.services.audio_chunks import (
     run_audio_command as _run_audio_command,
 )
+from app.services.rvc_singing import rvc_profile
 from app.services.singing_diagnostics import save_failed_singing_diagnostics
 from app.services.singing_excerpt import (
     SingingExcerpt,
@@ -36,6 +37,7 @@ from app.services.singing_excerpt import (
 from app.services.singing_gpu import async_gpu_lock
 from app.services.singing_mix import vocal_clarity_filter, vocal_forward_mix_filter, wav_rms
 from app.services.singing_resources import singing_resource_problem
+from app.services.voice_memory import release_voice_memory_for_singing
 from app.services.singing_sections import plan_conversion_phrases, plan_paused_sections
 from app.services.singing_sources import (
     SINGING_DATA_ROOT,
@@ -240,6 +242,7 @@ def parse_singing_command(
     controls = {
         "唱歌状态": "status", "翻唱状态": "status",
         "取消唱歌": "cancel", "停止唱歌": "cancel", "取消翻唱": "cancel",
+        "停止翻唱": "cancel", "暂停翻唱": "cancel", "暂停唱歌": "cancel", "暂停": "cancel",
         "唱歌音色": "voices", "翻唱音色": "voices",
     }
     lowered = candidate.removeprefix("/")
@@ -372,13 +375,15 @@ def singing_voice_menu(settings: Settings, bot_self_id: str) -> str:
         str(profile.get("label") or profile_id)
         for profile_id, profile in voice_profiles(settings).items()
         if voice_profile_authorized(settings, profile_id, bot_self_id)
+        and profile.get("singing_enabled") is not False
     ]
+    example = names[0] if names else "角色名"
     return (
         "角色翻唱音色：" + "、".join(names)
         + "\n@我 唱歌 歌名：使用当前选定的角色"
-        + "\n@我 翻唱 芳乃 歌名：临时指定音色"
-        + f"\n@我 翻唱片段 芳乃 歌名：唱约 {settings.singing_clip_seconds:g} 秒的几句歌词"
-        + "\n@我 翻唱完整 芳乃 歌名：唱整首"
+        + f"\n@我 翻唱 {example} 歌名：临时指定音色"
+        + f"\n@我 翻唱片段 {example} 歌名：唱约 {settings.singing_clip_seconds:g} 秒的几句歌词"
+        + f"\n@我 翻唱完整 {example} 歌名：唱整首"
         + "\n@我 唱歌状态 / 取消唱歌"
         + "\n整首歌在句间停顿处分段，生成一段就发一段，每段不超过 115 秒。"
     )
@@ -445,13 +450,16 @@ def inference_cfg_rate_for_profile(profile_id: str, settings: Settings) -> float
 
 async def prepare_voice_reference(
     profile_id: str, job_dir: Path, settings: Settings, bot_self_id: str
-) -> Path:
+) -> Path | None:
     profiles = voice_profiles(settings)
     if profile_id not in profiles or not voice_profile_authorized(
         settings, profile_id, bot_self_id
     ):
         raise SingingPipelineError("当前机器人不可使用这个角色音色。")
     profile = profiles[profile_id]
+    if profile.get("singing_enabled") is False:
+        raise SingingPipelineError("这个角色的 RVC 模型仍在准备中，请先选择其他角色翻唱。")
+    is_rvc = rvc_profile(settings, profile_id) is not None
     real_reference_profiles = {
         item.strip()
         for item in settings.singing_real_reference_profile_ids.split(",")
@@ -467,12 +475,15 @@ async def prepare_voice_reference(
     if override is not None and (not isinstance(override, str) or not override.strip()):
         raise SingingPipelineError("这个角色的翻唱参考录音路径无效。")
     recorded = str(profile.get("ref_audio_path") or "")
+    if is_rvc and not override and not recorded:
+        # RVC 导出权重本身即可转换；独立参考录音缺失时不伪造身份相似度。
+        return None
     if override is None and settings.singing_prefer_recorded_reference and recorded:
         recorded_path = _project_path(recorded)
         if recorded_path.is_file():
             return recorded_path
     if (
-        settings.singing_use_trained_tts_reference
+        settings.singing_use_trained_tts_reference and not is_rvc
         and profile_id not in real_reference_profiles
         and override is None
     ):
@@ -511,7 +522,7 @@ async def prepare_voice_reference(
 
 async def convert_vocals(
     source: Path,
-    reference: Path,
+    reference: Path | None,
     output_dir: Path,
     profile_id: str,
     settings: Settings,
@@ -550,8 +561,22 @@ async def convert_vocals(
         "--repair-f0-spikes" if settings.singing_repair_f0_spikes else "--no-repair-f0-spikes",
         "--semitone-shift", str(semitone_shift),
     ]
-    checkpoint = singing_checkpoint(profile_id, settings)
-    if settings.singing_hf_offline:
+    try:
+        rvc = rvc_profile(settings, profile_id)
+    except RuntimeError as exc:
+        raise SingingPipelineError(str(exc)) from exc
+    checkpoint = None if rvc else singing_checkpoint(profile_id, settings)
+    if rvc:
+        args = [
+            str(rvc.python), str(PROJECT_ROOT / "scripts" / "run_rvc_model.py"),
+            "--rvc-root", str(rvc.root), "--model", str(rvc.model),
+            "--source", str(active_source), "--output", str(output_dir),
+            "--index-rate", str(rvc.index_rate), "--speaker-id", str(rvc.speaker_id),
+            "--semitone-shift", str(semitone_shift), "--seed", str(settings.singing_seed),
+        ]
+        if rvc.index:
+            args += ["--index", str(rvc.index)]
+    if settings.singing_hf_offline and not rvc:
         args += ["--offline"]
     if checkpoint:
         args += ["--checkpoint", str(checkpoint[0]), "--config", str(checkpoint[1])]
@@ -563,7 +588,7 @@ async def convert_vocals(
         "inference_cfg_rate": inference_cfg_rate_for_profile(profile_id, settings)
         if inference_cfg_rate is None else inference_cfg_rate,
         "diffusion_steps": steps or settings.singing_diffusion_steps,
-        "model_kind": "fine_tuned" if checkpoint else "base",
+        "model_kind": "rvc" if rvc else "fine_tuned" if checkpoint else "base",
         "conversion_mode": "short_context_phrases" if phrase_plan and len(phrase_plan) > 1 else "source_audio",
         "phrase_count": len(phrase_plan) if phrase_plan else 1,
         "status": "requested",
@@ -572,8 +597,11 @@ async def convert_vocals(
         "singing_start_seconds": singing_start_seconds,
     }
     metadata_file = output_dir / "conversion.json"
+    if rvc:
+        metadata.update({"backend": "rvc", "index_used": rvc.index is not None,
+                         "diffusion_steps": None, "inference_cfg_rate": None})
     metadata_file.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-    await run_audio_command(args, cwd=seed_root, timeout_seconds=settings.singing_model_timeout_seconds)
+    await run_audio_command(args, cwd=rvc.root if rvc else seed_root, timeout_seconds=settings.singing_model_timeout_seconds)
     files = [path for path in output_dir.glob("*.wav") if path.name not in {"_source_active.wav", "vc_timed.wav"}]
     if len(files) != 1 or files[0].stat().st_size < 1000:
         raise SingingPipelineError("歌声模型没有生成完整音频。")
@@ -595,7 +623,7 @@ async def convert_vocals(
 async def check_cover_quality(
     source: Path,
     converted: Path,
-    reference: Path,
+    reference: Path | None,
     output: Path,
     settings: Settings,
     *,
@@ -606,7 +634,7 @@ async def check_cover_quality(
     await run_audio_command(
         [python, PROJECT_ROOT / "scripts" / "check_singing_quality.py",
          "--seed-root", seed_root, "--source", source, "--converted", converted,
-         "--reference", reference, "--output", output,
+         *(["--reference", reference] if reference is not None else ["--no-speaker-reference"]), "--output", output,
          "--max-pitch-cents", str(settings.singing_max_pitch_error_cents),
          "--min-voice-similarity", str(settings.singing_min_voice_similarity),
          "--max-duration-error", "0.01",
@@ -623,7 +651,7 @@ async def check_cover_quality(
 
     problems = quality_failures(
         report, max_pitch_median_cents=settings.singing_max_pitch_error_cents,
-        min_voice_similarity=settings.singing_min_voice_similarity,
+        min_voice_similarity=settings.singing_min_voice_similarity if reference is not None else None,
         max_duration_error_ratio=0.01,
         min_voiced_recall=settings.singing_min_voiced_recall,
         min_energy_recall=settings.singing_min_energy_recall,
@@ -705,13 +733,14 @@ async def _keep_failed_vocal_excerpt(
 
 
 async def _render_singing_section(
-    vocals: Path, accompaniment: Path, reference: Path, directory: Path,
+    vocals: Path, accompaniment: Path, reference: Path | None, directory: Path,
     profile_id: str, seconds: float, voice_shift: int, settings: Settings,
     ffmpeg: Path, ffprobe: Path, progress: Progress,
     *, record_pause_seconds: float = 0, lyric_lines: tuple[LyricLine, ...] = (),
     singing_start_seconds: float = 0,
 ) -> tuple[Path, Path, dict]:
     directory.mkdir(parents=True, exist_ok=True)
+    is_rvc = rvc_profile(settings, profile_id) is not None
     used_cfg = inference_cfg_rate_for_profile(profile_id, settings)
     used_steps = settings.singing_diffusion_steps
     conversion_mode = "source_audio"
@@ -752,8 +781,11 @@ async def _render_singing_section(
                 isinstance(reason, str) and ("人声能量" in reason or "缺失人声" in reason)
                 for reason in failures
             )
+            if is_rvc and not missing_voice:
+                # RVC 没有扩散步数；不以同一参数重复生成同一段失败音频。
+                raise
             if (
-                singing_checkpoint(profile_id, settings) is None
+                not is_rvc and singing_checkpoint(profile_id, settings) is None
                 and inference_cfg_rate_for_profile(profile_id, settings) == 0
                 and missing_voice
             ):
@@ -880,11 +912,12 @@ async def _render_singing_section(
         "vocal_mix_gain": vocal_gain, "accompaniment_mix_gain": background_gain,
         "vocal_estimated_rms": vocal_level,
         "vocal_clarity_filter": vocal_clarity_filter(),
-        "inference_cfg_rate": used_cfg,
-        "diffusion_steps": used_steps,
+        "inference_cfg_rate": None if is_rvc else used_cfg,
+        "diffusion_steps": None if is_rvc else used_steps,
         "conversion_mode": conversion_mode,
         "singing_model_backend": (
             "instrumental" if source_rms < 0.0003 else
+            "rvc" if is_rvc else
             "base" if singing_checkpoint(profile_id, settings) is None else "profile"
         ),
         "accompaniment_rms": background_rms,
@@ -911,14 +944,24 @@ async def generate_singing_cover(
     on_chunk: ChunkDelivery | None = None,
 ) -> SingingCover:
     """训练和翻唱轮流用显卡，避免同时生成时爆显存。"""
-    async with async_gpu_lock():
-        issue = singing_resource_problem(PROJECT_ROOT, starting=True, stage="startup")
-        if issue:
-            raise SingingPipelineError(issue)
-        return await _generate_singing_cover_unlocked(
-            query, profile_id, job_id, settings, progress,
-            bot_self_id=bot_self_id, mode=mode, on_chunk=on_chunk,
-        )
+    async with release_voice_memory_for_singing(settings) as voice_memory:
+        async with async_gpu_lock():
+            issue = singing_resource_problem(PROJECT_ROOT, starting=True, stage="startup")
+            if issue and getattr(settings, "singing_prefer_recorded_reference", False):
+                # A freshly used speech model can itself push available RAM
+                # below the startup reserve. Reclaim it before rejecting a cover
+                # whose existing reference recording needs no TTS call.
+                recorded = str(voice_profiles(settings).get(profile_id, {}).get("ref_audio_path") or "")
+                if recorded and _project_path(recorded).is_file():
+                    await voice_memory.pause()
+                    issue = singing_resource_problem(PROJECT_ROOT, starting=True, stage="startup_after_voice_release")
+            if issue:
+                raise SingingPipelineError(issue)
+            return await _generate_singing_cover_unlocked(
+                query, profile_id, job_id, settings, progress,
+                bot_self_id=bot_self_id, mode=mode, on_chunk=on_chunk,
+                release_voice_memory=voice_memory.pause,
+            )
 
 
 async def _generate_singing_cover_unlocked(
@@ -931,6 +974,7 @@ async def _generate_singing_cover_unlocked(
     bot_self_id: str,
     mode: Literal["full", "clip"] = "full",
     on_chunk: ChunkDelivery | None = None,
+    release_voice_memory: Callable[[], Awaitable[None]] | None = None,
 ) -> SingingCover:
     if mode not in {"full", "clip"}:
         raise SingingPipelineError("翻唱模式无效，请选择完整或片段。")
@@ -992,15 +1036,18 @@ async def _generate_singing_cover_unlocked(
             "source_end_seconds": selection.end_seconds, "reason": selection.reason,
         }, ensure_ascii=False, indent=2), encoding="utf-8")
         raw_reference = await prepare_voice_reference(profile_id, job_dir, settings, bot_self_id)
-        reference = job_dir / "voice_reference.wav"
-        if raw_reference.resolve() == reference.resolve():
-            raw_reference = job_dir / "voice_reference_input.wav"
-            reference.rename(raw_reference)
-        await run_audio_command(
-            [ffmpeg, "-v", "error", "-nostdin", "-y", "-i", raw_reference,
-             "-t", str(settings.singing_reference_max_seconds), "-ar", "44100",
-             "-ac", "1", "-c:a", "pcm_s16le", reference],
-        )
+        reference = job_dir / "voice_reference.wav" if raw_reference is not None else None
+        if raw_reference is not None:
+            if raw_reference.resolve() == reference.resolve():
+                raw_reference = job_dir / "voice_reference_input.wav"
+                reference.rename(raw_reference)
+            await run_audio_command(
+                [ffmpeg, "-v", "error", "-nostdin", "-y", "-i", raw_reference,
+                 "-t", str(settings.singing_reference_max_seconds), "-ar", "44100",
+                 "-ac", "1", "-c:a", "pcm_s16le", reference],
+            )
+        if release_voice_memory is not None:
+            await release_voice_memory()
         await progress(f"已找到《{song.track.title}》，正在分离原唱人声和伴奏")
         # 先分离音轨并卸载 Demucs，再运行翻唱模型。
         # SingingJobManager 每次只允许一个 GPU 任务，减少笔记本显存压力。
@@ -1046,7 +1093,7 @@ async def _generate_singing_cover_unlocked(
             "accepted": True, "mode": mode, "profile_id": profile_id,
             "voice_pitch_shift_semitones": voice_pitch_shift,
             "accompaniment_pitch_shift_semitones": _accompaniment_pitch_shift(voice_pitch_shift),
-            "pitch_plan": pitch_plan, "reference_audio": str(reference),
+            "pitch_plan": pitch_plan, "reference_audio": str(reference) if reference is not None else None,
             "has_timed_lyrics": bool(song.lyric_lines), "segments": reports,
             "source_start_seconds": selection.start_seconds,
             "source_end_seconds": selection.end_seconds,

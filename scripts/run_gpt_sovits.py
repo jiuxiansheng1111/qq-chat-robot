@@ -163,11 +163,48 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gpt-root", type=Path, required=True)
     parser.add_argument("--api-script", type=Path, required=True)
+    parser.add_argument("--offline-language-lite", action="store_true",
+                        help="Use bundled fast-langdetect lite model and forbid its downloads")
     parser.add_argument("api_args", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if args.api_args and args.api_args[0] == "--":
         args.api_args = args.api_args[1:]
     return args
+
+
+def _install_offline_language_detection() -> None:
+    """Keep optional Minecraft speech entirely local, including language detection.
+
+    Some split-lang versions explicitly request the full model even when the
+    GPT-SoVITS default detector is configured as lite. Route that public call to
+    the bundled lite model without changing files inside either dependency.
+    """
+    import fast_langdetect
+    from fast_langdetect import infer
+
+    original_detect = fast_langdetect.detect
+
+    @functools.wraps(original_detect)
+    def local_detect(text: str, **kwargs: Any) -> Any:
+        kwargs["model"] = "lite"
+        return original_detect(text, **kwargs)
+
+    def no_download(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("Minecraft speech is offline; install the bundled lite model locally")
+
+    fast_langdetect.detect = local_detect
+    infer.ModelDownloader.download = staticmethod(no_download)
+
+
+def _configure_local_nltk_data(gpt_root: Path) -> None:
+    """Use installed local corpora before MSIX-redirected AppData caches."""
+    local = gpt_root / ".local-setup" / "nltk_data"
+    if not local.is_dir():
+        return
+    local_key = os.path.normcase(os.path.abspath(local))
+    configured = [entry for entry in os.environ.get("NLTK_DATA", "").split(os.pathsep) if entry]
+    remaining = [entry for entry in configured if os.path.normcase(os.path.abspath(entry)) != local_key]
+    os.environ["NLTK_DATA"] = os.pathsep.join([str(local), *remaining])
 
 
 def main() -> int:
@@ -182,10 +219,13 @@ def main() -> int:
         raise SystemExit("api_v2.py 必须位于 GPT-SoVITS 根目录内。") from exc
 
     os.chdir(gpt_root)
+    _configure_local_nltk_data(gpt_root)
     sys.path.insert(0, str(gpt_root))
     sys.path.insert(0, str(gpt_root / "GPT_SoVITS"))
     api_arguments = list(args.api_args)
     sys.argv = [str(api_script), *api_arguments]
+    if args.offline_language_lite:
+        _install_offline_language_detection()
     _install_weight_cache()
 
     # 保留 api_v2 的 restart 命令，同时确保重启后仍经过本包装器。
@@ -197,9 +237,10 @@ def main() -> int:
         str(gpt_root),
         "--api-script",
         str(api_script),
-        "--",
-        *api_arguments,
     ]
+    if args.offline_language_lite:
+        launcher_arguments.append("--offline-language-lite")
+    launcher_arguments.extend(["--", *api_arguments])
 
     def restart_through_launcher(file: str, *restart_args: str) -> Any:
         same_interpreter = os.path.normcase(os.fspath(file)) == os.path.normcase(sys.executable)

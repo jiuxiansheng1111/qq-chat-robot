@@ -14,6 +14,7 @@ from app.config import Settings
 from app.services.bounded_http import request_bytes, request_json
 from app.services.music import (
     NeteaseTrack,
+    music_query_identity,
     netease_track_matches_query,
     parse_netease_tracks,
     rank_netease_tracks,
@@ -33,7 +34,8 @@ class MusicPlaylist:
 
 
 async def search_music_candidates(query: str, settings: Settings) -> list[NeteaseTrack]:
-    tracks = await search_netease_music(query, settings)
+    identity = music_query_identity(query)
+    tracks = await search_netease_music(identity.search_query if identity else query, settings)
     ranked = rank_netease_tracks(query, tracks)
     matched = [track for track in ranked if netease_track_matches_query(query, track)]
     # 没有精确命中时仍给候选，由用户确认，不把第一首当作原唱。

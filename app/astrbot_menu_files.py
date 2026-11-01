@@ -57,7 +57,12 @@ def _publish_menu_file(source: Path, name: str) -> None:
 async def prepare_default_menu_files(context: Any, settings: Any) -> int:
     """插件都加载好后，提前准备 QQ 和微信的本地菜单。"""
     from app.astrbot_menu import build_unified_menu_groups
-    from app.services.help_menu import prepare_help_menu_file
+    from app.services.help_menu import (
+        COMPACT_MENU_SUBTITLE,
+        COMPACT_MENU_TITLE,
+        concise_text_menu,
+        prepare_help_menu_file,
+    )
 
     config = context.get_config()
     plugins = config.get("plugin_set")
@@ -66,21 +71,28 @@ async def prepare_default_menu_files(context: Any, settings: Any) -> int:
         for group in (True, False):
             for admin in (False, True):
                 audience = _MenuAudience(platform, admin=admin, group=group, plugins=plugins)
-                image_groups, text_groups = build_unified_menu_groups(context, audience)
+                image_groups, text_groups = build_unified_menu_groups(context, audience, settings)
                 source = await prepare_help_menu_file(
                     settings, image_groups=image_groups, text_groups=text_groups,
+                    title=COMPACT_MENU_TITLE, subtitle=COMPACT_MENU_SUBTITLE,
                 )
                 scope = "" if group else "-private"
                 permission = "-admin" if admin else ""
                 await asyncio.to_thread(
                     _publish_menu_file, source, f"menu-{label}{scope}{permission}.jpg",
                 )
+                # 图片与文字共享筛选后的常用入口，不展开插件全部能力。
+                text_path = source.parent / f"menu-{label}{scope}{permission}.txt"
+                text = concise_text_menu(text_groups, title=COMPACT_MENU_TITLE, subtitle=COMPACT_MENU_SUBTITLE)
+                if not text_path.exists() or text_path.read_text(encoding="utf-8") != text:
+                    await asyncio.to_thread(text_path.write_text, text, encoding="utf-8")
                 count += 1
     return count
 
 
 async def choose_event_menu_file(
     context: Any, event: Any, source: Path, image_groups: Any, text_groups: Any,
+    *, settings: Any = None,
 ) -> Path:
     """默认配置直接用固定文件，单独配过的会话保留自己的菜单。"""
     from app.astrbot_menu import build_unified_menu_groups
@@ -98,7 +110,7 @@ async def choose_event_menu_file(
         preview_platform, admin=admin, group=group,
         plugins=context.get_config().get("plugin_set"),
     )
-    if build_unified_menu_groups(context, audience) != (image_groups, text_groups):
+    if build_unified_menu_groups(context, audience, settings) != (image_groups, text_groups):
         return source
     scope = "" if group else "-private"
     permission = "-admin" if admin else ""

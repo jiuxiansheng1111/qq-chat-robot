@@ -124,6 +124,11 @@ class Settings(BaseSettings):
         '"ref_audio_path":"data/murasame_voice_dataset_ja/audio/murasame_0001.mp3"}}'
     )
     voice_timeout_seconds: float = 45
+    # RVC 说话先用已配置的 TTS 角色生成基础语音，再转换为目标角色。
+    voice_rvc_base_profile: str = "murasame"
+    # 保存基础 TTS 配置快照，目标角色改为 RVC 后仍可生成转换前的声音。
+    voice_rvc_base_profile_json: str = ""
+    voice_rvc_timeout_seconds: float = Field(default=120, ge=10, le=600)
     voice_max_chars: int = 360
     voice_send_cooldown_seconds: int = 20
     # GPT-SoVITS 采样保持稳定；CPU 采样偶尔会在 HTTP 200 正常时
@@ -164,6 +169,8 @@ class Settings(BaseSettings):
     singing_hf_offline: bool = False
     singing_python: str = "./data/singing/runtime/.venv/Scripts/python.exe"
     singing_seed_root: str = "./data/singing/runtime/seed-vc"
+    singing_rvc_root: str = ""
+    singing_rvc_python: str = ""
     singing_ffmpeg_path: str = "./data/singing/runtime/bin/ffmpeg.exe"
     singing_ffprobe_path: str = "./data/singing/runtime/bin/ffprobe.exe"
     singing_use_trained_tts_reference: bool = True
@@ -191,7 +198,7 @@ class Settings(BaseSettings):
     singing_model_timeout_seconds: float = Field(default=900, ge=30, le=3600)
     singing_job_timeout_seconds: float = Field(default=2400, ge=60, le=7200)
     singing_queue_size: int = Field(default=3, ge=1, le=10)
-    singing_cooldown_seconds: float = Field(default=120, ge=0)
+    singing_cooldown_seconds: float = Field(default=15, ge=0)
     singing_segment_pause_seconds: float = Field(default=1.5, ge=0.5, le=30)
     singing_diffusion_steps: int = Field(default=35, ge=10, le=80)
     singing_seed: int = Field(default=20261004, ge=0, le=4294967295)
@@ -227,7 +234,7 @@ class Settings(BaseSettings):
                 if isinstance(item, dict) and isinstance(item.get("messages"), list):
                     examples.append(json.dumps(item["messages"], ensure_ascii=False))
             if examples:
-                prompt += "\n\n以下是语气示例，只模仿表达方式，不要编造示例中的事实：\n" + "\n".join(examples[:8])
+                prompt += "\n\n以下是语气示例，只模仿表达方式，不要编造示例中的事实；与上面人格规则冲突时以人格规则为准，不照抄台词：\n" + "\n".join(examples[:8])
         return prompt
 
     def validate_security(self) -> None:

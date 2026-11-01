@@ -115,7 +115,7 @@ QQ 机器人启动。参考音频和训练模型均只保存在本机。
 不要让验收进程直接使用生产 `tts_infer.yaml`：验收与生产应各有启动配置，避免候选权重或人工改动混入生产对照。换权接口改变当前进程中的模型状态，不能据此断言它会写回 YAML。
 
 ```powershell
-..\qq-chatrobot-voice\GPT-SoVITS\.venv_cpu\Scripts\python.exe .\scripts\prepare_voice_acceptance_config.py `
+..\qq-chatrobot-voice\GPT-SoVITS\.venv\Scripts\python.exe .\scripts\prepare_voice_acceptance_config.py `
   --source ..\qq-chatrobot-voice\GPT-SoVITS\GPT_SoVITS\configs\tts_infer.yaml `
   --output .\logs\voice-acceptance\tts_infer.acceptance.yaml `
   --sovits-weights "C:\accepted-weights\murasame_voice_candidate.pth"
@@ -130,7 +130,7 @@ GPT-SoVITS 的英语前端还需要 NLTK 的 `averaged_perceptron_tagger_eng` �
 缺失错误，使用**实际启动 sidecar 的 GPT-SoVITS Python**一次性安装它（不切换权重、不改 YAML）：
 
 ```powershell
-..\qq-chatrobot-voice\GPT-SoVITS\.venv_cpu\Scripts\python.exe -m nltk.downloader averaged_perceptron_tagger_eng
+..\qq-chatrobot-voice\GPT-SoVITS\.venv\Scripts\python.exe -m nltk.downloader averaged_perceptron_tagger_eng
 ```
 
 安装后先重试英语请求；若进程仍报资源缺失，再按正常流程重启 sidecar。在资源缺失期间，机器人会保留 LLM 的文字回退，而不会静默丢弃回复。
@@ -175,7 +175,7 @@ ASR 是门槛，不代替人工验收：脚本输出中的每个语言 gate 都�
 ```powershell
 # FunASR 在中文用户名路径下可能无法定位模型。本机已映射 S:；若未映射且该盘符空闲，可运行：
 # subst S: $env:USERPROFILE
-..\qq-chatrobot-voice\GPT-SoVITS\.venv_cpu\Scripts\python.exe .\scripts\accept_voice_audio.py `
+..\qq-chatrobot-voice\GPT-SoVITS\.venv\Scripts\python.exe .\scripts\accept_voice_audio.py `
   --model-path "S:\.cache\modelscope\models\iic--SenseVoiceSmall\snapshots\master" `
   --audio-dir .\logs `
   --manifest .\logs\voice_acceptance_manifest.json `

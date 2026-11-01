@@ -161,12 +161,12 @@ if (-not (Test-Path -LiteralPath $datasetActual)) { throw "Dataset directory not
 $projectAlias = Select-SubstDrive -RequestedDrive $ProjectDrive -Target $projectRoot -Candidates @("R:", "T:", "U:", "W:", "X:", "Y:", "Z:")
 $voiceAlias = Select-SubstDrive -RequestedDrive $VoiceDrive -Target ([System.IO.Path]::GetFullPath((Join-Path $projectRoot "..\qq-chatrobot-voice"))) -Candidates @("V:", "S:", "Q:", "N:", "M:", "L:", "K:")
 Ensure-SubstAlias -Drive $projectAlias -Target $projectRoot -RequiredPath ($projectAlias + "\data\" + $DatasetName)
-Ensure-SubstAlias -Drive $voiceAlias -Target ([System.IO.Path]::GetFullPath((Join-Path $projectRoot "..\qq-chatrobot-voice"))) -RequiredPath ($voiceAlias + "\GPT-SoVITS\.venv_cpu\Scripts\python.exe")
+Ensure-SubstAlias -Drive $voiceAlias -Target ([System.IO.Path]::GetFullPath((Join-Path $projectRoot "..\qq-chatrobot-voice"))) -RequiredPath ($voiceAlias + "\GPT-SoVITS\.venv\Scripts\python.exe")
 Register-SubstPSDrive $projectAlias
 Register-SubstPSDrive $voiceAlias
 
 $voiceRoot = Join-Path $voiceAlias "GPT-SoVITS"
-$python = Join-Path $voiceRoot ".venv_cpu\Scripts\python.exe"
+$python = Join-Path $voiceRoot ".venv\Scripts\python.exe"
 $dataset = Join-Path $projectAlias ("data\" + $DatasetName)
 $sourceListPath = Join-Path $datasetActual ($ManifestStem + ".list")
 $listPath = Join-Path $dataset ($ManifestStem + ".train.list")

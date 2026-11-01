@@ -319,8 +319,8 @@ def compute_quality_report(
     converted_audio: np.ndarray,
     source_duration_seconds: float,
     converted_duration_seconds: float,
-    reference_embedding: np.ndarray,
-    converted_embedding: np.ndarray,
+    reference_embedding: np.ndarray | None,
+    converted_embedding: np.ndarray | None,
     *,
     identity_reference_embedding: np.ndarray | None = None,
     expected_semitone_shift: int = 0,
@@ -360,7 +360,10 @@ def compute_quality_report(
         "source_voiced_median_f0_hz": _voiced_median_f0(source_f0),
         "converted_voiced_median_f0_hz": _voiced_median_f0(converted_f0),
         "expected_semitone_shift": expected_semitone_shift,
-        "voice_similarity": cosine_similarity(reference_embedding, converted_embedding),
+        "voice_similarity": (
+            cosine_similarity(reference_embedding, converted_embedding)
+            if reference_embedding is not None and converted_embedding is not None else None
+        ),
         "identity_reference_similarity": (
             cosine_similarity(identity_reference_embedding, converted_embedding)
             if identity_reference_embedding is not None else None
@@ -383,7 +386,7 @@ def quality_failures(
     max_duration_error_ratio: float = 0.03,
     min_converted_rms: float = 1e-4,
     max_clipping_ratio: float = 0.01,
-    min_voice_similarity: float = 0.35,
+    min_voice_similarity: float | None = 0.35,
     min_source_voiced_frames: int = 100,
     min_energy_recall: float | None = None,
     max_missing_vocal_seconds: float | None = None,
@@ -433,7 +436,7 @@ def quality_failures(
         failures.append("转换后人声音量过低")
     if clipping is None or clipping >= max_clipping_ratio:
         failures.append("转换后人声削波过多")
-    if similarity is None or similarity < min_voice_similarity:
+    if min_voice_similarity is not None and (similarity is None or similarity < min_voice_similarity):
         failures.append("转换后与目标音色相似度不足")
     if min_energy_recall is not None:
         energy_recall = number("vocal_energy_recall")

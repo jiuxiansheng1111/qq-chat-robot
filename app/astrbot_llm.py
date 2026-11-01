@@ -97,6 +97,38 @@ class AstrBotChatProvider:
                 last_error = LLMError(f"AstrBot 模型调用失败：{category}")
         raise last_error or LLMError("AstrBot 聊天模型不可用")
 
+    async def chat_primary(self, messages: list[dict]) -> str:
+        """只调用当前主模型，给明确禁止备用模型的本机桥接使用。"""
+        config = _model_config(self.context)
+        provider_id = config.get("provider_id", "")
+        umo = _session_origin.get()
+        if umo:
+            try:
+                provider_id = await self.context.get_current_chat_provider_id(umo)
+            except Exception as exc:
+                raise LLMError("当前会话的 AstrBot 模型不可用") from exc
+        if not isinstance(provider_id, str) or not provider_id.strip():
+            raise LLMError("AstrBot 默认聊天模型未配置")
+        provider = self.context.get_provider_by_id(provider_id)
+        if not callable(getattr(provider, "text_chat", None)):
+            raise LLMError("AstrBot 主聊天模型未启用或未加载")
+        try:
+            await route_provider_http_client(provider, self.settings)
+            result = await provider.text_chat(
+                contexts=copy.deepcopy(messages),
+                request_max_retries=max(1, int(config.get("request_max_retries", 1))),
+            )
+            content = result.completion_text
+            if not isinstance(content, str) or not content.strip():
+                raise LLMError("AstrBot empty response")
+            return content
+        except LLMError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            status = getattr(exc, "status_code", None)
+            category = f"HTTP {status}" if isinstance(status, int) else type(exc).__name__
+            raise LLMError(f"AstrBot 主模型调用失败：{category}") from exc
+
     async def aclose(self) -> None:
         """模型连接由 AstrBot 统一关闭。"""
 

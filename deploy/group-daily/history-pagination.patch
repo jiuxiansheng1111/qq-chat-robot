@@ -1,0 +1,20 @@
+--- a/src/infrastructure/platform/adapters/onebot_adapter.py
++++ b/src/infrastructure/platform/adapters/onebot_adapter.py
+@@ -227,6 +227,17 @@
+                         f"OneBot 分页拉取：获取到 0 条消息，停止回溯。群: {group_id}"
+                     )
+                     break
++
++                # NapCat's unanchored API uses getAioFirstViewLatestMsgs, a UI
++                # cache which can contain widely separated messages. Use it only
++                # to locate the newest anchor, then fetch contiguous history.
++                # Otherwise its oldest cached item skips the intervening chat.
++                if driver.name == "napcat" and not current_anchor_id:
++                    newest = max(messages, key=lambda item: item.get("time", 0))
++                    seed_anchor = driver.extract_history_anchor(newest)
++                    if seed_anchor:
++                        current_anchor_id = seed_anchor
++                        continue
+ 
+                 # 确定该批次中最旧的消息作为下一次回溯的起点
+                 # 不同 OneBot 实现对 reverseOrder 的处理可能导致结果顺序不同（反映在消息时间戳上）

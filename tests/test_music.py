@@ -117,6 +117,26 @@ def test_expected_title_requires_an_exact_match():
     assert choose_netease_track("春泥棒", tracks, expected_title="春泥棒") is None
 
 
+async def test_music_candidates_normalize_parade_and_keep_artist(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.services import music_library
+    from app.services.music import NeteaseTrack
+
+    cover = "https://p1.music.126.net/cover.jpg"
+    wrong = NeteaseTrack("701280", "パレード", ("CHABA",), "", cover, 294)
+    original = NeteaseTrack("1357628744", "パレード", ("ヨルシカ",), "", cover, 299)
+    queries = []
+
+    async def search(query, settings):
+        queries.append(query)
+        return [wrong, original]
+
+    monkeypatch.setattr(music_library, "search_netease_music", search)
+    assert await music_library.search_music_candidates("yolushika parade", SimpleNamespace()) == [original]
+    assert queries == ["ヨルシカ パレード"]
+
+
 def test_music_identity_parser_accepts_json_only():
     identity = parse_music_identity(
         '```json\n{"title":"春泥棒","artist":"ヨルシカ",'

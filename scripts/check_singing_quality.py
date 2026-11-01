@@ -22,7 +22,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--seed-root", type=Path, required=True)
     parser.add_argument("--source", type=Path, required=True, help="Separated original vocal")
     parser.add_argument("--converted", type=Path, required=True, help="Converted vocal")
-    parser.add_argument("--reference", type=Path, required=True, help="Conversion prompt / target speaker recording")
+    parser.add_argument("--reference", type=Path, help="Conversion prompt / target speaker recording")
+    parser.add_argument("--no-speaker-reference", action="store_true", help="Report voice identity as unevaluated; retain pitch, timing and vocal checks")
     parser.add_argument(
         "--identity-reference", type=Path,
         help="Optional independent target identity recording; adds a diagnostic similarity score",
@@ -113,14 +114,18 @@ def _evaluate(args: argparse.Namespace) -> dict:
         raise ValueError("--seed-root is not a Seed-VC checkout")
     source = args.source.resolve(strict=True)
     converted = args.converted.resolve(strict=True)
-    reference = args.reference.resolve(strict=True)
+    if args.reference is None and not args.no_speaker_reference:
+        raise ValueError("A target speaker reference is required")
+    if args.no_speaker_reference and (args.reference is not None or args.identity_reference is not None):
+        raise ValueError("Speaker reference flags must be consistent")
+    reference = args.reference.resolve(strict=True) if args.reference is not None else None
     identity_reference = (
         args.identity_reference.resolve(strict=True)
         if args.identity_reference is not None else None
     )
     if identity_reference == reference and args.identity_reference is not None:
         raise ValueError("--identity-reference must be a separate file from --reference")
-    input_paths = (source, converted, reference) + (
+    input_paths = (source, converted) + ((reference,) if reference is not None else ()) + (
         (identity_reference,) if identity_reference is not None else ()
     )
     if not all(path.is_file() for path in input_paths):
@@ -133,7 +138,6 @@ def _evaluate(args: argparse.Namespace) -> dict:
     import numpy as np
     import torch
     from hf_utils import load_custom_model_from_hf
-    from modules.campplus.DTDNN import CAMPPlus
     from modules.rmvpe import RMVPE
 
     from app.services.singing_quality import (
@@ -145,21 +149,24 @@ def _evaluate(args: argparse.Namespace) -> dict:
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     rmvpe_path = load_custom_model_from_hf("lj1995/VoiceConversionWebUI", "rmvpe.pt", None)
     rmvpe = RMVPE(rmvpe_path, is_half=False, device=device)
-    campplus_path = load_custom_model_from_hf("funasr/campplus", "campplus_cn_common.bin", None)
-    campplus = CAMPPlus(feat_dim=80, embedding_size=192)
-    campplus.load_state_dict(torch.load(campplus_path, map_location="cpu"))
-    campplus.eval().to(device)
+    campplus = None
+    if reference is not None:
+        from modules.campplus.DTDNN import CAMPPlus
+        campplus_path = load_custom_model_from_hf("funasr/campplus", "campplus_cn_common.bin", None)
+        campplus = CAMPPlus(feat_dim=80, embedding_size=192)
+        campplus.load_state_dict(torch.load(campplus_path, map_location="cpu"))
+        campplus.eval().to(device)
 
     source_16k, _ = librosa.load(source, sr=16000, mono=True)
     converted_16k, _ = librosa.load(converted, sr=16000, mono=True)
-    reference_16k, _ = librosa.load(reference, sr=16000, mono=True)
+    reference_16k = librosa.load(reference, sr=16000, mono=True)[0] if reference is not None else None
     identity_reference_16k = (
         librosa.load(identity_reference, sr=16000, mono=True)[0]
         if identity_reference is not None else None
     )
     converted_native, _ = librosa.load(converted, sr=None, mono=True)
     if (
-        not source_16k.size or not converted_16k.size or not reference_16k.size
+        not source_16k.size or not converted_16k.size or (reference_16k is not None and not reference_16k.size)
         or (identity_reference_16k is not None and not identity_reference_16k.size)
     ):
         raise ValueError("One of the audio files is empty")
@@ -172,12 +179,12 @@ def _evaluate(args: argparse.Namespace) -> dict:
 
     source_f0 = _infer_f0(rmvpe, source_16k)
     converted_f0 = _infer_f0(rmvpe, converted_16k)
-    reference_embedding = _speaker_embedding(campplus, reference_16k, device)
+    reference_embedding = _speaker_embedding(campplus, reference_16k, device) if reference_16k is not None else None
     identity_reference_embedding = (
         _speaker_embedding(campplus, identity_reference_16k, device)
         if identity_reference_16k is not None else None
     )
-    converted_embedding = _speaker_embedding(campplus, converted_16k, device)
+    converted_embedding = _speaker_embedding(campplus, converted_16k, device) if campplus is not None else None
     report = compute_quality_report(
         source_f0,
         converted_f0,
@@ -210,7 +217,7 @@ def _evaluate(args: argparse.Namespace) -> dict:
         max_duration_error_ratio=args.max_duration_error,
         min_converted_rms=args.min_rms,
         max_clipping_ratio=args.max_clipping,
-        min_voice_similarity=args.min_voice_similarity,
+        min_voice_similarity=None if args.no_speaker_reference else args.min_voice_similarity,
         min_source_voiced_frames=args.min_source_voiced_frames,
         min_energy_recall=args.min_energy_recall,
         max_missing_vocal_seconds=args.max_missing_vocal_seconds,
@@ -218,7 +225,7 @@ def _evaluate(args: argparse.Namespace) -> dict:
     return {
         "accepted": not failures,
         "failures": failures,
-        "voice_similarity_basis": "conversion_prompt",
+        "voice_similarity_basis": "not_evaluated_no_target_recording" if args.no_speaker_reference else "conversion_prompt",
         "pitch_diagnostics_basis": (
             "源音高变化单独作基线（包含振音与旋律跳进）；残差为转换音高减去"
             "预期移调后的源音高；只比较相邻对齐有声帧，不跨静音，不参与通过判定"

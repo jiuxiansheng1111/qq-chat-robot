@@ -1,4 +1,82 @@
 {
+  "web_search_enabled": {
+    "description": "启用联网搜索",
+    "hint": "允许模型按需查询新闻、新游戏和网梗。默认使用免费公开网页搜索；每轮最多查询两次。",
+    "type": "bool",
+    "default": true
+  },
+  "group_chat_enabled": {
+    "description": "启用人类消息驱动的群聊接话",
+    "hint": "只作用于下方名单中的 OneBot QQ 群。被 @、叫名字或引用回复时接话；普通问句不单独唤醒，只有多人热聊时少量参与。需要关闭旧聊天模式。",
+    "type": "bool",
+    "default": true
+  },
+  "group_chat_groups": {
+    "description": "接话与自然命令的 QQ 群名单",
+    "hint": "填入群号。空名单不启用此功能，各群与各机器人账号独立计数。",
+    "type": "list",
+    "default": []
+  },
+  "group_chat_bot_names": {
+    "description": "群聊中的机器人称呼",
+    "hint": "消息以这些称呼开头时直接接话，也可在自然命令前叫名字。",
+    "type": "list",
+    "default": ["小丛雨", "丛雨"]
+  },
+  "group_chat_interject_every": {
+    "description": "普通群聊隔几条人类文字插话",
+    "hint": "默认 12，还须满足下方最小间隔及有人接话的条件。纯图片不随机唤醒，@、叫名字、引用机器人不受影响。",
+    "type": "int",
+    "default": 12
+  },
+  "group_chat_min_interval_seconds": {
+    "description": "未经点名的群接话最小间隔（秒）",
+    "hint": "默认 600。仅约束未经点名的参与；明确 @、叫名字或引用机器人仍可回复。",
+    "type": "int",
+    "default": 600
+  },
+  "group_chat_unaddressed_questions": {
+    "description": "普通问句可单独唤醒机器人",
+    "hint": "默认关闭，避免抢答群友之间的问题。明确 @、叫名字、引用机器人不受影响。",
+    "type": "bool",
+    "default": false
+  },
+  "group_chat_active_speakers": {
+    "description": "热聊插话所需的不同发言人数",
+    "hint": "默认 3 人；同一人连续发很多条不算多人热聊。",
+    "type": "int",
+    "default": 3
+  },
+  "group_chat_active_window_seconds": {
+    "description": "判断多人热聊的时间范围（秒）",
+    "hint": "默认 300，即最近 5 分钟内满足人数和文字条数才参与；长时间零散消息不累计成热聊。",
+    "type": "int",
+    "default": 300
+  },
+  "group_chat_require_engagement": {
+    "description": "主动插话无人回应后保持安静",
+    "hint": "开启后，一次未经点名的接话发出后，不因其他群友继续聊天而再次插话。有人明确 @、叫名字或引用它后恢复。",
+    "type": "bool",
+    "default": true
+  },
+  "group_chat_followup_seconds": {
+    "description": "同一用户回复后的接话窗口（秒）",
+    "hint": "只在该用户发来新消息时接话，不会安排定时追问。设为 0 关闭；无人时的定时闲聊由主动聊天插件单独管理。",
+    "type": "int",
+    "default": 0
+  },
+  "group_chat_ignored_user_ids": {
+    "description": "不参与群接话的其他机器人 QQ 号",
+    "hint": "机器人自己的消息始终忽略。可补充其他机器人账号，防止机器人互相接话。",
+    "type": "list",
+    "default": []
+  },
+  "natural_commands_enabled": {
+    "description": "启用免斜杠自然命令",
+    "hint": "支持群分析、群漫画、陪伴群状态、牌谱分析及完整插件命令。命令权限仍由原插件检查，否定句、引用和功能讨论不会执行命令。",
+    "type": "bool",
+    "default": true
+  },
   "legacy_chat": {
     "description": "普通消息是否继续使用现有角色聊天。",
     "hint": "默认开启以保留所有现有人格。关闭后普通聊天交给 AstrBot，现有业务命令仍由本插件处理。",

@@ -1,0 +1,897 @@
+{
+  "Wrapper": {
+    "fields": {
+      "name": {
+        "type": "string",
+        "id": 1
+      },
+      "data": {
+        "type": "bytes",
+        "id": 2
+      }
+    }
+  },
+  "Error": {
+    "fields": {
+      "code": {
+        "type": "uint32",
+        "id": 1
+      },
+      "u32_params": {
+        "rule": "repeated",
+        "type": "uint32",
+        "id": 2
+      },
+      "str_params": {
+        "rule": "repeated",
+        "type": "string",
+        "id": 3
+      },
+      "json_param": {
+        "type": "string",
+        "id": 4
+      }
+    }
+  },
+  "ReqRouteConnection": {
+    "fields": {
+      "kind": {"type": "uint32", "id": 2},
+      "route_id": {"type": "string", "id": 3},
+      "timestamp": {"type": "uint64", "id": 4},
+      "platform": {"type": "string", "id": 6}
+    }
+  },
+  "ResCommon": {
+    "fields": {
+      "error": {"type": "Error", "id": 1}
+    }
+  },
+  "ReqLogin": {
+    "fields": {
+      "account": {
+        "type": "string",
+        "id": 1
+      },
+      "password": {
+        "type": "string",
+        "id": 2
+      },
+      "reconnect": {
+        "type": "bool",
+        "id": 3
+      },
+      "device": {
+        "type": "ClientDeviceInfo",
+        "id": 4
+      },
+      "random_key": {
+        "type": "string",
+        "id": 5
+      },
+      "client_version": {
+        "type": "ClientVersionInfo",
+        "id": 6
+      },
+      "gen_access_token": {
+        "type": "bool",
+        "id": 7
+      },
+      "currency_platforms": {
+        "rule": "repeated",
+        "type": "uint32",
+        "id": 8
+      },
+      "type": {
+        "type": "uint32",
+        "id": 9
+      },
+      "version": {
+        "type": "uint32",
+        "id": 10
+      },
+      "client_version_string": {
+        "type": "string",
+        "id": 11
+      },
+      "tag": {
+        "type": "string",
+        "id": 12
+      }
+    }
+  },
+  "ResLogin": {
+    "fields": {
+      "error": {
+        "type": "Error",
+        "id": 1
+      },
+      "account_id": {
+        "type": "uint32",
+        "id": 2
+      }
+    }
+  },
+  "ClientDeviceInfo": {
+    "fields": {
+      "platform": {
+        "type": "string",
+        "id": 1
+      },
+      "hardware": {
+        "type": "string",
+        "id": 2
+      },
+      "os": {
+        "type": "string",
+        "id": 3
+      },
+      "os_version": {
+        "type": "string",
+        "id": 4
+      },
+      "is_browser": {
+        "type": "bool",
+        "id": 5
+      },
+      "software": {
+        "type": "string",
+        "id": 6
+      },
+      "sale_platform": {
+        "type": "string",
+        "id": 7
+      },
+      "hardware_vendor": {
+        "type": "string",
+        "id": 8
+      },
+      "model_number": {
+        "type": "string",
+        "id": 9
+      }
+    }
+  },
+  "ClientVersionInfo": {
+    "fields": {
+      "resource": {
+        "type": "string",
+        "id": 1
+      },
+      "package": {
+        "type": "string",
+        "id": 2
+      }
+    }
+  },
+  "ReqGameRecord": {
+    "fields": {
+      "game_uuid": {
+        "type": "string",
+        "id": 1
+      },
+      "client_version_string": {
+        "type": "string",
+        "id": 2
+      }
+    }
+  },
+  "ResGameRecord": {
+    "fields": {
+      "error": {
+        "type": "Error",
+        "id": 1
+      },
+      "head": {
+        "type": "RecordGame",
+        "id": 3
+      },
+      "data": {
+        "type": "bytes",
+        "id": 4
+      },
+      "data_url": {
+        "type": "string",
+        "id": 5
+      }
+    }
+  },
+  "RecordGame": {
+    "fields": {
+      "uuid": {
+        "type": "string",
+        "id": 1
+      },
+      "start_time": {
+        "type": "uint32",
+        "id": 2
+      },
+      "end_time": {
+        "type": "uint32",
+        "id": 3
+      },
+      "config": {
+        "type": "GameConfig",
+        "id": 5
+      },
+      "accounts": {
+        "rule": "repeated",
+        "type": "AccountInfo",
+        "id": 11
+      },
+      "result": {
+        "type": "GameEndResult",
+        "id": 12
+      }
+    },
+    "nested": {
+      "AccountInfo": {
+        "fields": {
+          "account_id": {
+            "type": "uint32",
+            "id": 1
+          },
+          "seat": {
+            "type": "uint32",
+            "id": 2
+          },
+          "nickname": {
+            "type": "string",
+            "id": 3
+          }
+        }
+      }
+    }
+  },
+  "GameConfig": {
+    "fields": {
+      "category": {
+        "type": "uint32",
+        "id": 1
+      },
+      "mode": {
+        "type": "GameMode",
+        "id": 2
+      }
+    }
+  },
+  "GameMode": {
+    "fields": {
+      "mode": {
+        "type": "uint32",
+        "id": 1
+      },
+      "detail_rule": {
+        "type": "GameDetailRule",
+        "id": 6
+      }
+    }
+  },
+  "GameDetailRule": {
+    "fields": {
+      "time_fixed": {
+        "type": "uint32",
+        "id": 1
+      },
+      "time_add": {
+        "type": "uint32",
+        "id": 2
+      },
+      "dora_count": {
+        "type": "uint32",
+        "id": 3
+      },
+      "shiduan": {
+        "type": "uint32",
+        "id": 4
+      },
+      "init_point": {
+        "type": "uint32",
+        "id": 5
+      },
+      "fandian": {
+        "type": "uint32",
+        "id": 6
+      },
+      "can_jifei": {
+        "type": "bool",
+        "id": 7
+      },
+      "tianbian_value": {
+        "type": "uint32",
+        "id": 8
+      },
+      "liqibang_value": {
+        "type": "uint32",
+        "id": 9
+      },
+      "changbang_value": {
+        "type": "uint32",
+        "id": 10
+      },
+      "noting_fafu_1": {
+        "type": "uint32",
+        "id": 11
+      },
+      "noting_fafu_2": {
+        "type": "uint32",
+        "id": 12
+      },
+      "noting_fafu_3": {
+        "type": "uint32",
+        "id": 13
+      },
+      "have_liujumanguan": {
+        "type": "bool",
+        "id": 14
+      },
+      "have_qieshangmanguan": {
+        "type": "bool",
+        "id": 15
+      },
+      "have_biao_dora": {
+        "type": "bool",
+        "id": 16
+      },
+      "have_gang_biao_dora": {
+        "type": "bool",
+        "id": 17
+      },
+      "ming_dora_immediately_open": {
+        "type": "bool",
+        "id": 18
+      },
+      "have_li_dora": {
+        "type": "bool",
+        "id": 19
+      },
+      "have_gang_li_dora": {
+        "type": "bool",
+        "id": 20
+      },
+      "have_sifenglianda": {
+        "type": "bool",
+        "id": 21
+      },
+      "have_sigangsanle": {
+        "type": "bool",
+        "id": 22
+      },
+      "have_sijializhi": {
+        "type": "bool",
+        "id": 23
+      },
+      "have_jiuzhongjiupai": {
+        "type": "bool",
+        "id": 24
+      },
+      "have_sanjiahele": {
+        "type": "bool",
+        "id": 25
+      },
+      "have_toutiao": {
+        "type": "bool",
+        "id": 26
+      },
+      "have_helelianzhuang": {
+        "type": "bool",
+        "id": 27
+      },
+      "have_helezhongju": {
+        "type": "bool",
+        "id": 28
+      },
+      "have_tingpailianzhuang": {
+        "type": "bool",
+        "id": 29
+      },
+      "have_tingpaizhongju": {
+        "type": "bool",
+        "id": 30
+      },
+      "have_yifa": {
+        "type": "bool",
+        "id": 31
+      },
+      "have_nanruxiru": {
+        "type": "bool",
+        "id": 32
+      },
+      "jingsuanyuandian": {
+        "type": "uint32",
+        "id": 33
+      },
+      "shunweima_2": {
+        "type": "int32",
+        "id": 34
+      },
+      "shunweima_3": {
+        "type": "int32",
+        "id": 35
+      },
+      "shunweima_4": {
+        "type": "int32",
+        "id": 36
+      },
+      "bianjietishi": {
+        "type": "bool",
+        "id": 37
+      },
+      "ai_level": {
+        "type": "uint32",
+        "id": 38
+      },
+      "have_zimosun": {
+        "type": "bool",
+        "id": 39
+      },
+      "disable_multi_yukaman": {
+        "type": "bool",
+        "id": 40
+      },
+      "fanfu": {
+        "type": "uint32",
+        "id": 41
+      },
+      "guyi_mode": {
+        "type": "uint32",
+        "id": 42
+      },
+      "dora3_mode": {
+        "type": "uint32",
+        "id": 43
+      },
+      "begin_open_mode": {
+        "type": "uint32",
+        "id": 44
+      },
+      "jiuchao_mode": {
+        "type": "uint32",
+        "id": 45
+      },
+      "muyu_mode": {
+        "type": "uint32",
+        "id": 46
+      },
+      "open_hand": {
+        "type": "uint32",
+        "id": 47
+      },
+      "xuezhandaodi": {
+        "type": "uint32",
+        "id": 48
+      },
+      "huansanzhang": {
+        "type": "uint32",
+        "id": 49
+      },
+      "chuanma": {
+        "type": "uint32",
+        "id": 50
+      },
+      "disable_leijiyiman": {
+        "type": "bool",
+        "id": 60
+      }
+    }
+  },
+  "GameEndResult": {
+    "fields": {
+      "players": {
+        "rule": "repeated",
+        "type": "PlayerItem",
+        "id": 1
+      }
+    },
+    "nested": {
+      "PlayerItem": {
+        "fields": {
+          "seat": {
+            "type": "uint32",
+            "id": 1
+          },
+          "total_point": {
+            "type": "int32",
+            "id": 2
+          },
+          "part_point_1": {
+            "type": "int32",
+            "id": 3
+          },
+          "part_point_2": {
+            "type": "int32",
+            "id": 4
+          },
+          "grading_score": {
+            "type": "int32",
+            "id": 5
+          },
+          "gold": {
+            "type": "int32",
+            "id": 6
+          }
+        }
+      }
+    }
+  },
+  "GameEnd": {
+    "fields": {
+      "scores": {
+        "rule": "repeated",
+        "type": "int32",
+        "id": 1
+      }
+    }
+  },
+  "GameDetailRecords": {
+    "fields": {
+      "records": {
+        "rule": "repeated",
+        "type": "bytes",
+        "id": 1
+      },
+      "version": {
+        "type": "uint32",
+        "id": 2
+      },
+      "actions": {
+        "rule": "repeated",
+        "type": "GameAction",
+        "id": 3
+      }
+    }
+  },
+  "GameAction": {
+    "fields": {
+      "type": {
+        "type": "uint32",
+        "id": 2
+      },
+      "result": {
+        "type": "bytes",
+        "id": 3
+      }
+    }
+  },
+  "RecordNewRound": {
+    "fields": {
+      "chang": {
+        "type": "uint32",
+        "id": 1
+      },
+      "ju": {
+        "type": "uint32",
+        "id": 2
+      },
+      "ben": {
+        "type": "uint32",
+        "id": 3
+      },
+      "dora": {
+        "type": "string",
+        "id": 4
+      },
+      "scores": {
+        "rule": "repeated",
+        "type": "int32",
+        "id": 5
+      },
+      "liqibang": {
+        "type": "uint32",
+        "id": 6
+      },
+      "tiles0": {
+        "rule": "repeated",
+        "type": "string",
+        "id": 7
+      },
+      "tiles1": {
+        "rule": "repeated",
+        "type": "string",
+        "id": 8
+      },
+      "tiles2": {
+        "rule": "repeated",
+        "type": "string",
+        "id": 9
+      },
+      "tiles3": {
+        "rule": "repeated",
+        "type": "string",
+        "id": 10
+      },
+      "left_tile_count": {
+        "type": "uint32",
+        "id": 15
+      },
+      "doras": {
+        "rule": "repeated",
+        "type": "string",
+        "id": 16
+      }
+    }
+  },
+  "RecordDealTile": {
+    "fields": {
+      "seat": {
+        "type": "uint32",
+        "id": 1
+      },
+      "tile": {
+        "type": "string",
+        "id": 2
+      },
+      "left_tile_count": {
+        "type": "uint32",
+        "id": 3
+      },
+      "liqi": {
+        "type": "LiQiSuccess",
+        "id": 5
+      },
+      "doras": {
+        "rule": "repeated",
+        "type": "string",
+        "id": 6
+      }
+    }
+  },
+  "RecordDiscardTile": {
+    "fields": {
+      "seat": {
+        "type": "uint32",
+        "id": 1
+      },
+      "tile": {
+        "type": "string",
+        "id": 2
+      },
+      "is_liqi": {
+        "type": "bool",
+        "id": 3
+      },
+      "is_wliqi": {
+        "type": "bool",
+        "id": 9
+      },
+      "moqie": {
+        "type": "bool",
+        "id": 5
+      },
+      "doras": {
+        "rule": "repeated",
+        "type": "string",
+        "id": 8
+      }
+    }
+  },
+  "RecordChiPengGang": {
+    "fields": {
+      "seat": {
+        "type": "uint32",
+        "id": 1
+      },
+      "type": {
+        "type": "uint32",
+        "id": 2
+      },
+      "tiles": {
+        "rule": "repeated",
+        "type": "string",
+        "id": 3
+      },
+      "froms": {
+        "rule": "repeated",
+        "type": "uint32",
+        "id": 4
+      },
+      "liqi": {
+        "type": "LiQiSuccess",
+        "id": 5
+      }
+    }
+  },
+  "RecordAnGangAddGang": {
+    "fields": {
+      "seat": {
+        "type": "uint32",
+        "id": 1
+      },
+      "type": {
+        "type": "uint32",
+        "id": 2
+      },
+      "tiles": {
+        "type": "string",
+        "id": 3
+      },
+      "doras": {
+        "rule": "repeated",
+        "type": "string",
+        "id": 6
+      }
+    }
+  },
+  "RecordHule": {
+    "fields": {
+      "hules": {
+        "rule": "repeated",
+        "type": "HuleInfo",
+        "id": 1
+      },
+      "old_scores": {
+        "rule": "repeated",
+        "type": "int32",
+        "id": 2
+      },
+      "delta_scores": {
+        "rule": "repeated",
+        "type": "int32",
+        "id": 3
+      },
+      "scores": {
+        "rule": "repeated",
+        "type": "int32",
+        "id": 5
+      },
+      "gameend": {
+        "type": "GameEnd",
+        "id": 6
+      },
+      "doras": {
+        "rule": "repeated",
+        "type": "string",
+        "id": 7
+      }
+    }
+  },
+  "HuleInfo": {
+    "fields": {
+      "hand": {
+        "rule": "repeated",
+        "type": "string",
+        "id": 1
+      },
+      "hu_tile": {
+        "type": "string",
+        "id": 3
+      },
+      "seat": {
+        "type": "uint32",
+        "id": 4
+      },
+      "zimo": {
+        "type": "bool",
+        "id": 5
+      },
+      "count": {
+        "type": "uint32",
+        "id": 11
+      },
+      "fu": {
+        "type": "uint32",
+        "id": 13
+      },
+      "point_rong": {
+        "type": "uint32",
+        "id": 15
+      },
+      "point_zimo_qin": {
+        "type": "uint32",
+        "id": 16
+      },
+      "point_zimo_xian": {
+        "type": "uint32",
+        "id": 17
+      },
+      "fans": {
+        "rule": "repeated",
+        "type": "FanInfo",
+        "id": 12
+      }
+    }
+  },
+  "FanInfo": {
+    "fields": {
+      "name": {
+        "type": "string",
+        "id": 1
+      },
+      "val": {
+        "type": "uint32",
+        "id": 2
+      },
+      "id": {
+        "type": "uint32",
+        "id": 3
+      }
+    }
+  },
+  "RecordNoTile": {
+    "fields": {
+      "liujumanguan": {
+        "type": "bool",
+        "id": 1
+      },
+      "players": {
+        "rule": "repeated",
+        "type": "NoTilePlayerInfo",
+        "id": 2
+      },
+      "scores": {
+        "rule": "repeated",
+        "type": "NoTileScoreInfo",
+        "id": 3
+      },
+      "gameend": {
+        "type": "bool",
+        "id": 4
+      }
+    }
+  },
+  "NoTilePlayerInfo": {
+    "fields": {
+      "tingpai": {
+        "type": "bool",
+        "id": 3
+      }
+    }
+  },
+  "NoTileScoreInfo": {
+    "fields": {
+      "seat": {
+        "type": "uint32",
+        "id": 1
+      },
+      "old_scores": {
+        "rule": "repeated",
+        "type": "int32",
+        "id": 2
+      },
+      "delta_scores": {
+        "rule": "repeated",
+        "type": "int32",
+        "id": 3
+      }
+    }
+  },
+  "RecordLiuJu": {
+    "fields": {
+      "type": {
+        "type": "uint32",
+        "id": 1
+      },
+      "gameend": {
+        "type": "GameEnd",
+        "id": 2
+      },
+      "seat": {
+        "type": "uint32",
+        "id": 3
+      },
+      "liqi": {
+        "type": "LiQiSuccess",
+        "id": 5
+      }
+    }
+  },
+  "LiQiSuccess": {
+    "fields": {
+      "seat": {
+        "type": "uint32",
+        "id": 1
+      },
+      "score": {
+        "type": "int32",
+        "id": 2
+      },
+      "liqibang": {
+        "type": "uint32",
+        "id": 3
+      },
+      "failed": {
+        "type": "bool",
+        "id": 4
+      }
+    }
+  }
+}

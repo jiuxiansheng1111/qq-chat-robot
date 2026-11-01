@@ -162,7 +162,20 @@ function Get-LiveRecordedIdentities {
         [Parameter(Mandatory = $true)][int]$Port
     )
     $live = @(foreach ($identity in $State.Processes) {
-        if (-not (Get-AstrbotProcessInfo -ProcessId ([int]$identity.ProcessId))) { continue }
+        $info = Get-AstrbotProcessInfo -ProcessId ([int]$identity.ProcessId)
+        if (-not $info) { continue }
+        if ($null -ne $info.CreationDate) {
+            try {
+                $recordedStart = [datetime]::Parse([string]$identity.CreatedUtc,
+                    [Globalization.CultureInfo]::InvariantCulture,
+                    [Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+                $currentStart = ([datetime]$info.CreationDate).ToUniversalTime()
+            } catch {
+                throw "PID $($identity.ProcessId) 的创建时间无法核对；保留运行记录，未处理进程。"
+            }
+            # 创建时间不同说明旧进程已退出，PID 已被复用。只忽略旧记录，绝不认领新进程。
+            if ($currentStart -ne $recordedStart) { continue }
+        }
         if (-not (Test-AstrbotRecordedIdentity -Identity $identity -LauncherPath $LauncherPath `
                 -ToolPythonPath $ToolPythonPath -ManagedPythonPath $ManagedPythonPath -Port $Port)) {
             throw "PID $($identity.ProcessId) 仍存在但身份不匹配；保留运行记录，未处理进程。"

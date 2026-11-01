@@ -24,6 +24,7 @@ _LOCAL_PATH_FIELDS = (
     "ultraman_image_cache_dir", "anime_image_cache_dir", "murasame_asset_dir",
     "netease_member_token_path", "singing_python", "singing_seed_root",
     "singing_ffmpeg_path", "singing_ffprobe_path", "help_menu_background_path",
+    "singing_rvc_root", "singing_rvc_python",
 )
 _BLOCKING_REASONS = frozenset({
     "group_disabled", "user_blocked", "blocked", "plugin_disabled", "duplicate_event",

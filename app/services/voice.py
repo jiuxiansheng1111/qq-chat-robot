@@ -8,11 +8,15 @@ import math
 import re
 import struct
 import wave
+from contextlib import nullcontext
 from pathlib import Path
 
 import httpx
 
 from app.config import Settings
+from app.services.rvc import configured_rvc_profile, convert_rvc_speech
+from app.services.singing_gpu import GpuBusyError, async_gpu_lock
+from app.services.voice_memory import is_local_gpt_sovits
 
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
 _KANA_RE = re.compile(r"[\u3040-\u30ff]")
@@ -83,6 +87,11 @@ def voice_profiles(settings: Settings) -> dict[str, dict[str, object]]:
                     "ref_audio_path",
                     "instructions",
                     "languages",
+                    "singing_provider",
+                    "voice_provider",
+                    "tts_base_profile",
+                    "rvc_model_path",
+                    "rvc_index_path",
                 )
             }
             # 语言专属配置先按原值保留，到合成时再处理。这样配置错误只会影响语音，
@@ -98,6 +107,11 @@ def voice_profiles(settings: Settings) -> dict[str, dict[str, object]]:
                 "temperature",
                 "parallel_infer",
                 "split_bucket",
+                "use_cuda_graph",
+                "tts_enabled",
+                "singing_enabled",
+                "rvc_index_rate",
+                "rvc_speaker_id",
             ):
                 if field in value:
                     profile[field] = value[field]
@@ -188,7 +202,7 @@ def profile_inference_overrides(profile: dict[str, object]) -> dict[str, int | f
         ):
             raise RuntimeError("所选角色的 temperature 必须在 0.1 至 2.0 之间，已回退文字回复")
         overrides["temperature"] = numeric_temperature
-    for field in ("parallel_infer", "split_bucket"):
+    for field in ("parallel_infer", "split_bucket", "use_cuda_graph"):
         if field in profile:
             value = profile[field]
             if type(value) is not bool:
@@ -199,6 +213,8 @@ def profile_inference_overrides(profile: dict[str, object]) -> dict[str, int | f
 
 def character_languages(profile: dict[str, object]) -> str:
     """返回角色支持语言的简短显示名。"""
+    if profile.get("tts_enabled") is False:
+        return "文字聊天 / 翻唱" if profile.get("singing_provider") == "rvc" else "文字聊天"
     try:
         supported_languages = profile_supported_languages(profile)
     except RuntimeError:
@@ -624,6 +640,40 @@ async def synthesize_voice(
     if not voice_profile_authorized(settings, selected_profile_id, bot_self_id):
         raise RuntimeError("该角色音色仅获准在指定机器人账号使用，已回退文字回复")
     profile = profiles[selected_profile_id]
+    if profile.get("tts_enabled") is False:
+        raise RuntimeError("这个角色目前支持文字聊天和翻唱，尚未配置文字朗读音色。")
+    if profile.get("voice_provider") == "rvc":
+        model = configured_rvc_profile(settings, profile)
+        base_profile_id = str(profile.get("tts_base_profile") or settings.voice_rvc_base_profile)
+        base_profile = profiles.get(base_profile_id)
+        if settings.voice_rvc_base_profile_json:
+            try:
+                base_profile = json.loads(settings.voice_rvc_base_profile_json)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("RVC 基础朗读配置无效，已回退文字。") from exc
+            if not isinstance(base_profile, dict):
+                raise RuntimeError("RVC 基础朗读配置必须是一个音色对象，已回退文字。")
+        if not base_profile or base_profile.get("voice_provider") == "rvc":
+            raise RuntimeError("RVC 基础朗读音色未配置或循环引用，已回退文字。")
+        language = detect_speech_language(
+            clean, target_language or str(profile.get("target_language") or "zh")
+        )
+        supported_languages = profile_supported_languages(profile)
+        if supported_languages is not None and language not in supported_languages:
+            raise RuntimeError("所选 RVC 角色尚未配置这种语言的基础朗读，已回退文字。")
+        base_settings = settings.model_copy(update={
+            "voice_profiles_json": json.dumps({base_profile_id: base_profile}),
+            "voice_profile_default": base_profile_id,
+        })
+        record = await synthesize_voice(
+            clean, base_settings, base_profile_id, target_language=language, bot_self_id=bot_self_id,
+        )
+        if not record.startswith("base64://"):
+            raise RuntimeError("RVC 基础朗读未返回可转换的音频，已回退文字。")
+        source = base64.b64decode(record.removeprefix("base64://"), validate=True)
+        converted = await convert_rvc_speech(source, model, settings)
+        _reject_near_silent_wav(converted)
+        return "base64://" + base64.b64encode(converted).decode("ascii")
     if provider in {"gpt_sovits", "gpt-sovits"}:
         if not endpoint.endswith("/tts"):
             endpoint += "/tts"
@@ -704,24 +754,28 @@ async def synthesize_voice(
     ) as client:
         if provider in {"gpt_sovits", "gpt-sovits"}:
             # 模型切换和对应合成请求必须作为一个不可拆分的操作。
-            async with _gpt_sovits_lock(endpoint):
-                if selected_gpt:
-                    switch = await client.get(
-                        endpoint.rsplit("/tts", 1)[0] + "/set_gpt_weights",
-                        headers=headers,
-                        params={"weights_path": selected_gpt},
-                    )
-                    switch.raise_for_status()
-                # api_v2 没有稳定的进程 ID 或当前权重查询接口。每次合成都重新写入配置的路由；
-                # 否则 sidecar 重启或外部改权重后，进程内缓存可能失效。
-                if selected_weight:
-                    switch = await client.get(
-                        _gpt_sovits_control_endpoint(endpoint),
-                        headers=headers,
-                        params={"weights_path": selected_weight},
-                    )
-                    switch.raise_for_status()
-                response = await client.post(endpoint, headers=headers, json=payload)
+            reservation = async_gpu_lock(blocking=False) if is_local_gpt_sovits(settings) else nullcontext()
+            try:
+                async with _gpt_sovits_lock(endpoint), reservation:
+                    if selected_gpt:
+                        switch = await client.get(
+                            endpoint.rsplit("/tts", 1)[0] + "/set_gpt_weights",
+                            headers=headers,
+                            params={"weights_path": selected_gpt},
+                        )
+                        switch.raise_for_status()
+                    # The reservation also covers model switches, so a cover
+                    # cannot stop the sidecar while speech is being rendered.
+                    if selected_weight:
+                        switch = await client.get(
+                            _gpt_sovits_control_endpoint(endpoint),
+                            headers=headers,
+                            params={"weights_path": selected_weight},
+                        )
+                        switch.raise_for_status()
+                    response = await client.post(endpoint, headers=headers, json=payload)
+            except GpuBusyError as exc:
+                raise RuntimeError("正在翻唱或训练，暂时使用文字回复；完成后语音会恢复。") from exc
         else:
             response = await client.post(endpoint, headers=headers, json=payload)
         if provider in {"gpt_sovits", "gpt-sovits"}:

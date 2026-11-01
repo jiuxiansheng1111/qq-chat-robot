@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, urlsplit
 from app.services.mahjong.tiles import tile
 
 MAX_BYTES = 2 * 1024 * 1024
-MAX_EVENTS = 1600
+MAX_EVENTS = 8192
 FORMAT = "qq-mahjong-review/v1"
 RULES = "majsoul-standard-4p"
 OFFICIAL_HOSTS = frozenset(
@@ -240,7 +240,7 @@ def _normalized(data: dict, requested_match: str | None) -> Replay:
             raise RecordError("缺少有序摸打事件，不能对截图式手牌声称逐巡复盘")
         total += len(events)
         if total > MAX_EVENTS:
-            raise RecordError("事件超过1600条；请按局拆分本地导出文件")
+            raise RecordError("事件超过8192条，超出完整四麻牌谱的处理上限")
         result = raw.get("result")
         if result is not None:
             if not isinstance(result, dict) or result.get("type") not in {

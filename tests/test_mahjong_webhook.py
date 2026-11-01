@@ -27,12 +27,13 @@ def test_full_webhook_at_followup_attachment_permissions_and_duplicate(tmp_path,
                                 for c in candidates],
                 "preferred": candidates[0]["candidate"], "reason": "兼顾速度与退路",
                 "uncertainty": "对手进度无法确认",
+                "situation": "当前点差仍有变化空间", "plan": "先比较手牌速度，出现威胁时重新评估",
             })
 
         async def aclose(self):
             pass
 
-    monkeypatch.setattr(ai, "ZhipuCoach", lambda _: MockPinnedCoach())
+    monkeypatch.setattr(ai, "LunaCoach", lambda: MockPinnedCoach())
     monkeypatch.setattr(settings, "llm_provider", "zhipu")
     monkeypatch.setattr(settings, "llm_base_url", "https://open.bigmodel.cn/api/paas/v4")
     monkeypatch.setattr(settings, "llm_api_key", "offline-test-key")
@@ -45,6 +46,11 @@ def test_full_webhook_at_followup_attachment_permissions_and_duplicate(tmp_path,
     monkeypatch.setattr(plugin, "_root", lambda _: tmp_path)
     output = AsyncMock()
     monkeypatch.setattr(core, "send_group_message", output)
+    images = AsyncMock()
+    monkeypatch.setattr(core, "send_group_image", images)
+    from app.services.mahjong import cards
+    render = cards.render_cards
+    monkeypatch.setattr(cards, "render_cards", lambda result, job, root: render(result, job, tmp_path))
     inbox = tmp_path / "data/mahjong/inbox"
     inbox.mkdir(parents=True)
     fixture = Path(__file__).parent / "fixtures/mahjong/upstream/rinshan.json"
@@ -87,14 +93,17 @@ def test_full_webhook_at_followup_attachment_permissions_and_duplicate(tmp_path,
             client.post("/onebot/webhook", json=followup, headers=headers).json()["plugin"]
             == "mahjong_review"
         )
-        assert "10决策" in output.call_args.args[1]
+        assert "10决策" in "".join(call.args[1] for call in output.call_args_list)
         store = client.app.state.mahjong_reports
         assert len(store.jobs) == 1
         result = next(iter(store.jobs.values()))[2]
         assert result.coach_prompt_sha256 and result.coach_context
-        assert result.coaching.completed == len(ai_calls) == ai.MAX_NODES
-        assert "智谱AI已生成" in output.call_args.args[1]
-        assert "本地主题教材" in output.call_args.args[1]
+        assert result.coaching.completed == len(ai_calls) == len(ai.select_decisions(result.analysis.decisions))
+        assert "GPT-6 Luna 已生成" in "".join(call.args[1] for call in output.call_args_list)
+        sent_report = "".join(call.args[1] for call in output.call_args_list)
+        assert "复盘图" in sent_report
+        assert images.await_count == len(ai.select_decisions(result.analysis.decisions))
+        assert all(call.args[1].startswith(tmp_path.as_uri()) for call in images.call_args_list)
         assert client.app.state.llm.ask.await_count == 0
         assert activity.await_count == 0
         before = output.await_count
@@ -103,7 +112,7 @@ def test_full_webhook_at_followup_attachment_permissions_and_duplicate(tmp_path,
             == "duplicate_event"
         )
         assert output.await_count == before and len(store.jobs) == 1
-        assert len(ai_calls) == ai.MAX_NODES
+        assert len(ai_calls) == len(ai.select_decisions(result.analysis.decisions))
         client.portal.call(client.app.state.db.set_group_enabled, "disabled", False)
         disabled = event(
             "分析牌谱 座位=北 赛制=半庄 文件=game.json", "mahjong-disabled", group="disabled"
