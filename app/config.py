@@ -171,8 +171,8 @@ class Settings(BaseSettings):
     singing_seed_root: str = "./data/singing/runtime/seed-vc"
     singing_rvc_root: str = ""
     singing_rvc_python: str = ""
-    singing_ffmpeg_path: str = "./data/singing/runtime/bin/ffmpeg.exe"
-    singing_ffprobe_path: str = "./data/singing/runtime/bin/ffprobe.exe"
+    singing_ffmpeg_path: str = ""
+    singing_ffprobe_path: str = ""
     singing_use_trained_tts_reference: bool = True
     singing_prefer_recorded_reference: bool = True
     # 翻唱参考音频与日常 TTS 参考音频分开配置。审核过的翻唱录音可覆盖角色的原说话参考音频。

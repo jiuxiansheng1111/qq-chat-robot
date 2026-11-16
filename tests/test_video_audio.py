@@ -226,7 +226,7 @@ async def test_real_audio_extraction_uses_groq_then_zhipu_fallback(tmp_path, mon
         video, Settings(_env_file=None), trusted_root=tmp_path, allow_paid=True
     )
 
-    assert result.source == "zhipu_asr"
+    assert result.source == "zhipu_asr", result.detail
     assert result.transcript.endswith("备用转写结果")
     assert result.status == "ok"
 

@@ -387,20 +387,8 @@ async def transcribe_video_audio(
     except (OSError, _VideoAudioError):
         return VideoAudioResult(status="invalid", detail="视频不是已核验目录内的有效附件")
     try:
-        bundled_tools = Path(__file__).resolve().parents[2] / "data/singing/runtime/bin"
-        tool_suffix = ".exe" if os.name == "nt" else ""
-        ffmpeg_setting = (
-            settings.singing_ffmpeg_path if settings else bundled_tools / ("ffmpeg" + tool_suffix)
-        )
-        ffprobe_setting = (
-            settings.singing_ffprobe_path if settings else bundled_tools / ("ffprobe" + tool_suffix)
-        )
-        ffmpeg = locate_audio_tool(
-            "ffmpeg", ffmpeg_setting if Path(ffmpeg_setting).is_file() or settings else "", video
-        )
-        ffprobe = locate_audio_tool(
-            "ffprobe", ffprobe_setting if Path(ffprobe_setting).is_file() or settings else "", video
-        )
+        ffmpeg = locate_audio_tool("ffmpeg", settings.singing_ffmpeg_path if settings else "", video)
+        ffprobe = locate_audio_tool("ffprobe", settings.singing_ffprobe_path if settings else "", video)
     except AudioChunkError:
         return VideoAudioResult(detail="本机缺少视频音轨处理工具；没有取得语音或字幕")
     duration = 0.0

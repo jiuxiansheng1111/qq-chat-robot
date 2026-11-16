@@ -202,7 +202,8 @@ def collect_video_sources(event: Any, request: Any) -> list[VideoSource]:
 
 def _binary(settings: Any, name: str) -> str:
     configured = str(getattr(settings, f"singing_{name}_path", "") or "")
-    path = Path(configured) if configured else _ROOT / "data/singing/runtime/bin" / f"{name}.exe"
+    executable = name + (".exe" if os.name == "nt" else "")
+    path = Path(configured) if configured else _ROOT / "data/singing/runtime/bin" / executable
     if not path.is_absolute():
         path = _ROOT / path
     if path.is_file():

@@ -51,6 +51,9 @@ def _tool_path(name: str, explicit: str | Path | None, source: Path) -> str:
             return found
         raise AudioChunkError(f"{name} executable was not found")
 
+    bundled = Path(__file__).resolve().parents[2] / "data/singing/runtime/bin" / executable
+    if bundled.is_file():
+        return str(bundled.resolve())
     found = shutil.which(name)
     if found:
         return found
