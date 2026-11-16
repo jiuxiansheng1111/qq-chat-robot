@@ -13,6 +13,7 @@ from typing import Any
 from app.config import Settings
 from app.services.onebot_routing import (
     current_onebot_self_id,
+    event_action_client,
     register_action_client,
     set_current_onebot_self_id,
     track_replies,
@@ -107,16 +108,19 @@ class ChatRuntime:
     ) -> dict:
         if not self._initialized or self._core is None:
             raise RuntimeError("聊天机器人插件尚未初始化")
-        if raw_event.get("post_type") != "message" or raw_event.get("message_type") != "group":
+        if raw_event.get("post_type") != "message" or raw_event.get("message_type") not in {"group", "private"}:
+            return {"ok": True, "ignored": True, "handled": False}
+        if raw_event.get("message_type") == "private" and not raw_event.get("user_id"):
             return {"ok": True, "ignored": True, "handled": False}
         self_id = str(raw_event.get("self_id") or "").strip()
         if not self_id:
             return {"ok": True, "ignored": True, "handled": False}
-        register_action_client(self_id, action_call)
-        self._registered_ids.add(self_id)
+        if raw_event.get("message_type") == "group":
+            register_action_client(self_id, action_call)
+            self._registered_ids.add(self_id)
         previous_self_id = current_onebot_self_id()
         try:
-            with track_replies() as replies:
+            with event_action_client(self_id, action_call), track_replies() as replies:
                 result = await self._core.dispatch_onebot_event(
                     raw_event, SimpleNamespace(app=self._core.app), allow_chat=self.legacy_chat,
                 )

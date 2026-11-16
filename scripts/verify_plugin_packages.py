@@ -177,9 +177,33 @@ async def verify(directory, temp):
             elif slug == "translation":
                 with patch.object(core.runtime, "handle_event", AsyncMock(return_value={"handled": True})) as dispatch:
                     await core.feature_command(event("/翻译 你好", group=True))
-                    dispatch.assert_awaited_once()
+                    await core.feature_command(event("帮我翻译一下 hello"))
+                    assert [args.args[0]["message_type"] for args in dispatch.await_args_list] == ["group", "private"]
                     await core.feature_command(event("/点歌 测试", group=True))
-                    dispatch.assert_awaited_once()
+                    await core.feature_command(event("点歌 测试"))
+                    assert dispatch.await_count == 2
+            elif slug == "music":
+                ev = event("点歌")
+                ev.bot.api.call_action.return_value = {"message_id": 1}
+                await core.feature_command(ev)
+                action = ev.bot.api.call_action.await_args
+                assert action.args == ("send_private_msg",) and action.kwargs["user_id"] == ev.get_sender_id()
+                assert "歌名" in str(action.kwargs["message"])
+            elif slug in {"meetups", "followups"}:
+                core._get_group_router().config["group_chat_groups"] = ["12345"]
+                text = "周六打雀魂，差一个" if slug == "meetups" else "我明天下午面试"
+                ev = event(text, group=slug == "meetups")
+                ev.plugins_name = [PREFIX + "weather"]
+                await core.on_natural_message(ev)
+                ev.send.assert_not_awaited()
+                ev = event(text, group=slug == "meetups")
+                await core.on_natural_message(ev)
+                assert ev.is_stopped() and ev.send.await_count == 1
+                assert ("还差 1 人" if slug == "meetups" else "要我") in ev.send.await_args.args[0].chain[0].text
+                if slug == "followups":
+                    decline = event("不用了")
+                    await core.on_natural_message(decline)
+                    assert "不再问" in decline.send.await_args.args[0].chain[0].text
             await part.terminate()
             ctx.stars.pop(PREFIX + slug)
             assert set(core._attached_parts) == {"weather"} and part.host() is None, slug

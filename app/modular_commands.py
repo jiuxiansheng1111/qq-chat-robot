@@ -5,6 +5,9 @@ from __future__ import annotations
 def matches(enabled, raw, runtime):
     from app import main as bot
 
+    if raw.get("message_type") == "private":
+        command = bot.private_command(raw, runtime._core.app.state)
+        return command is not None and command[0] in enabled
     text = bot.message_text(raw)
     if not text:
         return False

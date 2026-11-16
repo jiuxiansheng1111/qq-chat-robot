@@ -107,7 +107,7 @@ from app.services.music import (
     NeteaseTrack,
     parse_music_identity,
 )
-from app.services.music_selection import MusicSelectionKey, parse_music_action
+from app.services.music_selection import MusicAction, MusicSelectionKey, parse_music_action
 from app.services.music_workflow import MusicWorkflow
 from app.services.onebot_routing import (
     current_onebot_self_id,
@@ -1237,8 +1237,8 @@ def extract_translation_query(event: dict, text: str) -> str | None:
             return ""
         if text.lower().startswith(prefix.lower()):
             return text[len(prefix) :].strip(" ：:")[:500]
-    if bot_mentioned(event):
-        for prefix in ("翻译一下", "帮我翻译", "翻译"):
+    if event.get("message_type") == "private" or bot_mentioned(event):
+        for prefix in ("帮我翻译一下", "帮我翻译", "翻译一下", "翻译"):
             if text == prefix:
                 return ""
             if text.startswith(prefix):
@@ -3235,14 +3235,118 @@ async def onebot_webhook(
     return await dispatch_onebot_event(event, request)
 
 
+def private_command(event: dict, state=None):
+    """Only opt in to explicit private tools. Ordinary private messages belong to AstrBot."""
+    if (event.get("message_type") != "private" or not event.get("self_id") or not event.get("user_id")
+            or str(event["user_id"]) == str(event["self_id"]) or (event.get("sender") or {}).get("is_bot")):
+        return None
+    text = message_text(event)
+    from app.astrbot_group_chat import _strip_name
+    from app.astrbot_listening import ALIASES
+
+    if text.startswith(ALIASES):
+        text, _ = _strip_name(text, ALIASES)
+    translation = extract_translation_query(event, text)
+    if translation is not None:
+        return "translation", translation
+    music = parse_music_action(text)
+    if music is None and state is not None and (choice := re.fullmatch(r"(选|选第|歌词)\s*([1-9]\d?)首?|取消", text)):
+        bot, user = str(event["self_id"]), str(event["user_id"])
+        workflow = getattr(state, "music_workflow", None)
+        key = MusicSelectionKey(bot, f"qq:private:{bot}:{user}", user)
+        if workflow and (workflow.selection.get(key) or key in workflow.active_tasks):
+            if text == "取消":
+                music = MusicAction("cancel")
+            else:
+                music = MusicAction("lyrics_candidate" if choice[1] == "歌词" else "select", index=int(choice[2]))
+    return ("music", music) if music is not None else None
+
+
+async def _send_private_content(user_id: str, content) -> None:
+    if isinstance(content, str):
+        content = [{"type": "text", "data": {"text": content}}]
+    route = onebot_route(settings)
+    headers = {"Authorization": f"Bearer {route.access_token}"} if route.access_token else {}
+    async with onebot_client(settings, timeout=15, trust_env=False) as client:
+        response = await client.post(f"{route.api_base.rstrip('/')}/send_private_msg", headers=headers,
+                                     json={"user_id": user_id, "message": content})
+        response.raise_for_status()
+        payload = response.json()
+    if payload.get("status") != "ok":
+        raise RuntimeError("QQ 私聊消息发送失败")
+
+
+async def _translation_reply(request, query: str) -> str:
+    if not query:
+        return "想翻译什么？把原文发给我吧，例如「翻译 星街すいせい」。"
+    try:
+        result = await cached_translation(request, query, purpose="general")
+        return format_translation_reply(query, result)[:2000]
+    except (LLMError, httpx.HTTPError) as exc:
+        logger.warning("translation failed: %s", type(exc).__name__)
+        return "翻译服务暂时不可用，稍后再试一下吧。"
+
+
+async def _run_music(request, action, key, *, send_text, send_image, send_card, link_only=False):
+    limit_key = json.dumps([key.self_id, key.conversation_id, key.user_id])
+    if action.action != "cancel" and not await request.app.state.music_action_limiter.allow(limit_key):
+        warning = "点歌请求有点多，等一会儿再试。"
+        if key.conversation_id.startswith("qq:private:"):
+            await send_text(warning)
+        else:
+            await notify_rate_limited(request, key.conversation_id, key.user_id, scope="music", message=warning)
+        return {"ok": True, "ignored": True, "reason": "music_rate_limited"}
+    await request.app.state.music_workflow.handle(
+        action, key, send_text=send_text, send_image=send_image, send_card=send_card, link_only=link_only,
+    )
+    return {"ok": True, "source": "music", "handled": True}
+
+
+async def _dispatch_private_command(event, request, command):
+    family, value = command
+    user, bot = str(event["user_id"]), str(event["self_id"])
+    scope = f"qq:private:{bot}:{user}"
+    state = request.app.state
+    if await state.db.is_blocked(scope, user):
+        return {"ok": True, "ignored": True, "reason": "user_blocked"}
+    if not await state.ingress_limiter.allow(f"user:{user}"):
+        await _send_private_content(user, "消息太快啦，先等几秒再发吧～")
+        return {"ok": True, "ignored": True, "reason": "user_ingress_rate_limited"}
+    if family == "translation":
+        await _send_private_content(user, await _translation_reply(request, value))
+        return {"ok": True, "source": family, "handled": True}
+
+    async def text_reply(text):
+        for chunk in split_qq_text(text):
+            await _send_private_content(user, sanitize_qq_source_links(chunk))
+
+    async def image_reply(image):
+        await _send_private_content(user, [{"type": "image", "data": {"file": image}}])
+
+    async def card_reply(track):
+        await _send_private_content(user, [{"type": "music", "data": {"type": "163", "id": track.song_id}}])
+
+    return await _run_music(request, value, MusicSelectionKey(bot, scope, user),
+                            send_text=text_reply, send_image=image_reply, send_card=card_reply)
+
+
 async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True):
-    """已验证来源的群消息，HTTP 和 AstrBot 都走这里。"""
+    """分发已验证来源的群消息和 QQ 私聊工具请求。"""
     incoming_self_id = str(event.get("self_id") or "").strip()
     set_current_onebot_self_id(incoming_self_id)
     raw_event_id = str(event.get("message_id") or event.get("event_id") or "")
     event_id = f"{incoming_self_id}:{raw_event_id}" if raw_event_id else ""
+    private = event.get("post_type") == "message" and event.get("message_type") == "private"
+    if private:
+        command = private_command(event, request.app.state)
+        if command is None:
+            return {"ok": True, "ignored": True}
+        if raw_event_id:
+            event_id = f"private:{incoming_self_id}:{event['user_id']}:{raw_event_id}"
     if event_id and not await request.app.state.deduplicator.first_seen(event_id):
         return {"ok": True, "ignored": True, "reason": "duplicate_event"}
+    if private:
+        return await _dispatch_private_command(event, request, command)
     if event.get("post_type") != "message" or event.get("message_type") != "group":
         return {"ok": True, "ignored": True}
 
@@ -3376,14 +3480,6 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
         if not incoming_self_id or not user_id:
             return {"ok": True, "ignored": True, "reason": "missing_music_identity"}
         music_key = MusicSelectionKey(incoming_self_id, group_id, user_id)
-        limit_key = json.dumps([incoming_self_id, group_id, user_id])
-        if music_action.action != "cancel" and not await request.app.state.music_action_limiter.allow(limit_key):
-            await notify_rate_limited(
-                request, group_id, user_id, scope="music",
-                message="点歌请求有点多，等一会儿再试。",
-            )
-            return {"ok": True, "ignored": True, "reason": "music_rate_limited"}
-
         async def music_text(value: str) -> None:
             await send_group_long_message(group_id, value)
 
@@ -3393,12 +3489,8 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
         async def music_card(track: NeteaseTrack) -> None:
             await send_group_netease_card(group_id, track)
 
-        await request.app.state.music_workflow.handle(
-            music_action, music_key,
-            send_text=music_text, send_image=music_image, send_card=music_card,
-            link_only=group_id.startswith("wechat:"),
-        )
-        return {"ok": True, "source": "music", "handled": True}
+        return await _run_music(request, music_action, music_key, send_text=music_text, send_image=music_image,
+                                send_card=music_card, link_only=group_id.startswith("wechat:"))
 
     romance_mode = await request.app.state.db.romance_mode(group_id, user_id)
     # 迁移或管理员查看时仍可读取旧值，但日常聊天不要修改；
@@ -4782,21 +4874,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
                     fallback or "B站接口和联网搜索这会儿都没有拿到可靠结果。",
                 )
     elif translation_query is not None:
-        if not translation_query:
-            await send_group_message(
-                group_id, "想翻译什么？例如：@我 翻译 星街すいせい"
-            )
-        else:
-            try:
-                result = await cached_translation(
-                    request, translation_query, purpose="general"
-                )
-                await send_group_message(
-                    group_id, format_translation_reply(translation_query, result)[:2000]
-                )
-            except (LLMError, httpx.HTTPError) as exc:
-                logger.warning("translation failed: %s", exc)
-                await send_group_message(group_id, "翻译服务暂时不可用，稍后再试一下吧。")
+        await send_group_message(group_id, await _translation_reply(request, translation_query))
     elif (search_query := extract_search_query(event, text)) is not None:
         if not search_query:
             await send_group_message(group_id, "想搜什么？例如：@我 搜索 Python 3.13 新特性")

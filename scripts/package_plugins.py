@@ -23,6 +23,8 @@ LOGIC = {"weather": "app/astrbot_weather.py", "cards": "app/astrbot_card_lookup.
 # Files imported on demand belong in the feature ZIP. Eager imports shared by
 # several capabilities (including the webhook API) belong to the runtime library.
 OWNED = {
+    "meetups": ("app/astrbot_meetups.py",),
+    "followups": ("app/astrbot_followups.py",),
     "accounts": ("app/services/account_hub.py", "app/services/local_listener.py", "app/services/mahjong/account_panel.py",
                  "integrations/accounts.html", "integrations/majsoul/account.html", "scripts/connect_chatgpt.py"),
     "group_reports": ("app/astrbot_group_reports.py", "integrations/group-daily-analysis/*"),

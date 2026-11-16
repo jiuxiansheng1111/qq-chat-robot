@@ -107,6 +107,17 @@ def say(chain):
     return "\n".join(c.text for c in chain if isinstance(c, Plain))
 
 
+async def test_bundled_natural_meetup_and_followup_routing(room, tmp_path):
+    room.plugin.runtime.project_root = tmp_path
+    assert not await room.post("周六打雀魂，差一个", at="someone-else")
+    assert not await room.post("周六打雀魂，差一个", group="777")
+    assert "还差 1 人" in say(await room.post("周六打雀魂，差一个"))
+    assert "20:00" in say(await room.post("我八点到", user="12"))
+    assert "要我" in say(await room.post("我明天下午面试", group=None))
+    assert "不再问" in say(await room.post("不用了", group=None))
+    await room.plugin._get_companion_turns().stop_followups()
+
+
 @pytest.mark.asyncio
 async def test_images_across_messages_keep_sender_scope_and_selected_order(room, monkeypatch):
     pair = AsyncMock(return_value=[Plain("两张看过了")])

@@ -31,6 +31,17 @@ class ReplyCounter:
 _current_self_id: ContextVar[str] = ContextVar("onebot_self_id", default="")
 _reply_counter: ContextVar[ReplyCounter | None] = ContextVar("onebot_reply_counter", default=None)
 _action_clients: dict[str, ActionCall] = {}
+_event_client: ContextVar[tuple[str, ActionCall] | None] = ContextVar("onebot_event_client", default=None)
+
+
+@contextmanager
+def event_action_client(self_id: str, action_call: ActionCall):
+    """Keep concurrent commands on their originating event's send and archive callbacks."""
+    token = _event_client.set((self_id, action_call))
+    try:
+        yield
+    finally:
+        _event_client.reset(token)
 
 
 def set_current_onebot_self_id(self_id: str) -> None:
@@ -89,7 +100,8 @@ def _registered_route(settings: Any, self_id: str) -> OneBotRoute:
 def onebot_route(settings, self_id: str | None = None) -> OneBotRoute:
     primary_id = str(getattr(settings, "onebot_self_id", "") or "").strip()
     selected = str(self_id or current_onebot_self_id() or primary_id or "").strip()
-    if selected and selected in _action_clients:
+    bound = _event_client.get()
+    if selected and (selected in _action_clients or bound and selected == bound[0]):
         return _registered_route(settings, selected)
 
     secondary_id = str(getattr(settings, "onebot_self_id_2", "") or "").strip()
@@ -156,7 +168,8 @@ def _action_from_request(request: httpx.Request) -> str:
 def onebot_client(settings, *, self_id: str | None = None, **httpx_client_kwargs) -> httpx.AsyncClient:
     """已绑定的账号走 AstrBot，其余账号沿用 HTTP 接口。"""
     route = onebot_route(settings, self_id)
-    action_call = _action_clients.get(route.self_id)
+    bound = _event_client.get()
+    action_call = bound[1] if bound and bound[0] == route.self_id else _action_clients.get(route.self_id)
     if route.api_base != ASTRBOT_API_BASE or action_call is None:
         return httpx.AsyncClient(**httpx_client_kwargs)
 

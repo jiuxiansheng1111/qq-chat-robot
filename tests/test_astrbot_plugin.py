@@ -491,7 +491,7 @@ def test_message_handler_uses_onebot_filter_and_late_priority(monkeypatch):
     plugin_module = _load_plugin(monkeypatch)
     filter_calls = plugin_module.QQChatPlugin.on_onebot_message._test_filter_calls
 
-    assert (("group",), {"priority": -100}) in filter_calls
+    assert (("all",), {"priority": -100}) in filter_calls
     assert (("aiocqhttp",), {}) in filter_calls
     assert (("all",), {"priority": -100}) in (
         plugin_module.QQChatPlugin.on_wechat_message._test_filter_calls

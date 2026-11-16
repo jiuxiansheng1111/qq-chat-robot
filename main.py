@@ -318,6 +318,7 @@ class QQChatPlugin(Star):
                 await runtime.close()
             raise
         self.runtime = runtime
+        self._get_companion_turns().start_followups(self)
         from app.services.mahjong.account_panel import AccountPanel
 
         self._mahjong_panel = AccountPanel(project_root, self._get_companion_turns().games.mc)
@@ -401,6 +402,8 @@ class QQChatPlugin(Star):
     async def terminate(self) -> None:
         """卸载插件时释放队列和后台任务。"""
         self._menu_ready = False
+        if self._companion_turns is not None:
+            await self._companion_turns.stop_followups()
         runtime, self.runtime = self.runtime, None
         try:
             restore_task=getattr(self,"_music_restore_task",None)
@@ -1231,7 +1234,7 @@ class QQChatPlugin(Star):
             event.is_at_or_wake_command = True
 
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
-    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=-100)
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=-100)
     async def on_onebot_message(self, event: AstrMessageEvent) -> None:
         """把原始 OneBot 消息交给现有分发器。
 
@@ -1243,8 +1246,20 @@ class QQChatPlugin(Star):
                 event.should_call_llm(False)
             return
         raw_event = dict(raw_message)
-        if raw_event.get("post_type") != "message" or raw_event.get("message_type") != "group":
+        if raw_event.get("post_type") != "message" or raw_event.get("message_type") not in {"group", "private"}:
             return
+        if (self.legacy_chat and getattr(self.runtime, "project_root", None) and not _is_stopped(event)
+                and not _result_has_reply(_get_result_or_none(event)) and not getattr(event, "_has_send_oper", False)
+                and not self._get_group_router().ignored_sender(event) and await self._legacy_event_allowed(raw_event)):
+            if await self._get_companion_turns().handle(self, event, features={"meetups", "followups"}):
+                return
+        if raw_event["message_type"] == "private":
+            from app.astrbot_group_chat import normalized_runtime_event
+            from app.main import private_command
+
+            core = getattr(self.runtime, "_core", None)
+            if private_command(normalized_runtime_event(event, raw_event), getattr(getattr(core, "app", None), "state", None)) is None:
+                return
 
         stopped = _is_stopped(event)
         prior_result = _get_result_or_none(event)

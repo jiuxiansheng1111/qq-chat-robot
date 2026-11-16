@@ -1,4 +1,4 @@
-version = "0.3.0"
+version = "0.4.0"
 
 # Each row produces one AstrBot ZIP. Native methods are copied from the same source
 # as the bundled edition, including their signatures, decorators and tool descriptions.
@@ -73,6 +73,12 @@ title = "翻译"
 description = "翻译指定文本并提供转写或检索别名。"
 batch = 2
 legacy = ["translation"]
+
+[followups]
+title = "约定回访"
+description = "聊到自己的面试、考试等安排时可约定回访，确认后按北京时间回到原群或私聊问候。"
+batch = 2
+turns = ["followups"]
 
 [stories]
 title = "故事创作"
@@ -228,3 +234,9 @@ title = "Steam 大厅"
 description = "绑定专用 SteamID，核对本机账号并接收大厅邀请。"
 batch = 4
 turns = ["steam"]
+
+[meetups]
+title = "群聊约局"
+description = "在群里报开黑时间、报名或候补，汇总缺几人和最早开局时间，支持改期和退出。"
+batch = 4
+turns = ["meetups"]

@@ -104,6 +104,40 @@ class CompanionTurns:
         self.clock = clock
         self.sessions = OrderedDict()
         self.games = games.GameCompanion()
+        self.meetups = None
+        self.followups = None
+
+    def start_followups(self, plugin):
+        root = getattr(getattr(plugin, "runtime", None), "project_root", None)
+        if root is not None:
+            from app.astrbot_followups import Followups
+
+            if self.followups is None:
+                self.followups = Followups(root)
+            self.followups.start(plugin)
+
+    async def stop_followups(self):
+        if self.followups is not None:
+            await self.followups.close()
+            self.followups = None
+
+    async def _social_reply(self, plugin, event, text, features, addressed, group):
+        root = getattr(getattr(plugin, "runtime", None), "project_root", None)
+        if root is None:
+            return None
+        if features is None or "followups" in features:
+            if self.followups is None:
+                self.start_followups(plugin)
+            reply = await self.followups.handle(plugin, event, text, addressed=addressed)
+            if reply is not None:
+                return reply
+        if group and (features is None or "meetups" in features):
+            if self.meetups is None:
+                from app.astrbot_meetups import Meetups
+
+                self.meetups = Meetups(root)
+            return await self.meetups.handle(event, text)
+        return None
 
     def _state(self, key, now):
         for k, state in list(self.sessions.items()):
@@ -164,6 +198,20 @@ class CompanionTurns:
             pending = state.pending
             if pending and now >= pending.expires:
                 state.pending = pending = None
+            if not (pending or state.dialog and state.dialog.expires > now or state.practice):
+                answer = await self._social_reply(plugin, event, text, features, addressed, group)
+                if answer is not None:
+                    if mid:
+                        state.seen.append((mid, True))
+                    event.should_call_llm(False)
+                    event.stop_event()
+                    if answer:
+                        from astrbot.api.message_components import Plain
+
+                        await event.send(event.chain_result([Plain(answer)]))
+                    return True
+            if features is not None and features <= {"meetups", "followups"}:
+                return False
             if pending and pending.refs:
                 refs = [*pending.refs, *current] if not quoted else [*quoted, *current]
             record = next((p for p in getattr(event.message_obj, "message", ()) or ()
