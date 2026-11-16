@@ -334,6 +334,9 @@ class QQChatPlugin(Star):
             raise
         self.runtime = runtime
         self._get_companion_turns().start_followups(self)
+        from app.astrbot_weather_alerts import service_for
+        if alerts := service_for(self):
+            alerts.start(self)
         from app.services.mahjong.account_panel import AccountPanel
 
         self._mahjong_panel = AccountPanel(project_root, self._get_companion_turns().games.mc)
@@ -417,6 +420,9 @@ class QQChatPlugin(Star):
     async def terminate(self) -> None:
         """卸载插件时释放队列和后台任务。"""
         self._menu_ready = False
+        if alerts := getattr(self, "_weather_alerts", None):
+            await alerts.close()
+            self._weather_alerts = None
         if self._companion_turns is not None:
             await self._companion_turns.stop_followups()
         from app.astrbot_turn_features import release
@@ -622,11 +628,11 @@ class QQChatPlugin(Star):
         return json.dumps(result, ensure_ascii=False)
 
     @filter.llm_tool(name="qqchat_weather")
-    async def qqchat_weather(self, event: AstrMessageEvent, location: str) -> str:
-        """查询城市当前天气和未来三天预报，返回真实天气数据。天气问题优先用此工具，缺城市时先询问。
+    async def qqchat_weather(self, event: AstrMessageEvent, location: str = "") -> str:
+        """查询当前天气、体感与三天预报。省略城市优先用本人设置，其次用标明来源的机器人网络估算。
 
         Args:
-            location(string): 城市或地区名称，例如深圳；只传地点，不传聊天记录。
+            location(string): 城市名、我这里或本机。用户明确问自己所在地时传我这里。
         """
         from app.astrbot_weather import query
         return json.dumps(await query(self, event, location), ensure_ascii=False)
@@ -1272,6 +1278,9 @@ class QQChatPlugin(Star):
         if (self.legacy_chat and getattr(self.runtime, "project_root", None) and not _is_stopped(event)
                 and not _result_has_reply(_get_result_or_none(event)) and not getattr(event, "_has_send_oper", False)
                 and not self._get_group_router().ignored_sender(event) and await self._legacy_event_allowed(raw_event)):
+            from app.astrbot_weather import handle_command as handle_weather
+            if await handle_weather(self, event):
+                return
             if await self._get_companion_turns().handle(self, event, features={"meetups", "followups"}):
                 return
         if raw_event["message_type"] == "private":

@@ -1,11 +1,13 @@
 """Shared civil-time parsing and transactional storage for QQ social plans."""
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import sqlite3
 from contextlib import closing
 from datetime import datetime, time, timedelta, timezone
+from types import SimpleNamespace
 
 CHINA = timezone(timedelta(hours=8))
 NUMBER = r"(?:\d{1,2}|[零〇一二两三四五六七八九十]{1,3})"
@@ -74,6 +76,43 @@ def scope(event):
     raw = event.message_obj.raw_message
     group = str(raw.get("group_id") or "") if raw.get("message_type") == "group" else ""
     return (str(event.get_platform_id()), str(raw["self_id"]), group, str(raw["user_id"]))
+
+
+async def scheduled_allowed(host, key, origin, feature):
+    _, bot, group, user = key
+    raw = {"self_id": bot, "user_id": user, "group_id": group, "post_type": "message",
+           "message_type": "group" if group else "private"}
+    event = SimpleNamespace(message_obj=SimpleNamespace(raw_message=raw), get_platform_name=lambda: "aiocqhttp")
+    router = host._get_group_router()
+    if router.ignored_sender(event) or not await host._legacy_event_allowed(raw):
+        return False
+    if group and not (router.in_scope(event) and router.config.get("natural_commands_enabled", True)):
+        return False
+    required = {"astrbot_plugin_qqchat_core", "astrbot_plugin_qqchat_" + feature} if hasattr(host, "parts") else {"astrbot_plugin_qqchat"}
+    enabled = host.context.get_config(origin).get("plugin_set", ["*"])
+    return "*" in enabled or required.issubset(enabled)
+
+
+async def original_qq_client(context, key):
+    platform_id, bot, _, _ = key
+    platform = context.get_platform_inst(platform_id)
+    if platform is None or platform.meta().name not in {"aiocqhttp", "onebot", "onebot_v11"}:
+        return None
+    api = platform.get_client().api
+    try:
+        info = await asyncio.wait_for(api.call_action("get_login_info", self_id=bot), 5)
+        return api if str(info.get("user_id", "")) == bot else None
+    except Exception:  # noqa: BLE001 -- adapters report disconnection through different exceptions
+        return None
+
+
+async def send_personal_notice(api, key, text):
+    _, bot, group, user = key
+    content = [{"type": "text", "data": {"text": text}}]
+    if group:
+        content.insert(0, {"type": "at", "data": {"qq": user}})
+        return await asyncio.wait_for(api.call_action("send_group_msg", self_id=bot, group_id=group, message=content), 12)
+    return await asyncio.wait_for(api.call_action("send_private_msg", self_id=bot, user_id=user, message=content), 12)
 
 
 class PlanStore:

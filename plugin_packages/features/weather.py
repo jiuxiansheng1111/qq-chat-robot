@@ -1,4 +1,12 @@
 class Hooks:
+    async def start_part(self, host):
+        from app.astrbot_weather_alerts import service_for
+        service_for(host).start(host)
+
+    async def stop_part(self, host):
+        await host._weather_alerts.close()
+        host._weather_alerts = None
+
     async def message(self, host, event):
         from .logic import handle_command
         return await handle_command(host, event)
@@ -13,11 +21,5 @@ class Hooks:
         host = self.host()
         if host is None:
             return
-        from .logic import query
-        result = await query(host, event, city)
-        if result["status"] == "denied":
-            return
-        text = result.get("report") or ("想查哪个城市的天气？" if not city else "暂时没有查到这座城市的天气。")
-        await event.send(event.plain_result(text))
-        event.should_call_llm(False)
-        event.stop_event()
+        from .logic import deliver
+        await deliver(host, event, city)

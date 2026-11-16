@@ -50,7 +50,7 @@ batch = 1
 
 [weather]
 title = "实时天气"
-description = "识别自然语言城市名，查询实时天气和预报。"
+description = "查城市天气、体感与穿衣建议，也可按机器人网络定位。说「深圳下雨或变天时提醒我」可在傍晚收到次日提醒，「取消天气提醒」可关闭。"
 batch = 2
 legacy = ["weather"]
 methods = ["qqchat_weather"]

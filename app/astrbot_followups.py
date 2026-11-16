@@ -7,7 +7,6 @@ import logging
 import re
 from collections import OrderedDict
 from datetime import datetime, time, timedelta
-from types import SimpleNamespace
 
 from app.services.social_plans import (
     CHINA,
@@ -18,7 +17,10 @@ from app.services.social_plans import (
     clock_for,
     day_for,
     label,
+    original_qq_client,
+    scheduled_allowed,
     scope,
+    send_personal_notice,
 )
 
 _LOG = logging.getLogger(__name__)
@@ -198,33 +200,13 @@ class Followups:
         for row in rows:
             if self.stopping:
                 break
-            platform_id, bot, group, user = json.loads(row["owner"])
-            raw = {"self_id": bot, "user_id": user, "group_id": group, "post_type": "message",
-                   "message_type": "group" if group else "private"}
-            event = SimpleNamespace(message_obj=SimpleNamespace(raw_message=raw), get_platform_name=lambda: "aiocqhttp")
-            router = host._get_group_router()
-            allowed = not router.ignored_sender(event) and await host._legacy_event_allowed(raw)
-            if group:
-                allowed = allowed and router.in_scope(event) and router.config.get("natural_commands_enabled", True)
-            modular = hasattr(host, "parts")
-            required = {"astrbot_plugin_qqchat_core", "astrbot_plugin_qqchat_followups"} if modular else {"astrbot_plugin_qqchat"}
-            enabled = host.context.get_config(row["origin"]).get("plugin_set", ["*"])
-            allowed = allowed and ("*" in enabled or required.issubset(enabled))
-            if modular and not any(part.slug == "followups" for part in host.parts()):
+            key = json.loads(row["owner"])
+            allowed = await scheduled_allowed(host, key, row["origin"], "followups")
+            if hasattr(host, "parts") and not any(part.slug == "followups" for part in host.parts()):
                 return
-            api = None
-            if allowed:
-                platform = host.context.get_platform_inst(platform_id)
-                if platform is None or platform.meta().name not in {"aiocqhttp", "onebot", "onebot_v11"}:
-                    continue
-                api = platform.get_client().api
-                try:
-                    info = await asyncio.wait_for(api.call_action("get_login_info", self_id=bot), 5)
-                    if str(info.get("user_id", "")) != bot:
-                        continue
-                except Exception as exc:  # noqa: BLE001 -- adapters use different offline exceptions.
-                    _LOG.debug("原 QQ 账号暂不可用（%s）", type(exc).__name__)
-                    continue  # The original account is offline. Keep the confirmed appointment.
+            api = await original_qq_client(host.context, key) if allowed else None
+            if allowed and api is None:
+                continue
 
             def claim(db, job=row):
                 return db.execute("DELETE FROM followups WHERE id=? AND owner=? AND state='confirmed' AND due=?",
@@ -232,14 +214,8 @@ class Followups:
 
             if self.stopping or not await asyncio.to_thread(self.store.transaction, claim) or not allowed:
                 continue
-            content = [{"type": "text", "data": {"text": f"上次你说的{row['topic']}，后来怎么样了？"}}]
-            params = {"user_id": user}
-            if group:
-                content.insert(0, {"type": "at", "data": {"qq": user}})
-                params = {"group_id": group}
             try:
-                await asyncio.wait_for(api.call_action("send_group_msg" if group else "send_private_msg",
-                                                       self_id=bot, message=content, **params), 12)
+                await send_personal_notice(api, key, f"上次你说的{row['topic']}，后来怎么样了？")
             except Exception as exc:  # noqa: BLE001 -- a transport error can follow delivery.
                 # NapCat can accept a send before losing its acknowledgement. Never repeat an uncertain send.
                 _LOG.warning("约定回访未获发送确认（%s）", type(exc).__name__)

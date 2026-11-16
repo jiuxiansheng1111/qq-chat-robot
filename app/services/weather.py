@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import re
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, replace
 
 import httpx
 
@@ -31,6 +33,13 @@ def parse_weather_location(text: str) -> str | None:
         value,
     )
     value = value.rstrip(" ？?！!。吧呀呢")
+    if re.fullmatch(r"(?:你那(?:里|边|儿)|机器人(?:所在(?:地|城市)|本机)|本机|按(?:机器人|本机)(?:的)?IP)(?:的)?天气(?:怎么样|如何)?", value, re.IGNORECASE):
+        return "本机"
+    if (re.fullmatch(r"(?:我这(?:里|边|儿)|我(?:的)?所在地|我当地|我的城市)(?:的)?天气(?:怎么样|如何)?", value)
+            or re.fullmatch(r"(?:按|根据)(?:我(?:的)?|我的公网)IP(?:定位)?(?:查|看)?(?:一下)?(?:当地|本地)?(?:的)?天气", value, re.IGNORECASE)):
+        return "我这里"
+    if value in {"本地天气", "当地天气", "这边天气", "今天冷不冷", "今天热不热"}:
+        return ""
     if value in {
         "天气",
         "天气预报",
@@ -150,7 +159,7 @@ class WeatherReport:
 def _number(value) -> float | None:
     if isinstance(value, bool):
         return None
-    if isinstance(value, (int, float)):
+    if isinstance(value, (int, float)) and math.isfinite(value):
         return float(value)
     return None
 
@@ -211,6 +220,54 @@ async def _fetch_open_meteo(location: str, settings: Settings) -> WeatherReport:
     if not place:
         raise WeatherServiceError(f"没有找到地点：{location}")
 
+    return await _forecast_for_place(place, settings)
+
+
+_network_place = None
+
+
+async def fetch_network_weather(settings: Settings) -> WeatherReport:
+    """Use the bot's own direct network and city coordinates, never a QQ sender or relay address."""
+    global _network_place
+    if _network_place is None or _network_place[0] <= time.monotonic():
+        try:
+            async with httpx.AsyncClient(trust_env=False, timeout=5) as client:
+                response = await client.get(
+                    "https://ipwho.is/",
+                    params={"fields": "success,city,region,country,latitude,longitude", "lang": "zh-CN"},
+                )
+                response.raise_for_status()
+                data = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise WeatherServiceError("未能估算机器人网络所在城市") from exc
+        if not isinstance(data, dict) or data.get("success") is not True or not data.get("city"):
+            raise WeatherServiceError("网络定位没有返回城市")
+        lat, lon = _number(data.get("latitude")), _number(data.get("longitude"))
+        if lat is None or lon is None or abs(lat) > 90 or abs(lon) > 180:
+            raise WeatherServiceError("网络定位没有返回有效城市坐标")
+        place = {"name": data["city"], "admin1": data.get("region"), "country": data.get("country"),
+                 "latitude": round(lat, 2), "longitude": round(lon, 2)}
+        _network_place = (time.monotonic() + 1800, place)
+    place = _network_place[1]
+    try:
+        async with asyncio.timeout(12):
+            return await _forecast_for_place(place, settings)
+    except WeatherServiceError as exc:
+        if not isinstance(exc.__cause__, httpx.RequestError):
+            raise
+    except TimeoutError:
+        pass
+    from app.services.weather_fallback import fetch_wttr_weather
+    try:
+        async with asyncio.timeout(15):
+            # The coordinate pair keeps cities with the same name distinct.
+            report = await fetch_wttr_weather(f"{place['latitude']},{place['longitude']}", settings)
+            return replace(report, location=_display_location(place))
+    except (ValueError, httpx.HTTPError, TimeoutError) as exc:
+        raise WeatherServiceError("实时天气来源暂时无法访问") from exc
+
+
+async def _forecast_for_place(place: dict, settings: Settings) -> WeatherReport:
     latitude = _number(place.get("latitude"))
     longitude = _number(place.get("longitude"))
     if latitude is None or longitude is None:
@@ -272,7 +329,7 @@ async def _fetch_open_meteo(location: str, settings: Settings) -> WeatherReport:
         )
 
     return WeatherReport(
-        location=_display_location(place) or location,
+        location=_display_location(place),
         timezone=str(payload.get("timezone") or place.get("timezone") or ""),
         temperature_c=_number(current.get("temperature_2m")),
         apparent_temperature_c=_number(current.get("apparent_temperature")),
@@ -306,6 +363,9 @@ def format_weather_report(report: WeatherReport) -> str:
             f"当前降水：{_fmt(report.precipitation_mm, ' mm')}"
         ),
     ]
+    advice = thermal_advice(report)
+    if advice:
+        lines.insert(2, advice)
     if report.days:
         lines.append("")
         names = ("今天", "明天", "后天")
@@ -319,3 +379,20 @@ def format_weather_report(report: WeatherReport) -> str:
         lines.append(f"数据时区：{report.timezone}")
     lines.append(f"数据源：{report.source}")
     return "\n".join(lines)
+
+
+def thermal_advice(report: WeatherReport) -> str:
+    temperature = report.apparent_temperature_c
+    if temperature is None:
+        temperature = report.temperature_c
+    if temperature is None:
+        return ""
+    if temperature <= 5:
+        return "外面挺冷，出门穿厚一点，风大的地方记得把外套扣好"
+    if temperature <= 15:
+        return "今天有点凉，出门带件外套吧"
+    if temperature >= 35:
+        return "外面很热，出门带上水，能走阴凉处就走阴凉处"
+    if temperature >= 28:
+        return "今天有点热，出门穿透气些，记得喝水"
+    return ""

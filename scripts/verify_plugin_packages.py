@@ -149,8 +149,13 @@ async def verify(directory, temp):
         await core.on_natural_message(ev)
         ev.send.assert_not_awaited()
         ev = event("天气")
-        await weather.weather_command(ev)
-        assert "城市" in ev.send.await_args.args[0].chain[0].text
+        with patch(PREFIX + "weather.logic.fetch_network_weather", AsyncMock(return_value=report)):
+            await weather.weather_command(ev)
+        assert "机器人网络" in ev.send.await_args.args[0].chain[0].text
+        ev = event("大肥鱼，深圳下雨或变天时提醒我")
+        with patch("app.astrbot_weather_alerts.fetch_weather", AsyncMock(return_value=report)):
+            await core.on_natural_message(ev)
+        assert "深圳" in ev.send.await_args.args[0].chain[0].text and ev.is_stopped()
         for slug in slugs:
             if slug in {"core", "weather"}:
                 continue

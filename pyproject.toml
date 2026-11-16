@@ -9,6 +9,7 @@ dependencies = [
   "httpx>=0.28,<1.0",
   "protobuf>=6.31,<8",
   "websockets>=14,<17",
+  "tzdata>=2024.1; sys_platform == 'win32'",
   "certifi>=2026.10.19",
   "aiosqlite>=0.20,<1.0",
   "PyJWT[crypto]>=2.10,<3.0",
