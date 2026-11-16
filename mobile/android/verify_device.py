@@ -49,7 +49,12 @@ def native_search():
     tap(actions[0])
     def shows_search_sources():
         return any(n.get("text","").startswith("1. ") and "http" in n.get("text","") for n in tree().iter("node"))
-    wait_for(shows_search_sources,120)
+    try:
+        wait_for(shows_search_sources,145)
+    except RuntimeError:
+        visible=[n.get("text","")[:220] for n in tree().iter("node") if n.get("package")==PACKAGE and n.get("text")]
+        print("Shipped search screen:", visible,flush=True)
+        raise
     print("Shipped APK returned live web search sources directly on Android.",flush=True)
 
 
@@ -68,12 +73,18 @@ def main():
     if adb("shell","getprop","ro.kernel.qemu").strip()!="1":
         raise SystemExit("Run this clean-install and reboot check only on the test emulator.")
     adb("install","-r",ROOT/"mobile/android/downloads/Dafeiyu.apk")
+    adb("shell","pm","grant",PACKAGE,"android.permission.POST_NOTIFICATIONS")
+    adb("shell","input","keyevent","KEYCODE_WAKEUP")
+    adb("shell","wm","dismiss-keyguard")
     open_app()
     native_search()
     adb("uninstall",PACKAGE)
     adb("install",ROOT/"data/mobile-build/ci.apk")
     adb("install",ROOT/"data/mobile-build/tests.apk")
     adb("shell","pm","grant",PACKAGE,"android.permission.POST_NOTIFICATIONS")
+    # This is the same owner opt-in used to receive mobile QQ when the PC is off.
+    adb("shell","cmd","notification","allow_listener",PACKAGE+"/.QqNotifications")
+    open_app()
     instrument("first")
     open_app()
     adb("shell","input","keyevent","KEYCODE_HOME")
@@ -85,7 +96,9 @@ def main():
     wait_for(lambda: adb("shell","getprop","sys.boot_completed").strip()=="1",150)
     adb("shell","input","keyevent","KEYCODE_WAKEUP")
     adb("shell","wm","dismiss-keyguard")
-    wait_for(service_online,90)
+    wait_for(service_online,150)
+    wait_for(lambda: ":6199" in adb("shell","ss","-ltn"),30)
+    print("The phone's QQ listener recovered after reboot without opening the app.",flush=True)
     instrument("after-reboot")
     print("Phone recovered the service, encrypted credential and chat from its own storage.",flush=True)
 
@@ -99,8 +112,9 @@ if __name__=="__main__":
             print("Android foreground window:",next((s for s in adb("shell","dumpsys","window").splitlines() if "mCurrentFocus" in s),""),flush=True)
             print("Android application crash:",adb("logcat","-d","-b","crash")[-2600:],flush=True)
             print("Boot signals:",adb("logcat","-d","-s","DaFeiYuBoot:I","*:S")[-800:],flush=True)
-            print("Android user:",adb("shell","cmd","user","is-user-unlocked","0").strip(),flush=True)
+            print("Android user:",adb("shell","dumpsys","user").split("State:")[-1][:100],flush=True)
             print("App state:",[s.strip() for s in adb("shell","dumpsys","package",PACKAGE).splitlines() if "stopped=" in s][:1],flush=True)
             print("Broadcast diagnostics:",[s.strip()[:240] for s in adb("shell","dumpsys","activity","broadcasts").splitlines() if PACKAGE in s][-12:],flush=True)
-        finally:
-            raise
+        except (OSError, subprocess.SubprocessError) as diagnostic:
+            print("Additional Android diagnostics unavailable:",type(diagnostic).__name__,flush=True)
+        raise

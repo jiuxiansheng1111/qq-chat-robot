@@ -5,11 +5,31 @@ import os
 import secrets
 import subprocess
 import tempfile
+import urllib.request
 import zipfile
 from pathlib import Path
 
 SOURCE = Path(__file__).resolve().parent
 ROOT = SOURCE.parent.parent
+LIBS = {
+    "org/java-websocket/Java-WebSocket/1.6.0/Java-WebSocket-1.6.0.jar":"eae29213e4f16515639c28957200f011b3967fffcada1962cf0255d24919c22f",
+    "org/slf4j/slf4j-api/2.0.20/slf4j-api-2.0.20.jar":"7e1446499b359675d8aabe6af2de86b85e72ae8a2a932c0b40d0e5ba57097439",
+}
+
+
+def libraries():
+    cache=ROOT/"data/mobile-build/libs"
+    cache.mkdir(parents=True,exist_ok=True)
+    jars=[]
+    for path,digest in LIBS.items():
+        jar=cache/Path(path).name
+        if not jar.exists() or hashlib.sha256(jar.read_bytes()).hexdigest()!=digest:
+            with urllib.request.urlopen("https://repo.maven.apache.org/maven2/"+path,timeout=25) as remote:
+                data=remote.read(2_000_000)
+            if hashlib.sha256(data).hexdigest()!=digest: raise ValueError("Maven dependency checksum mismatch")
+            jar.write_bytes(data)
+        jars.append(jar)
+    return jars
 
 
 def run(*args, env=None):
@@ -44,6 +64,7 @@ def build(sdk, destination, key, env, test):
     tools = sdk / "build-tools/35.0.0"
     platform = sdk / "platforms/android-35/android.jar"
     source = SOURCE / "test" if test else SOURCE
+    jars=libraries()
     ext = ".exe" if os.name=="nt" else ""
     if not platform.is_file() or not (tools / "lib/d8.jar").is_file():
         raise SystemExit("请准备 Android SDK Platform 35 和 Build Tools 35.0.0。")
@@ -60,23 +81,27 @@ def build(sdk, destination, key, env, test):
             run(tools / ("aapt2"+ext),"compile","--dir",source / "res","-o",temp / "resources.zip")
             resources=[temp / "resources.zip"]
         run(tools / ("aapt2"+ext),"link","-o",apk,"-I",platform,"--manifest",source / "AndroidManifest.xml",
-            "--min-sdk-version","26","--target-sdk-version","35","--version-code","3","--version-name","1.1.1","--java",gen,*resources)
+            "--min-sdk-version","26","--target-sdk-version","35","--version-code","4","--version-name","1.2","--java",gen,*resources)
         files = [*gen.rglob("*.java"), *(source / "src").rglob("*.java")]
-        classpath = platform
+        classpath = os.pathsep.join(os.path.relpath(p, ROOT) for p in (platform,*jars))
         if test:
             stubs = temp / "app-api"
             stubs.mkdir()
             impl = SOURCE / "src/cn/dafeiyu/agent"
-            run("javac","-encoding","UTF-8","--release","8","-classpath",platform,"-d",stubs,
-                impl / "Agent.java",impl / "Settings.java",impl / "Turns.java",impl / "MobileWeather.java")
-            classpath = os.pathsep.join(os.path.relpath(p, ROOT) for p in (platform, stubs))
+            run("javac","-encoding","UTF-8","--release","8","-classpath",classpath,"-d",stubs,
+                *(impl / (name+".java") for name in ("Agent","Settings","Turns","MobileWeather","QqInbox","QqServer","QqNotifications")))
+            classpath = os.pathsep.join(os.path.relpath(p, ROOT) for p in (platform, stubs,*jars))
         run("javac","-encoding","UTF-8","--release","8","-classpath",classpath,"-d",classes,*files)
         compiled=temp / "classes.jar"
         with zipfile.ZipFile(compiled,"w") as jar:
             for path in sorted(classes.rglob("*.class")): jar.write(path,path.relative_to(classes))
-        run("java","-cp",tools / "lib/d8.jar","com.android.tools.r8.D8","--min-api","26","--lib",platform,"--output",dex,compiled)
+        dependencies=[arg for jar in jars for arg in ("--classpath",jar)] if test else jars
+        run("java","-cp",tools / "lib/d8.jar","com.android.tools.r8.D8","--min-api","26","--lib",platform,"--output",dex,compiled,*dependencies)
         with zipfile.ZipFile(apk,"a") as archive:
             for path in dex.glob("*.dex"): archive.write(path,path.name)
+            if not test:
+                archive.write(SOURCE/"licenses/Java-WebSocket.txt","assets/licenses/Java-WebSocket.txt")
+                with zipfile.ZipFile(jars[1]) as slf: archive.writestr("assets/licenses/SLF4J.txt",slf.read("META-INF/LICENSE.txt"))
         aligned=temp / "aligned.apk"
         run(tools / ("zipalign"+ext),"-f","4",apk,aligned)
         signer=tools / "lib/apksigner.jar"

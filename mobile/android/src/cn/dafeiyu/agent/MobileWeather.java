@@ -22,6 +22,7 @@ final class MobileWeather {
         boolean save=saving.matches();
         boolean local=q.matches("(?:我这(?:里|边)?|当地|手机所在地|按手机IP|今天|今日|明天)?(?:的)?天气(?:怎么样|如何|预报)?");
         if(!save && !local && !city.matches() && !after.matches()) return null;
+        if(config==null && (local||save)) return "想查哪个城市的天气？";
         String name=save?saving.group(1):local?config.prefs.getString("weather_city",""):after.matches()?after.group(1):city.group(1);
         name=name.trim().replaceFirst("市$","");
         boolean estimated=name.isEmpty();

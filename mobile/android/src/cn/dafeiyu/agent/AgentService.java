@@ -19,6 +19,8 @@ public final class AgentService extends Service {
     private Turns turns;
     private Settings settings;
     private Agent agent;
+    private QqServer onebot;
+    private android.net.ConnectivityManager.NetworkCallback networks;
     private boolean busy;
     private boolean waitingForUnlock;
     private int latestStart;
@@ -32,6 +34,19 @@ public final class AgentService extends Service {
         super.onCreate();
         NotificationManager nm=getSystemService(NotificationManager.class);
         nm.createNotificationChannel(new NotificationChannel(CHANNEL,"大肥鱼手机助手",NotificationManager.IMPORTANCE_LOW));
+    }
+    private void qqConnection() {
+        if(turns==null)return;
+        QqInbox inbox=QqInbox.get(this);
+        boolean enabled=inbox.prefs.getBoolean("onebot",false);
+        boolean lan=inbox.prefs.getBoolean("lan",true);
+        String address=enabled?QqServer.host(this,lan):"";
+        if(onebot!=null && (!enabled || !onebot.bindHost.equals(address) || !onebot.expectedId.equals(inbox.prefs.getString("self","")))) {
+            onebot.end(); onebot=null;
+        }
+        if(!enabled) { QqServer.state="未启用 OneBot"; return; }
+        if(address.isEmpty()) { QqServer.state="等待手机连接 Wi-Fi 或私有网络"; inbox.changed(); return; }
+        if(onebot==null) { onebot=new QqServer(address,inbox); onebot.start(); }
     }
     private Notification notice(String status) {
         PendingIntent open=PendingIntent.getActivity(this,0,new Intent(this,MainActivity.class),PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
@@ -58,6 +73,14 @@ public final class AgentService extends Service {
         if(waitingForUnlock) { unregisterReceiver(unlocked); waitingForUnlock=false; }
         if(turns==null) { turns=Turns.get(this); settings=new Settings(this); agent=new Agent(this); }
         startForeground(41,notice("手机助手已就绪"));
+        if(networks==null) {
+            networks=new android.net.ConnectivityManager.NetworkCallback() {
+                public void onLinkPropertiesChanged(android.net.Network n,android.net.LinkProperties p) { main.post(()->qqConnection()); }
+                public void onLost(android.net.Network n) { main.post(()->qqConnection()); }
+            };
+            getSystemService(android.net.ConnectivityManager.class).registerDefaultNetworkCallback(networks);
+        }
+        qqConnection();
         if(intent!=null && DIRECT.equals(intent.getAction())) {
             Bundle input=RemoteInput.getResultsFromIntent(intent);
             CharSequence q=input==null?null:input.getCharSequence("question");
@@ -91,6 +114,12 @@ public final class AgentService extends Service {
             else { stopForeground(STOP_FOREGROUND_REMOVE); stopSelfResult(latestStart); }
         });
     }
-    public void onDestroy() { if(waitingForUnlock) unregisterReceiver(unlocked); worker.shutdown(); super.onDestroy(); }
+    public void onDestroy() {
+        if(waitingForUnlock) unregisterReceiver(unlocked);
+        if(networks!=null) getSystemService(android.net.ConnectivityManager.class).unregisterNetworkCallback(networks);
+        turns=null;
+        if(onebot!=null) { onebot.end(); onebot=null; }
+        worker.shutdown(); super.onDestroy();
+    }
     public IBinder onBind(Intent intent) { return null; }
 }

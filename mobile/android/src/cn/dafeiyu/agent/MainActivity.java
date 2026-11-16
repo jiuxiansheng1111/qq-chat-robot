@@ -56,7 +56,9 @@ public final class MainActivity extends Activity {
         LinearLayout top=row(); pad(top,16,10); root.addView(top);
         LinearLayout titles=column(); TextView name=label("大肥鱼",26); name.setTypeface(Typeface.DEFAULT,Typeface.BOLD); titles.addView(name);
         status=label("",13); titles.addView(status); top.addView(titles,grow());
-        top.addView(button("模型",v->settings(),false));
+        top.addView(button("QQ",v->startActivity(new Intent(this,QqActivity.class)),false));
+        LinearLayout.LayoutParams modelButton=new LinearLayout.LayoutParams(-2,-2); modelButton.leftMargin=dp(6);
+        top.addView(button("模型",v->settings(),false),modelButton);
         scroll=new ScrollView(this); scroll.setFillViewport(true); feed=column(); pad(feed,16,12); scroll.addView(feed);
         root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
         LinearLayout entry=column(); pad(entry,12,8); entry.setBackgroundColor(Color.WHITE); root.addView(entry);

@@ -13,6 +13,7 @@ final class Turns extends SQLiteOpenHelper {
         final long id;
         final String question, answer, mode, state;
         Turn(Cursor row) { id=row.getLong(0); question=row.getString(1); answer=row.getString(2); mode=row.getString(3); state=row.getString(4); }
+        Turn(String question,String answer) { this.id=0; this.question=question; this.answer=answer; this.mode="chat"; this.state="done"; }
     }
     private static Turns instance;
     static synchronized Turns get(Context context) {

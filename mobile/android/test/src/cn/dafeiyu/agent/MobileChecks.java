@@ -47,6 +47,8 @@ public final class MobileChecks extends Instrumentation {
             if("after-reboot".equals(phase)) {
                 check(cfg.running(),"后台选项没有保存"); check("mobile-fixture".equals(cfg.secret()),"密钥重启后未能解密");
                 check("记得小鲸鱼".equals(await(store,"我刚才说了什么").answer),"重启后对话未保存");
+                check(QqInbox.get(ctx).recent().toString().contains("双端同步"),"重启后 QQ 收件箱未恢复");
+                check(QqInbox.get(ctx).prefs.getBoolean("onebot",false),"重启后 QQ 设置没有保存");
             } else {
                 String rss="<rss><channel><item><title>蜂鸟</title><link>https://example.org/bird</link><description>鸟类资料</description></item></channel></rss>";
                 check(Agent.rss(rss).get("https://example.org/bird").contains("蜂鸟"),"手机解析搜索来源失败");
@@ -107,6 +109,7 @@ public final class MobileChecks extends Instrumentation {
                     send(screen,"说说潮汐"); check("潮汐".equals(await(store,"说说潮汐").answer),"Messages 文字对话");
                     fixture.join(2000); check(failure.get()==null && !fixture.isAlive(),"手机模型服务没有收到完整请求");
                 }
+                QqChecks.run(ctx,cfg);
             }
             report.putString("stream","\nMOBILE_PASS "+phase+"\n"); result=Activity.RESULT_OK;
         } catch(Throwable e) { report.putString("stream","\nMOBILE_FAIL "+e+"\n"+android.util.Log.getStackTraceString(e)); }

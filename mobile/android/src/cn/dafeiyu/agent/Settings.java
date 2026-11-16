@@ -15,7 +15,7 @@ import javax.crypto.spec.GCMParameterSpec;
 final class Settings {
     static final String[][] SERVICES = {
         {"DeepSeek","https://api.deepseek.com/v1","deepseek-flash","chat"},
-        {"智谱 GLM","https://open.bigmodel.cn/api/paas/v4","glm-4-flash","chat"},
+        {"智谱 GLM","https://open.bigmodel.cn/api/paas/v4","glm-4-flash-250414","chat"},
         {"OpenAI GPT","https://api.openai.com/v1","","responses"},
         {"Anthropic Claude","https://api.anthropic.com","","messages"},
         {"Google Gemini","https://generativelanguage.googleapis.com/v1beta/openai","","chat"},
@@ -30,10 +30,10 @@ final class Settings {
         SharedPreferences startup=startupPrefs(context);
         if(!startup.contains("running") && prefs.contains("running")) setRunning(prefs.getBoolean("running",false));
     }
-    int service() { return prefs.getInt("service", 0); }
-    String base() { return prefs.getString("base", SERVICES[0][1]); }
-    String model() { return prefs.getString("model", SERVICES[0][2]); }
-    String protocol() { return prefs.getString("protocol", SERVICES[0][3]); }
+    int service() { return prefs.getInt("service", 1); }
+    String base() { return prefs.getString("base", SERVICES[service()][1]); }
+    String model() { return prefs.getString("model", SERVICES[service()][2]); }
+    String protocol() { return prefs.getString("protocol", SERVICES[service()][3]); }
     boolean configured() { return prefs.getBoolean("configured", false); }
     private static SharedPreferences startupPrefs(Context ctx) {
         return ctx.createDeviceProtectedStorageContext().getSharedPreferences("startup",Context.MODE_PRIVATE);
