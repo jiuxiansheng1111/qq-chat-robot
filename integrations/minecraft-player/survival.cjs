@@ -38,7 +38,8 @@ class Survival {
       stacks.set(item.name, (stacks.get(item.name) || 0) + item.count)
     }
     return { activity: this.activity, last: this.last, preferred: this.preferred,
-      inventory: Object.fromEntries(stacks), restSeconds: Math.max(0, Math.ceil(((this.restUntil || 0) - Date.now()) / 1000)) }
+      inventory: Object.fromEntries(stacks), restSeconds: Math.max(0, Math.ceil(((this.restUntil || 0) - Date.now()) / 1000)),
+      ...(this.project ? { project: this.project.snapshot() } : {}) }
   }
 
   count(match) {
@@ -51,6 +52,7 @@ class Survival {
     clearTimeout(this.timer)
     this.restUntil = 0
     this.preferred = ''
+    this.project = null
     if (this.bot.targetDigBlock) this.bot.stopDigging()
     this.bot.pathfinder.setGoal(null)
     this.activity = 'idle'
@@ -131,16 +133,21 @@ class Survival {
         return true
       }
     }
+    if (this.project) return this.project.step(this, epoch)
     if (bot.inventory.emptySlotCount() === 0) {
       this.takeBreak()
       return false
     }
+    return this.gather(this.preferred, epoch)
+  }
+
+  async gather(preferred, epoch) {
     const hasPick = this.count(pickaxe) > 0
-    if (!hasPick && this.preferred !== 'wood') {
+    if (!hasPick && preferred !== 'wood') {
       if (await this.preparePick(epoch)) return true
       if (!this.active(epoch)) return false
     }
-    const material = (!hasPick && this.preferred !== 'wood') ? 'wood' : this.preferred ||
+    const material = (!hasPick && preferred !== 'wood') ? 'wood' : preferred ||
       (this.count(logs) < 4 ? 'wood' : this.count(stone) < 16 ? 'stone' : this.count(n => n === 'coal') < 6 ? 'coal' : '')
     if (material && await this.mine(material, epoch)) return true
     if (!this.active(epoch)) return false

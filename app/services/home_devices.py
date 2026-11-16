@@ -88,24 +88,40 @@ class HomeDevices:
         return self.status()
 
     async def execute(self, event, text):
-        bindings = self.status()["devices"]
+        def read(db):
+            server = db.execute("SELECT base,token FROM connection WHERE id=1").fetchone()
+            devices = db.execute("SELECT name,entity FROM devices ORDER BY name").fetchall()
+            return tuple(server) if server else None, devices
+        connection, bindings = self.store.transaction(read)
+        if not connection: raise DeviceError("先在本机账号页连接 Home Assistant，再选你要让我控制的设备。")
         matches = [b for b in bindings if b["name"] in text]
         if not matches:
-            self.connection()
             return "可用设备有" + "、".join(b["name"] for b in bindings) if bindings else "账号页里还没有选要控制的设备。"
         if len(matches) > 1:
             return "这句话里有多个设备名，请分别指一个。要让灯光和音乐一起变化，可以绑定一个场景。"
         name, entity = matches[0]["name"], matches[0]["entity"]
-        connection = self.connection()
         state = await self.api(*connection, "GET", "states/" + entity)
-        if state.get("entity_id") != entity or state.get("state") in {None, "unknown", "unavailable"}:
+        domain = entity.partition(".")[0]
+        if state.get("entity_id") != entity or state.get("state") in {None,"unavailable"} or (
+                state.get("state")=="unknown" and domain not in {"button","input_button","scene","script"}):
             return name + "现在没有可核实的状态。"
-        action = device_action(entity, text, state)
+        unit = "℃"
+        if domain=="climate":
+            config = await self.api(*connection,"GET","config")
+            if (config.get("unit_system") or {}).get("temperature") in {"°F","℉"}: unit = "℉"
+        action = device_action(entity, text, state, unit)
         if action is None:
-            return name + "当前" + describe_state(state)
+            if state["state"]=="unknown": return name+"还没有上次执行的时间记录。"
+            prefix = "控制器估计" if (state.get("attributes") or {}).get("assumed_state") else "当前"
+            return name + prefix + describe_state(state,unit)
         service, payload, expected = action
         # A repeated QQ event, even after restarting, must not press a button twice.
-        claimed = self.store.turn(event, lambda db: "claimed", datetime.now(CHINA))
+        def claim(db):
+            current, devices = read(db)
+            if current != connection or not any(d["name"]==name and d["entity"]==entity for d in devices):
+                raise DeviceError("设备绑定刚刚更新了，请重新选择设备。")
+            return "claimed"
+        claimed = self.store.turn(event, claim, datetime.now(CHINA))
         if not claimed:
             return ""
         await self.api(*connection, "POST", "services/" + service, json={"entity_id": entity, **payload})
@@ -116,17 +132,19 @@ class HomeDevices:
                 await asyncio.sleep(.35 * attempt)
             latest = await self.api(*connection, "GET", "states/" + entity)
             if latest.get("entity_id") == entity and expected(latest):
-                return name + "已回报" + describe_state(latest)
+                if (latest.get("attributes") or {}).get("assumed_state"):
+                    return "已发送指令，控制器估计"+name+describe_state(latest,unit)+"。"
+                return name + "已回报" + describe_state(latest,unit)
         return name + "的指令已发出，设备还没有回报目标状态。"
 
 
-def describe_state(row):
+def describe_state(row, unit="℃"):
     attrs = row.get("attributes") or {}
     values = {"off":"关闭", "on":"开启", "playing":"播放中", "paused":"已暂停", "cool":"制冷", "heat":"制热"}
     label = values.get(row["state"], str(row["state"]))
     if row["state"] != "off":
         if attrs.get("temperature") is not None:
-            label += f"、设定 {attrs['temperature']}℃"
+            label += f"、设定 {attrs['temperature']}{unit}"
         elif attrs.get("brightness") is not None:
             label += f"、亮度 {round(attrs['brightness'] * 100 / 255)}%"
         elif attrs.get("volume_level") is not None:
@@ -134,16 +152,22 @@ def describe_state(row):
     return label
 
 
-def device_action(entity, text, state):
+def device_action(entity, text, state, unit="℃"):
     domain = entity.partition(".")[0]
-    if re.search(r"状态|开着吗|开了吗|关了吗|多少|是否", text):
+    if re.search(r"状态|开着吗|开了吗|关了吗|关着吗|亮着吗|开还是关|多少|是否", text):
         return None
     attrs = state.get("attributes") or {}
-    num = re.search(r"(-?\d+(?:\.\d+)?)\s*(%|％|度|℃)", text)
+    num = re.search(r"(-?\d+(?:\.\d+)?)\s*(%|％|华氏度|摄氏度|度|°F|℉|°C|℃)", text,re.IGNORECASE)
     if num:
         value = float(num[1])
-        if domain == "climate" and num[2] in {"度","℃"} and attrs.get("min_temp", 7) <= value <= attrs.get("max_temp", 35):
-            return "climate/set_temperature", {"temperature":value}, lambda s: s.get("attributes", {}).get("temperature") == value
+        if domain == "climate" and num[2] not in {"%","％"}:
+            fahrenheit = num[2].upper() in {"华氏度","℉","°F"}
+            if unit=="℉" and not fahrenheit: value = value*9/5+32
+            elif unit=="℃" and fahrenheit: value = (value-32)*5/9
+            step = attrs.get("target_temp_step") or .1
+            value = round(round(value/step)*step,2)
+            if attrs.get("min_temp",45 if unit=="℉" else 7) <= value <= attrs.get("max_temp",95 if unit=="℉" else 35):
+                return "climate/set_temperature", {"temperature":value}, lambda s: s.get("attributes", {}).get("temperature") == value
         if domain in {"light","media_player"} and num[2] in {"%","％"} and 0 <= value <= 100:
             if domain == "light":
                 brightness = round(value * 255 / 100)

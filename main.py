@@ -335,7 +335,7 @@ class QQChatPlugin(Star):
         self.runtime = runtime
         self._get_companion_turns().start_followups(self)
         from app.astrbot_turn_features import start_timers
-        start_timers(self, ("study","time_capsule"))
+        start_timers(self, ("study","time_capsule","mc_builder"))
         from app.astrbot_weather_alerts import service_for
         if alerts := service_for(self):
             alerts.start(self)

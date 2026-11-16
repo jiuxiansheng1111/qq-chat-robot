@@ -38,6 +38,8 @@ OWNED = {
     "time_capsule": ("app/astrbot_time_capsule.py",),
     "steam_library": ("app/astrbot_steam_library.py",),
     "group_radio": ("app/astrbot_group_radio.py",),
+    "mc_builder": ("app/astrbot_mc_builder.py","integrations/minecraft-player/construction.cjs"),
+    "werewolf": ("app/astrbot_werewolf.py","app/services/werewolf.py"),
     "card_quiz": ("app/astrbot_card_quiz.py",),
     "meetups": ("app/astrbot_meetups.py",),
     "followups": ("app/astrbot_followups.py",),
@@ -48,7 +50,6 @@ OWNED = {
     "video": ("app/astrbot_video_skill.py", "integrations/video-watch-plus/*", "scripts/setup_video_watch.py"),
     "catchup": ("app/astrbot_catchup.py",),
     "minecraft": ("app/minecraft_bridge.py", "app/minecraft_music*.py", "app/minecraft_voice*.py",
-                  "integrations/minecraft-player/player.cjs", "integrations/minecraft-player/survival.cjs",
                   "scripts/minecraft_tts_worker.py", "docs/多人游戏陪伴.md"),
     "listening": ("integrations/netease/*", "scripts/*netease*.ps1"),
     "singing": ("scripts/plan_singing_pitch.py", "scripts/run_singing_*.py", "scripts/run_rvc_model.py",
@@ -60,7 +61,8 @@ OWNED = {
 }
 CORE_DATA = ("app/*.py", "app/*.json", "prompts/*", "assets/help-menu-background.png", "pyproject.toml",
              "docs/mahjong/knowledge/*", "docs/mahjong/LIQI_LICENSE.txt", "integrations/minecraft-player/account.cjs",
-             "integrations/minecraft-player/package*.json")
+             "integrations/minecraft-player/package*.json","integrations/minecraft-player/player.cjs",
+             "integrations/minecraft-player/survival.cjs")
 HOST_METHODS = ("_get_companion_turns", "_get_group_router", "_get_qq_memes",
                 "_get_reply_guard", "_get_reply_repair", "_legacy_event_allowed", "on_onebot_message", "on_wechat_message")
 HEADER = '''from __future__ import annotations

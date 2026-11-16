@@ -28,7 +28,7 @@
 
 | 插件 | 功能 | 安装包 |
 | --- | --- | --- |
-| 网页助手 | 主人私聊打开网页、浏览文字、点击链接与填写搜索框。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_web_assistant.zip) |
+| 网页助手 | 主人私聊打开网页、浏览文字、点击链接与填写搜索框。也能从手机本机账号页操作。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_web_assistant.zip) |
 | 安静自习 | 计时、暂停、继续和到点提醒。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_study.zip) |
 | 冰箱食材搭配 | 读食材和真实照片，按可用时间配菜。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_fridge.zip) |
 | 用照片找物品 | 按会话找回自己的物品位置和照片。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_item_finder.zip) |
@@ -63,6 +63,7 @@
 | 插件 | 功能 | 安装包 |
 | --- | --- | --- |
 | 点歌与歌词 | 搜歌、选择候选、查询歌词并发送音乐卡片。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_music.zip) |
+| 群轮值电台 | 主持人轮值，群友选歌并录串词，发布后可回听最近四期。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_group_radio.zip) |
 | 网易云一起听 | 接受一起听邀请，处理房间消息和经授权保存的听歌记录。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_listening.zip) |
 | 音频分析 | 通过 SoundTry 分析当前或引用的真实音频附件。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_sound.zip) |
 | 语音与音色 | 朗读消息、选择音色以及进入或退出语音模式。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_voice.zip) |
@@ -79,6 +80,9 @@
 | 炉石竞技场 | 比较选牌候选，添加或撤销已选卡并分析本轮牌组。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_arena.zip) |
 | 雀魂复盘与何切 | 按牌谱链接复盘，组织友人场或练习何切。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_mahjong.zip) |
 | Minecraft 独立玩家 | 进入 Java 服务器，采集材料、自主休息、查看背包或退服。含 Minecraft 文本、语音与音乐桥。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_minecraft.zip) |
+| Minecraft 工程备料 | 出建筑蓝图，按材料清单向指定箱子存货，重新开箱核对交付数量。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_mc_builder.zip) |
+| 群狼人杀 | 支持正式桌和练习桌，大肥鱼扮演自己的身份，夜间行动走私聊。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_werewolf.zip) |
+| Steam 共同游戏库 | 群友自愿共享清单，根据实际人数查商店、对照共同拥有的游戏。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_steam_library.zip) |
 | 群聊猜炉石卡 | 说「来局猜卡」，报卡名或简称，答对后翻完整卡面。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_card_quiz.zip) |
 | 群聊约局 | 群友直接报名、报到场时间或候补，支持改期、退出、取消。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_meetups.zip) |
 | Steam 大厅 | 绑定专用 SteamID，核对本机账号并接收大厅邀请。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_steam.zip) |

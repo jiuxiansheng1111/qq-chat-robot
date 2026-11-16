@@ -296,6 +296,9 @@ async def test_game_library_and_radio_share_group_entry_without_consuming_normal
     assert "第1期" in reply(await chat.post("开个群电台 夏夜"))
     assert "还没有" in reply(await chat.post("电台节目单",group="1000000002"))
     assert "筹备中" in reply(await chat.post("电台节目单"))
+    assert "7×5" in reply(await chat.post("MC工程 水族馆"))
+    assert "报名中" in reply(await chat.post("开一局狼人杀"))
+    assert "私聊" in reply(await chat.post("我的狼人杀身份"))
     assert not (await chat.post("听见路边电台了吗")).stopped
 
 

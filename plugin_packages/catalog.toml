@@ -244,6 +244,16 @@ description = "进入 Java 服务器，采集材料、自主休息、查看背�
 batch = 4
 turns = ["mc"]
 
+[mc_builder]
+title = "Minecraft 工程备料"
+description = "生成建筑图纸，采集材料存入指定坐标的箱子，按上次实际开箱结果报告进度。搭配 Minecraft 独立玩家进服。"
+batch = 4
+
+[werewolf]
+title = "群狼人杀"
+description = "正式桌或单人练习，五种身份、私聊夜间行动、轮次投票和胜负结算。大肥鱼用自己的身份信息参与。"
+batch = 4
+
 [steam]
 title = "Steam 大厅"
 description = "绑定专用 SteamID，核对本机账号并接收大厅邀请。"

@@ -54,7 +54,7 @@ def test_routes_by_actual_domain(entity, text, service):
 
 def test_negative_and_hypothetical_not_device_actions():
     tool = HomeControl()
-    for text in ["不要打开台灯","如果打开卧室灯会怎么样","听说他打开空调"]:
+    for text in ["不要打开台灯","如果打开卧室灯会怎么样","听说他打开空调","刚才打开过空调","之前有人关闭卧室灯"]:
         assert not tool.interested(("qq","bot","","owner"), text, True)
 
 
@@ -63,3 +63,28 @@ async def test_no_private_actions_from_group_or_another_sender():
     tool = HomeControl()
     assert not await tool.handle(None, event("g"), ("a","b","group","x"), "打开卧室灯")
     assert not await tool.handle(None, event("p"), ("a","b","","stranger"), "打开卧室灯")
+
+
+@pytest.mark.asyncio
+async def test_fresh_wake_button_and_assumed_climate_temperature(tmp_path,monkeypatch):
+    home = HomeDevices(tmp_path)
+    states = {"button.computer":{"entity_id":"button.computer","state":"unknown","attributes":{}},
+              "climate.ac":{"entity_id":"climate.ac","state":"cool","attributes":{
+                "temperature":70,"min_temp":60,"max_temp":85,"target_temp_step":1,"assumed_state":True}}}
+    actions = []
+    async def api(base,secret,method,path,**kwargs):
+        if not path: return {"message":"API running."}
+        if path=="states": return list(states.values())
+        if path=="config": return {"unit_system":{"temperature":"°F"}}
+        if method=="POST":
+            actions.append((path,kwargs["json"]))
+            if path.endswith("/set_temperature"): states["climate.ac"]["attributes"]["temperature"] = kwargs["json"]["temperature"]
+            return []
+        return states[path.split("/",1)[1]]
+    monkeypatch.setattr(home,"api",api)
+    await home.connect({"base":"http://localhost:8123","token":"demo"})
+    await home.bind("电脑开机","button.computer")
+    await home.bind("空调","climate.ac")
+    assert "已接收" in await home.execute(event("b1"),"按一下电脑开机")
+    assert "控制器估计" in await home.execute(event("b2"),"把空调调到26度")
+    assert actions[-1][1]["temperature"]==79 and "79℉" in await home.execute(event("b3"),"空调状态")

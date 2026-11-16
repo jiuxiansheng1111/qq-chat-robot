@@ -110,9 +110,24 @@ async function command(request) {
     return result()
   }
   if (request.action === 'status' || request.action === 'inventory' || phase !== 'in_world') return result()
+  if (request.action === 'build_materials') {
+    if (life.project?.id === request.target?.id) return result()
+    const { Construction } = require('./construction.cjs')
+    const project = new Construction(request.target, bot.game.dimension)
+    life.start()
+    life.project = project
+    following = ''
+    return result()
+  }
+  if (request.action === 'end_build') {
+    if (life.project?.id === request.target) life.start('', true)
+    return result()
+  }
   if (request.action === 'stop') {
     following = ''
+    const project = life.project
     life.start('', true)
+    life.project = project
     return result()
   }
   if (request.action === 'work') {
