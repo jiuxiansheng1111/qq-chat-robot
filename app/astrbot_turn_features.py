@@ -15,7 +15,28 @@ from app.services.social_plans import scope
 
 _LOG = logging.getLogger(__name__)
 _FEATURES = {"listen_first": "ListenFirst", "card_quiz": "CardQuiz", "watchlist": "Watchlist", "corrections": "Corrections",
+             "item_finder": "ItemFinder", "project_resume": "ProjectResume", "fridge": "Fridge", "dinner_split": "DinnerSplit",
+             "study": "Study", "time_capsule": "TimeCapsule",
              "web_assistant": "WebAssistant", "desktop_control": "DesktopControl", "home_control": "HomeControl"}
+
+
+def start_timers(host, slugs):
+    if getattr(getattr(host, "runtime", None), "project_root", None) is not None:
+        for slug in slugs:
+            get_feature(host, slug).start(host)
+
+
+async def quiet_study_event(host, event):
+    from app.astrbot_qq_persona import is_qq
+    if not is_qq(event):
+        return False
+    tool = getattr(host, "_conversation_features", {}).get("study")
+    enabled = enabled_parts(host,event)
+    if not tool or enabled is not None and "study" not in enabled:
+        return False
+    mid = str(getattr(getattr(event,"message_obj",None),"message_id",""))
+    passive = mid.startswith("proactive:") or event.get_extra("qqchat_group_reply_reason") == "interject"
+    return passive and await tool.quiet(host,event.unified_msg_origin)
 
 
 def enabled_parts(host, event):

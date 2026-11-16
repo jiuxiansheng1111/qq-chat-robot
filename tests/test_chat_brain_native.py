@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.chat_brain import ChatBrain, LUNA, PROFILE
+from app.services.chat_brain import LUNA, PROFILE, ChatBrain
 
 
 @pytest.mark.asyncio
@@ -16,8 +16,8 @@ async def test_switch_reaches_native_qq_selector_and_the_next_http_request(tmp_p
     _load_astrbot_types(root, monkeypatch)
     from aiohttp import web
     from astrbot.core.astr_main_agent import _select_provider
-    from astrbot.core.provider.manager import ProviderManager
     from astrbot.core.provider.entities import ProviderType
+    from astrbot.core.provider.manager import ProviderManager
 
     calls = []
     async def respond(request):

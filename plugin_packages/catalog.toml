@@ -275,3 +275,33 @@ batch = 2
 title = "Windows 电脑助手"
 description = "主人私聊让电脑开计算器、记事本或画图，查看当前窗口、锁屏和控制多媒体键。"
 batch = 2
+
+[item_finder]
+title = "用照片找物品"
+description = "保存自己指定的物品、位置和照片，按当前会话找回或删除。"
+batch = 2
+
+[project_resume]
+title = "周末接着做"
+description = "保存项目进度、卡点、下一步和草稿照片，回到原会话可以接着做。"
+batch = 2
+
+[fridge]
+title = "冰箱食材搭配"
+description = "根据文字或实际看清的食材照片、想先吃的食材和可用时间配菜。"
+batch = 2
+
+[dinner_split]
+title = "聚餐 AA"
+description = "多人垫付、按菜分摊、确认小票、撤销和按分结算。"
+batch = 2
+
+[study]
+title = "安静自习"
+description = "开启自习、暂停、继续或取消计时，到点在原会话提醒。"
+batch = 2
+
+[time_capsule]
+title = "群周年时间胶囊"
+description = "按北京时间封存个人投稿，可以写话、留照片或语音，开封时在原群送出。"
+batch = 2

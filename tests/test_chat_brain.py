@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.chat_brain import BrainError, ChatBrain, LUNA, PROFILE
+from app.services.chat_brain import LUNA, PROFILE, BrainError, ChatBrain
 
 
 class Profile(dict):

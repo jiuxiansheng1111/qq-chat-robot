@@ -29,6 +29,12 @@
 | 插件 | 功能 | 安装包 |
 | --- | --- | --- |
 | 网页助手 | 主人私聊打开网页、浏览文字、点击链接与填写搜索框。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_web_assistant.zip) |
+| 安静自习 | 计时、暂停、继续和到点提醒。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_study.zip) |
+| 冰箱食材搭配 | 读食材和真实照片，按可用时间配菜。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_fridge.zip) |
+| 用照片找物品 | 按会话找回自己的物品位置和照片。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_item_finder.zip) |
+| 周末接着做 | 记录项目、下一步和草稿照片。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_project_resume.zip) |
+| 聚餐 AA | 确认收据或按菜分摊，再按分结算。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_dinner_split.zip) |
+| 群周年时间胶囊 | 按约定时间在原群打开文字、照片和语音投稿。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_time_capsule.zip) |
 | 电脑助手 | 主人通过私聊打开 Windows 应用、查看当前窗口、锁屏与控制媒体键。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_desktop_control.zip) |
 | 家里的设备 | 通过 Home Assistant 配对灯光、音乐、空调、手机动作与场景。账号管理分件提供连接表单。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_home_control.zip) |
 | 实时天气 | 识别自然语言城市名，查询实时天气和预报。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_weather.zip) |

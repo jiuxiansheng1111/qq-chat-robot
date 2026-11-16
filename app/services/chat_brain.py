@@ -194,7 +194,7 @@ class ChatBrain:
                 return {"applied": apply, "model": provider.get_model(), "reply": answer.strip()[:160]}
             except BrainError:
                 raise
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 -- native adapters use different SDK errors; never display their payloads
                 status = getattr(exc, "status_code", None)
                 hint = f"（HTTP {status}）" if isinstance(status, int) else ""
                 raise BrainError(f"测试或保存未完成{hint}，请检查地址、模型名和登录凭据。") from None

@@ -9,12 +9,16 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
-from app.services.local_report_render import _public_asset_url, _resolve_static_images, find_report_browser
 from app.services.bounded_http import request_json
 from app.services.http_routing import outbound_http_client
+from app.services.local_report_render import (
+    _public_asset_url,
+    _resolve_static_images,
+    find_report_browser,
+)
 from app.services.owner_policy import is_owner_event
 
-_OPEN = re.compile(r"(?:网页助手[，,：: ]*|(?:帮我|请)?(?:打开|浏览|看看|读一下|看一下)(?:这个|这个网页|网页|链接|这个链接)?[：: ]*)\s*(https?://[^\s<>《》]+)", re.I)
+_OPEN = re.compile(r"(?:网页助手[，,：: ]*|(?:帮我|请)?(?:打开|浏览|看看|读一下|看一下)(?:这个|这个网页|网页|链接|这个链接)?[：: ]*)\s*(https?://[^\s<>《》]+)", re.IGNORECASE)
 _CLICK = re.compile(r"^(?:网页助手[，,：: ]*)?(?:点开|点一下|点击)(?:网页上|页面上|网页里|页面里|网页上的|页面上的)?[「“\"]?(.{1,90}?)[」”\"]?[。！!]?$")
 _READ = re.compile(r"^(?:网页助手[，,：: ]*)?(?:读一下这个网页|看看当前网页|读当前页面|网页上有什么|网页往下翻|网页往上翻|关闭网页助手|关闭这个网页)[。？?！!]*$")
 _FILL = re.compile(r"^(?:网页助手[，,：: ]*)?(?:在网页的|在页面的)(.{1,50}?)里(?:输入|填入)[「“\"]?(.{1,240}?)[」”\"]?$")

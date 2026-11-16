@@ -65,6 +65,35 @@ def reply(event):
 
 
 @pytest.mark.asyncio
+async def test_combined_life_features_use_the_platform_entry_and_keep_scopes(chat, monkeypatch):
+    from app import astrbot_fridge
+    from app.astrbot_study import Study
+    from app.astrbot_time_capsule import TimeCapsule
+
+    monkeypatch.setattr(Study, "start", lambda self, host: None)
+    monkeypatch.setattr(TimeCapsule, "start", lambda self, host: None)
+    monkeypatch.setattr(astrbot_fridge, "_model", AsyncMock(return_value="两枚鸡蛋可以蒸蛋羹。"))
+    cases = [
+        ("记下钥匙放在玄关抽屉", "玄关"),
+        ("保存项目 小鲸鱼：尾巴还要缝", "小鲸鱼"),
+        ("陪我自习10分钟", "10分钟"),
+        ("冰箱有鸡蛋能做什么", "蒸蛋羹"),
+        ("聚餐AA 小林、小张、我", "小张"),
+        ("建个群时间胶囊 明天20点", "20:00"),
+        ("继续上次的项目", "尾巴还要缝"),
+        ("钥匙放哪了", "玄关抽屉"),
+        ("查看自习状态", "分钟"),
+    ]
+    for number, (text, expected) in enumerate(cases, 6000):
+        result = await chat.post(text, at="99", mid=number)
+        assert result.stopped and expected in reply(result), (text, reply(result))
+        assert not reply(await chat.post(text, at="99", mid=number))
+    assert "没有" in reply(await chat.post("钥匙放哪了", user="other", at="99"))
+    assert not (await chat.post("晚上见", at="99")).stopped
+    await release(chat.plugin)
+
+
+@pytest.mark.asyncio
 async def test_listen_multiple_media_once_and_separate_speakers(chat, monkeypatch):
     vision = AsyncMock(return_value="草图里的两扇窗")
     hearing = AsyncMock(return_value=("靠右边那扇窗", ""))

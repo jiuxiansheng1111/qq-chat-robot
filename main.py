@@ -334,6 +334,8 @@ class QQChatPlugin(Star):
             raise
         self.runtime = runtime
         self._get_companion_turns().start_followups(self)
+        from app.astrbot_turn_features import start_timers
+        start_timers(self, ("study","time_capsule"))
         from app.astrbot_weather_alerts import service_for
         if alerts := service_for(self):
             alerts.start(self)
@@ -1023,6 +1025,12 @@ class QQChatPlugin(Star):
         if self.legacy_chat or self.runtime is None:
             return
         router = self._get_group_router()
+        from app.astrbot_turn_features import quiet_study_event
+        if await quiet_study_event(self,event):
+            event.clear_result()
+            event.stop_event()
+            router.finish_event(event)
+            return
         if not router.in_scope(event) and not router.is_idle_event(event):
             return
         result = event.get_result()
