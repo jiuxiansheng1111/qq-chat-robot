@@ -1,4 +1,8 @@
 class Hooks:
+    async def retry_lookup(self, host, event, mode, name):
+        from .logic import handle
+        return await handle(host, event, command=True, corrected=(mode, name))
+
     async def message(self, host, event):
         from .logic import handle
         return await handle(host, event)

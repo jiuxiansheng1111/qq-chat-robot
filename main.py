@@ -73,6 +73,15 @@ class _QQChatEarlyFilter(filter.CustomFilter):
         return router.prepare_event(event, registered_command_names(event))
 
 
+class _QQConversationFilter(filter.CustomFilter):
+    def filter(self, event, cfg):
+        host = _QQChatEarlyFilter.plugin_ref() if _QQChatEarlyFilter.plugin_ref else None
+        if host is None or host.runtime is None:
+            return False
+        from app.astrbot_turn_features import routes
+        return bool(routes(host, event))
+
+
 class _QQChatMahjongFilter(filter.CustomFilter):
     def filter(self, event: AstrMessageEvent, cfg: Any) -> bool:
         plugin = _QQChatEarlyFilter.plugin_ref() if _QQChatEarlyFilter.plugin_ref else None
@@ -166,6 +175,12 @@ class QQChatPlugin(Star):
 
             self._reply_repair = DirectReplyRepair(self._get_reply_guard())
         return self._reply_repair
+
+    @filter.custom_filter(_QQConversationFilter, priority=1100000)
+    async def conversation_features(self, event: AstrMessageEvent):
+        from app.astrbot_turn_features import handle
+
+        await handle(self, event)
 
     @filter.custom_filter(_QQChatEarlyFilter, priority=1000000)
     async def route_native_group_message(self, event: AstrMessageEvent) -> Any | None:
@@ -404,6 +419,8 @@ class QQChatPlugin(Star):
         self._menu_ready = False
         if self._companion_turns is not None:
             await self._companion_turns.stop_followups()
+        from app.astrbot_turn_features import release
+        await release(self)
         runtime, self.runtime = self.runtime, None
         try:
             restore_task=getattr(self,"_music_restore_task",None)
@@ -598,6 +615,10 @@ class QQChatPlugin(Star):
             self, event, action=action, mode=mode, sort=sort, query=query, deck=deck,
             player_class=player_class, deck_index=deck_index, budget=budget,
         )
+        if action == "card" and result.get("status") in {"ok", "not_found"}:
+            from app.astrbot_turn_features import remember_lookup
+
+            remember_lookup(self, event, "cards", query.strip(), mode=mode)
         return json.dumps(result, ensure_ascii=False)
 
     @filter.llm_tool(name="qqchat_weather")
@@ -1336,6 +1357,10 @@ class QQChatPlugin(Star):
 
         with model_session(getattr(event, "unified_msg_origin", None)):
             result = await self.runtime.handle_event(raw_event, action_call)
+        if result.get("music_query"):
+            from app.astrbot_turn_features import remember_lookup
+
+            remember_lookup(self, event, "music", result["music_query"])
         if result.get("handled"):
             event.should_call_llm(False)
             event.stop_event()

@@ -3299,7 +3299,8 @@ async def _run_music(request, action, key, *, send_text, send_image, send_card, 
     await request.app.state.music_workflow.handle(
         action, key, send_text=send_text, send_image=send_image, send_card=send_card, link_only=link_only,
     )
-    return {"ok": True, "source": "music", "handled": True}
+    return {"ok": True, "source": "music", "handled": True,
+            "music_query": action.query if action.action == "search" else ""}
 
 
 async def _dispatch_private_command(event, request, command):

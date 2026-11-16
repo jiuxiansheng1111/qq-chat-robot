@@ -41,6 +41,12 @@ def card_name_key(value):
     return normalized_name(value).translate(_SEPARATORS)
 
 
+def matches_card_answer(card, answer):
+    key = card_name_key(str(answer).strip(" 《》「」"))
+    return bool(key and (key in {card_name_key(card["name"]), card_name_key(card.get("english_name", ""))}
+                         or card["name"] in _ALIASES.get(key, ())))
+
+
 def _initials(name):
     words = _WORDS.split(name.strip())
     return "".join(w[:1] for w in words).casefold() if len(words) > 1 else ""

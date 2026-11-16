@@ -32,6 +32,15 @@ class InScope(filter.CustomFilter):
         return core._get_group_router().prepare_event(event, registered_command_names(event))
 
 
+class ConversationScope(filter.CustomFilter):
+    def filter(self, event, cfg):
+        host = InScope.current() if InScope.current else None
+        if not host or not host.runtime or host.bundled_active():
+            return False
+        from app.astrbot_turn_features import routes
+        return bool(routes(host, event))
+
+
 class QQChatCorePlugin(HostSupport, Star):
     qqchat_core_api = 1
 
@@ -100,6 +109,8 @@ class QQChatCorePlugin(HostSupport, Star):
 
     async def _release(self, part):
         try:
+            from app.astrbot_turn_features import release
+            await release(self, part.slug)
             hook = getattr(type(part), "stop_part", None)
             if hook:
                 await hook(part, self)
@@ -129,8 +140,10 @@ class QQChatCorePlugin(HostSupport, Star):
         from app.astrbot_runtime import ChatRuntime
         from app.astrbot_chatgpt_provider import register_chatgpt_provider
         from app.astrbot_flash_provider import register_flash_provider
+        from app.astrbot_vision_provider import register_vision_provider
         register_chatgpt_provider()
         register_flash_provider()
+        register_vision_provider()
         runtime = ChatRuntime(project_root=self.root, legacy_chat=False)
         try:
             await runtime.initialize()
@@ -174,6 +187,11 @@ class QQChatCorePlugin(HostSupport, Star):
             if self.runtime:
                 await self.runtime.close()
                 self.runtime = None
+
+    @filter.custom_filter(ConversationScope, priority=1100000)
+    async def conversation_features(self, event: AstrMessageEvent):
+        from app.astrbot_turn_features import handle
+        await handle(self, event)
 
     @filter.custom_filter(InScope, priority=1000000)
     async def on_natural_message(self, event: AstrMessageEvent):

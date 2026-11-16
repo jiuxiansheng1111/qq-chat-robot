@@ -1,4 +1,4 @@
-version = "0.4.0"
+version = "0.5.0"
 
 # Each row produces one AstrBot ZIP. Native methods are copied from the same source
 # as the bundled edition, including their signatures, decorators and tool descriptions.
@@ -73,6 +73,21 @@ title = "翻译"
 description = "翻译指定文本并提供转写或检索别名。"
 batch = 2
 legacy = ["translation"]
+
+[listen_first]
+title = "等我说完"
+description = "分几条发送文字、截图和语音，说完后集中回复；群里按发起人分别收取。"
+batch = 2
+
+[corrections]
+title = "纠正刚才的查询"
+description = "根据本人的上次查卡、点歌或天气查询修正版本、歌手或城市；使用对话中已启用的对应工具。"
+batch = 2
+
+[watchlist]
+title = "无剧透追番"
+description = "按本人明确要求记住作品和集数，用已看集数的分集资料和当前截图讨论。"
+batch = 2
 
 [followups]
 title = "约定回访"
@@ -240,3 +255,8 @@ title = "群聊约局"
 description = "在群里报开黑时间、报名或候补，汇总缺几人和最早开局时间，支持改期和退出。"
 batch = 4
 turns = ["meetups"]
+
+[card_quiz]
+title = "群聊猜炉石卡"
+description = "根据卡画猜卡名或简称，逐步给费用、职业、效果提示，揭晓时翻完整卡面。"
+batch = 4

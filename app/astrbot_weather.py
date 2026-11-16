@@ -45,6 +45,9 @@ async def query(plugin, event, location):
         return {"status": "missing_location"}
     if len(city) > 80 or any(char in city for char in ("\n", ":", "/", "@")):
         return {"status": "invalid_location"}
+    from app.astrbot_turn_features import remember_lookup
+
+    remember_lookup(plugin, event, "weather", city, retry=deliver)
     try:
         async with asyncio.timeout(30):
             report = await fetch_weather(city, plugin.runtime._core.settings)
@@ -70,6 +73,10 @@ async def handle_command(plugin, event):
     city = parse_weather_location(text)
     if city is None:
         return False
+    return await deliver(plugin, event, city)
+
+
+async def deliver(plugin, event, city):
     result = await query(plugin, event, city)
     if result["status"] == "denied":
         return False

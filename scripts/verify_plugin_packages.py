@@ -189,6 +189,69 @@ async def verify(directory, temp):
                 action = ev.bot.api.call_action.await_args
                 assert action.args == ("send_private_msg",) and action.kwargs["user_id"] == ev.get_sender_id()
                 assert "歌名" in str(action.kwargs["message"])
+            elif slug in {"listen_first", "corrections", "watchlist", "card_quiz"}:
+                from app.astrbot_turn_features import get_feature
+                from astrbot_plugin_qqchat_core.main import ConversationScope
+
+                group = slug == "card_quiz"
+                core._get_group_router().config["group_chat_groups"] = ["12345"]
+                text = {"listen_first": "等我说完", "corrections": "放个晴天",
+                        "watchlist": "帮我记一下《星际牛仔》看到第3集了", "card_quiz": "来局猜卡"}[slug]
+                hidden = event(text, group=group)
+                hidden.plugins_name = [PREFIX + "weather"]
+                assert not ConversationScope().filter(hidden, {})
+                await core.conversation_features(hidden)
+                hidden.send.assert_not_awaited()
+                ev = event(text, group=group)
+                assert ConversationScope().filter(ev, {})
+                if slug == "card_quiz":
+                    card = {"name": "洛欧塞布", "mana": 5, "class": "Neutral", "effect": "法术费用增加"}
+                    with patch.object(get_feature(core, slug), "draw", AsyncMock(return_value=(card, b"full", b"art"))):
+                        await core.conversation_features(ev)
+                    assert len(ev.send.await_args.args[0].chain) == 2
+                    last = event("我猜塞布", group=True)
+                else:
+                    await core.conversation_features(ev)
+                    if slug == "corrections":
+                        assert not ev.is_stopped()
+                    else:
+                        assert ev.is_stopped() and ev.send.await_count == 1
+                    last = event({"listen_first": "这段算了", "corrections": "周杰伦那首", "watchlist": "我的追番进度"}[slug])
+                await core.conversation_features(last)
+                assert last.is_stopped() and last.send.await_count == 1
+                expected = {"listen_first": "放下", "corrections": "还没启用点歌", "watchlist": "第 3 集", "card_quiz": "猜中了"}
+                assert expected[slug] in last.send.await_args.args[0].chain[0].text
+                if slug == "corrections":
+                    music = load("music")
+                    await music.initialize()
+                    await core.conversation_features(event("放个晴天", group=True))
+                    receive = AsyncMock(side_effect=lambda raw, send: {"handled": True, "music_query": raw["raw_message"].removeprefix("/点歌 ")})
+                    with patch.object(core.runtime, "handle_event", receive):
+                        for singer in ("周杰伦", "王菲"):
+                            correction = event(singer + "那首", group=True)
+                            await core.conversation_features(correction)
+                            assert correction.is_stopped() and receive.await_args.args[0]["raw_message"] == "/点歌 晴天 " + singer
+                    await music.terminate()
+                    ctx.stars.pop(PREFIX + "music")
+                    with patch(PREFIX + "weather.logic.fetch_weather", AsyncMock(return_value=report)) as fetch:
+                        await core.on_natural_message(event("深圳今天天气怎么样"))
+                        corrected = event("不是深圳，是苏州")
+                        await core.conversation_features(corrected)
+                        assert corrected.is_stopped() and [c.args[0] for c in fetch.await_args_list] == ["深圳", "苏州"]
+                    card_part, deck_part = load("cards"), load("hearthstone")
+                    await card_part.initialize()
+                    await deck_part.initialize()
+                    seen = AsyncMock(return_value={"status": "ok", "cards": [
+                        {"name": "测试卡", "mana": 2, "effect": "抽一张牌", "set": "旧版系列", "wild": True, "standard": False}]})
+                    with patch("app.astrbot_hearthstone.query", seen), patch(PREFIX + "cards.logic.query", seen):
+                        await deck_part.qqchat_hearthstone(event("测试卡的效果呢"), action="card", query="测试卡")
+                        corrected = event("我说的是狂野那张")
+                        await core.conversation_features(corrected)
+                        assert "旧版系列" in corrected.send.await_args.args[0].chain[0].text
+                        assert seen.await_args.kwargs == {"action": "card", "mode": "wild", "query": "测试卡"}
+                    for extra in (card_part, deck_part):
+                        await extra.terminate()
+                        ctx.stars.pop(PREFIX + extra.slug)
             elif slug in {"meetups", "followups"}:
                 core._get_group_router().config["group_chat_groups"] = ["12345"]
                 text = "周六打雀魂，差一个" if slug == "meetups" else "我明天下午面试"

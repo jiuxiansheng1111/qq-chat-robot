@@ -103,10 +103,22 @@ async def _show_card(plugin, event, card):
     return True
 
 
-async def _search(plugin, event, state, mode, name):
+async def _retry(plugin, event, mode, name):
+    return await handle(plugin, event, command=True, corrected=(mode, name))
+
+
+async def _search(plugin, event, state, mode, name, *, corrected=False):
     state.cards = []
     state.expires = 0
     result = await query(plugin, event, action="card", mode=mode, query=name)
+    if result.get("status") in {"ok", "not_found"}:
+        from app.astrbot_turn_features import remember_lookup
+
+        remember_lookup(plugin, event, "cards", name, mode=mode, retry=_retry)
+    if corrected and mode == "wild":
+        rotated = [c for c in result.get("cards", []) if c.get("wild") and not c.get("standard")]
+        if rotated:
+            result = {**result, "cards": rotated, "total": len(rotated)}
     if result["status"] == "ok" and result.get("cards"):
         await event.send(event.plain_result(_previews(result)))
         state.cards = result["cards"]
@@ -146,13 +158,13 @@ async def _confirm(plugin, event, state, pick):
         state.expires = time.monotonic() + _TTL
 
 
-async def handle(plugin, event, *, command=False):
+async def handle(plugin, event, *, command=False, corrected=None):
     if not is_qq(event) or plugin.runtime is None or getattr(event, "is_stopped", lambda: False)():
         return False
     text, addressed = _addressed_text(event)
     if not text:
         return False
-    lookup = parse_card_lookup(text)
+    lookup = corrected or parse_card_lookup(text)
     pick = None if lookup is not None else _choice(text)
     if lookup is None and pick is None:
         return False
@@ -190,7 +202,7 @@ async def handle(plugin, event, *, command=False):
             state = sessions[key] = CardChoices()
         async with state.lock:
             if lookup is not None:
-                await _search(plugin, event, state, *lookup)
+                await _search(plugin, event, state, *lookup, corrected=corrected is not None)
             else:
                 await _confirm(plugin, event, state, pick)
         return True
