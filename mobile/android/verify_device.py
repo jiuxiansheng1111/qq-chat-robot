@@ -98,5 +98,9 @@ if __name__=="__main__":
         try:
             print("Android foreground window:",next((s for s in adb("shell","dumpsys","window").splitlines() if "mCurrentFocus" in s),""),flush=True)
             print("Android application crash:",adb("logcat","-d","-b","crash")[-2600:],flush=True)
+            print("Boot signals:",adb("logcat","-d","-s","DaFeiYuBoot:I","*:S")[-800:],flush=True)
+            print("Android user:",adb("shell","cmd","user","is-user-unlocked","0").strip(),flush=True)
+            print("App state:",[s.strip() for s in adb("shell","dumpsys","package",PACKAGE).splitlines() if "stopped=" in s][:1],flush=True)
+            print("Broadcast diagnostics:",[s.strip()[:240] for s in adb("shell","dumpsys","activity","broadcasts").splitlines() if PACKAGE in s][-12:],flush=True)
         finally:
             raise

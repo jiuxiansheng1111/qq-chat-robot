@@ -3,6 +3,8 @@ package cn.dafeiyu.agent;
 import android.app.*;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.BroadcastReceiver;
 import android.os.*;
 import java.io.IOException;
 import java.util.concurrent.ExecutorService;
@@ -18,13 +20,16 @@ public final class AgentService extends Service {
     private Settings settings;
     private Agent agent;
     private boolean busy;
+    private boolean waitingForUnlock;
     private int latestStart;
+    private final BroadcastReceiver unlocked=new BroadcastReceiver() {
+        public void onReceive(Context context,Intent intent) { if(Intent.ACTION_USER_UNLOCKED.equals(intent.getAction())) start(context); }
+    };
     static void start(Context context) {
         context.startForegroundService(new Intent(context,AgentService.class));
     }
     public void onCreate() {
         super.onCreate();
-        turns=Turns.get(this); settings=new Settings(this); agent=new Agent(this);
         NotificationManager nm=getSystemService(NotificationManager.class);
         nm.createNotificationChannel(new NotificationChannel(CHANNEL,"大肥鱼手机助手",NotificationManager.IMPORTANCE_LOW));
     }
@@ -41,6 +46,17 @@ public final class AgentService extends Service {
     }
     public int onStartCommand(Intent intent,int flags,int startId) {
         latestStart=startId;
+        if(!getSystemService(UserManager.class).isUserUnlocked()) {
+            startForeground(41,notice("解锁手机后即可聊天"));
+            if(!waitingForUnlock) {
+                if(Build.VERSION.SDK_INT>=33) registerReceiver(unlocked,new IntentFilter(Intent.ACTION_USER_UNLOCKED),Context.RECEIVER_NOT_EXPORTED);
+                else registerReceiver(unlocked,new IntentFilter(Intent.ACTION_USER_UNLOCKED));
+                waitingForUnlock=true;
+            }
+            return START_STICKY;
+        }
+        if(waitingForUnlock) { unregisterReceiver(unlocked); waitingForUnlock=false; }
+        if(turns==null) { turns=Turns.get(this); settings=new Settings(this); agent=new Agent(this); }
         startForeground(41,notice("手机助手已就绪"));
         if(intent!=null && DIRECT.equals(intent.getAction())) {
             Bundle input=RemoteInput.getResultsFromIntent(intent);
@@ -59,7 +75,11 @@ public final class AgentService extends Service {
             try {
                 turns.finish(t.id,agent.answer(t),true);
             } catch(Exception e) {
-                String error=e instanceof IOException && e.getMessage()!=null?e.getMessage():"未取得有效回复，请检查网络与模型设置后重试。";
+                String error;
+                if(e instanceof java.net.SocketTimeoutException) error="手机等候服务回复超时，网络恢复后可以点重试。";
+                else if(e instanceof java.net.UnknownHostException || e instanceof java.net.ConnectException)
+                    error="手机连不上服务，请检查手机网络和模型地址，再点重试。";
+                else error=e instanceof IOException && e.getMessage()!=null?e.getMessage():"未取得有效回复，请检查网络与模型设置后重试。";
                 turns.finish(t.id,Agent.clip(error,500),false);
             } finally { if(wake.isHeld()) wake.release(); }
             changed();
@@ -71,6 +91,6 @@ public final class AgentService extends Service {
             else { stopForeground(STOP_FOREGROUND_REMOVE); stopSelfResult(latestStart); }
         });
     }
-    public void onDestroy() { worker.shutdown(); super.onDestroy(); }
+    public void onDestroy() { if(waitingForUnlock) unregisterReceiver(unlocked); worker.shutdown(); super.onDestroy(); }
     public IBinder onBind(Intent intent) { return null; }
 }

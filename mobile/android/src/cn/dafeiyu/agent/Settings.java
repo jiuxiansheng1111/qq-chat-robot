@@ -23,13 +23,24 @@ final class Settings {
         {"自定义接口","","","chat"}
     };
     final SharedPreferences prefs;
-    Settings(Context context) { prefs = context.getSharedPreferences("agent", Context.MODE_PRIVATE); }
+    private final Context context;
+    Settings(Context context) {
+        this.context=context.getApplicationContext();
+        prefs=context.getSharedPreferences("agent", Context.MODE_PRIVATE);
+        SharedPreferences startup=startupPrefs(context);
+        if(!startup.contains("running") && prefs.contains("running")) setRunning(prefs.getBoolean("running",false));
+    }
     int service() { return prefs.getInt("service", 0); }
     String base() { return prefs.getString("base", SERVICES[0][1]); }
     String model() { return prefs.getString("model", SERVICES[0][2]); }
     String protocol() { return prefs.getString("protocol", SERVICES[0][3]); }
     boolean configured() { return prefs.getBoolean("configured", false); }
-    boolean running() { return prefs.getBoolean("running", false); }
+    private static SharedPreferences startupPrefs(Context ctx) {
+        return ctx.createDeviceProtectedStorageContext().getSharedPreferences("startup",Context.MODE_PRIVATE);
+    }
+    static boolean startAtBoot(Context ctx) { return startupPrefs(ctx).getBoolean("running",false); }
+    boolean running() { return startAtBoot(context); }
+    void setRunning(boolean enabled) { startupPrefs(context).edit().putBoolean("running",enabled).commit(); }
     boolean local() { return localHost(URI.create(base()).getHost()); }
     private static boolean localHost(String host) { return "127.0.0.1".equals(host) || "localhost".equalsIgnoreCase(host); }
     private SecretKey vaultKey() throws Exception {

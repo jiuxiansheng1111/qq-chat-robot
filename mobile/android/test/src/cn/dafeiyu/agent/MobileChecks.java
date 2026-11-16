@@ -61,21 +61,35 @@ public final class MobileChecks extends Instrumentation {
                     AtomicReference<Throwable> failure=new AtomicReference<>();
                     Thread fixture=new Thread(()->{
                         try {
-                            for(int n=0;n<2;n++) try(Socket socket=server.accept()) {
+                            String[] paths={"/v1/chat/completions","/v1/chat/completions","/v1/responses","/v1/messages"};
+                            for(int n=0;n<paths.length;n++) try(Socket socket=server.accept()) {
                                 InputStream input=new BufferedInputStream(socket.getInputStream());
-                                check(line(input).startsWith("POST /v1/chat/completions "),"模型路径");
-                                int length=0; String h; boolean authenticated=false;
+                                check(line(input).startsWith("POST "+paths[n]+" "),"模型路径");
+                                int length=0; String h; boolean authenticated=false,version=false;
                                 while(!(h=line(input)).isEmpty()) {
                                     if(h.toLowerCase(Locale.ROOT).startsWith("content-length:")) length=Integer.parseInt(h.substring(h.indexOf(':')+1).trim());
-                                    if(h.equalsIgnoreCase("Authorization: Bearer mobile-fixture")) authenticated=true;
+                                    String auth=n==3?"x-api-key: mobile-fixture":"Authorization: Bearer mobile-fixture";
+                                    if(h.equalsIgnoreCase(auth)) authenticated=true;
+                                    if(h.equalsIgnoreCase("anthropic-version: 2023-06-01")) version=true;
                                 }
                                 check(authenticated && length>0,"手机没有自行构造模型请求");
                                 byte[] bytes=new byte[length]; new DataInputStream(input).readFully(bytes);
-                                JSONArray msgs=new JSONObject(new String(bytes,StandardCharsets.UTF_8)).getJSONArray("messages");
+                                JSONObject body=new JSONObject(new String(bytes,StandardCharsets.UTF_8));
+                                JSONArray msgs=body.getJSONArray(n==2?"input":"messages");
                                 if(n==1) check(msgs.toString().contains("记住小鲸鱼") && msgs.toString().contains("记住了"),"历史对话没有发送");
-                                String reply=n==0?"记住了":"记得小鲸鱼";
-                                byte[] out=new JSONObject().put("choices",new JSONArray().put(new JSONObject()
-                                    .put("message",new JSONObject().put("content",reply)))).toString().getBytes(StandardCharsets.UTF_8);
+                                JSONObject wire;
+                                if(n==2) {
+                                    check(!body.getBoolean("store") && body.has("instructions"),"Responses 参数");
+                                    wire=new JSONObject().put("output",new JSONArray().put(new JSONObject().put("type","message").put("content",
+                                        new JSONArray().put(new JSONObject().put("type","output_text").put("text","海风")))));
+                                } else if(n==3) {
+                                    check(version && body.has("system") && body.getInt("max_tokens")>0,"Messages 参数");
+                                    wire=new JSONObject().put("content",new JSONArray().put(new JSONObject().put("type","text").put("text","潮汐")));
+                                } else {
+                                    wire=new JSONObject().put("choices",new JSONArray().put(new JSONObject()
+                                        .put("message",new JSONObject().put("content",n==0?"记住了":"记得小鲸鱼"))));
+                                }
+                                byte[] out=wire.toString().getBytes(StandardCharsets.UTF_8);
                                 OutputStream sink=socket.getOutputStream(); sink.write(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "+out.length+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
                                 sink.write(out); sink.flush();
                             }
@@ -83,11 +97,15 @@ public final class MobileChecks extends Instrumentation {
                     });
                     fixture.start();
                     cfg.save(6,"http://127.0.0.1:"+server.getLocalPort()+"/v1","phone-test","chat","mobile-fixture");
-                    cfg.prefs.edit().putBoolean("running",true).commit();
+                    cfg.setRunning(true);
                     Activity screen=startActivitySync(new Intent().setClassName(ctx,"cn.dafeiyu.agent.MainActivity").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
                     send(screen,"记住小鲸鱼"); check("记住了".equals(await(store,"记住小鲸鱼").answer),"第一轮手机对话");
                     send(screen,"我刚才说了什么"); check("记得小鲸鱼".equals(await(store,"我刚才说了什么").answer),"第二轮手机对话");
-                    fixture.join(2000); check(failure.get()==null && !fixture.isAlive(),"手机模型服务未收到两轮请求");
+                    cfg.save(6,cfg.base(),"phone-test","responses","mobile-fixture");
+                    send(screen,"说说海风"); check("海风".equals(await(store,"说说海风").answer),"Responses 文字对话");
+                    cfg.save(6,cfg.base(),"phone-test","messages","mobile-fixture");
+                    send(screen,"说说潮汐"); check("潮汐".equals(await(store,"说说潮汐").answer),"Messages 文字对话");
+                    fixture.join(2000); check(failure.get()==null && !fixture.isAlive(),"手机模型服务没有收到完整请求");
                 }
             }
             report.putString("stream","\nMOBILE_PASS "+phase+"\n"); result=Activity.RESULT_OK;

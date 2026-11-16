@@ -99,6 +99,17 @@ public final class MainActivity extends Activity {
     }
     void bubble(String text,boolean user) {
         TextView t=label(text,16); pad(t,13,10); t.setTextIsSelectable(true); t.setLineSpacing(dp(2),1);
+        if(!user) {
+            java.util.regex.Matcher bold=java.util.regex.Pattern.compile("\\*\\*([^*\\n]+?)\\*\\*").matcher(text);
+            android.text.SpannableStringBuilder styled=new android.text.SpannableStringBuilder(); int from=0;
+            while(bold.find()) {
+                styled.append(text,from,bold.start());
+                int start=styled.length(); styled.append(bold.group(1));
+                styled.setSpan(new android.text.style.StyleSpan(Typeface.BOLD),start,styled.length(),android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                from=bold.end();
+            }
+            t.setText(styled.append(text,from,text.length()));
+        }
         Linkify.addLinks(t,Linkify.WEB_URLS); t.setLinkTextColor(ocean);
         t.setBackground(surface(user?Color.rgb(210,235,242):Color.WHITE,15));
         LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-2,-2); lp.gravity=user?Gravity.END:Gravity.START;
@@ -150,7 +161,7 @@ public final class MainActivity extends Activity {
         });
         Switch background=new Switch(this); background.setText("允许后台运行和开机恢复"); background.setChecked(config.running()); pad(background,0,10); box.addView(background);
         background.setOnCheckedChangeListener((b,checked)->{
-            config.prefs.edit().putBoolean("running",checked).apply();
+            config.setRunning(checked);
             if(checked && Build.VERSION.SDK_INT>=33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)
                 requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},42);
             AgentService.start(this); render();
