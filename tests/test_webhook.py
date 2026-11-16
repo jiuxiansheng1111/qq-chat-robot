@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -1542,16 +1543,21 @@ async def test_ultraman_image_resolution_has_deadline_and_rejects_unverified_pla
     tmp_path,
 ):
     hero = type("Hero", (), {"name": "测试形态"})()
-    previous_cache_dir = settings.ultraman_image_cache_dir
-    previous_timeout = settings.ultraman_image_resolve_timeout_seconds
-    settings.ultraman_image_cache_dir = str(tmp_path / "ultra-cache-timeout")
-    settings.ultraman_image_resolve_timeout_seconds = 0.05
+    monkeypatch.setattr(settings, "ultraman_image_cache_dir", str(tmp_path / "ultra-cache-timeout"))
+    monkeypatch.setattr(settings, "ultraman_image_resolve_timeout_seconds", 0.05)
+    monkeypatch.setattr("app.main.direct_ultraman_form_image", AsyncMock(return_value=None))
+    monkeypatch.setattr("app.main.ultraman_image_aliases", lambda hero: (hero.name,))
+    cancelled = 0
 
     async def slow(*args, **kwargs):
-        await __import__("asyncio").sleep(0.3)
-        raise RuntimeError("too slow")
+        nonlocal cancelled
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            cancelled += 1
+            raise
 
-    for name in (
+    fast_sources = (
         "official_ultraman_image",
         "official_ultraman_search_image",
         "baidu_baike_ultraman_image",
@@ -1560,17 +1566,25 @@ async def test_ultraman_image_resolution_has_deadline_and_rejects_unverified_pla
         "bing_image_search_ultraman_image",
         "official_merch_ultraman_image",
         "web_page_ultraman_image",
-        "bing_image_relaxed_ultraman_image",
-    ):
+    )
+    for name in fast_sources:
         monkeypatch.setattr(f"app.main.{name}", slow)
-    monkeypatch.setattr("app.main.ultraman_image_aliases", lambda hero: (hero.name,))
 
-    try:
-        with pytest.raises(RuntimeError, match="没有找到.*可显示真实图片"):
-            await resolve_ultraman_card_image(hero)
-    finally:
-        settings.ultraman_image_cache_dir = previous_cache_dir
-        settings.ultraman_image_resolve_timeout_seconds = previous_timeout
+    output = BytesIO()
+    Image.new("RGB", (1, 1)).save(output, format="PNG")
+    placeholder = EncyclopediaImage(
+        data="base64://" + base64.b64encode(output.getvalue()).decode(),
+        source="测试图片来源", page_url="https://example.invalid/hero", label=hero.name,
+    )
+    fallback = AsyncMock(return_value=placeholder)
+    fallback_sources = ("moegirl_ultraman_image", "bing_image_relaxed_ultraman_image", "search_engine_first_ultraman_image")
+    for name in fallback_sources:
+        monkeypatch.setattr(f"app.main.{name}", fallback)
+
+    with pytest.raises(RuntimeError, match="没有找到.*可显示真实图片"):
+        await asyncio.wait_for(resolve_ultraman_card_image(hero), timeout=3)
+    assert cancelled == len(fast_sources)
+    assert fallback.await_count == len(fallback_sources)
 
 
 
