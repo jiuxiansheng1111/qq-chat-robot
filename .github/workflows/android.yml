@@ -18,7 +18,9 @@ jobs:
           java-version: '17'
       - name: Build app and on-device tests
         run: |
-          sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+          if [[ ! -f "$ANDROID_HOME/platforms/android-35/android.jar" || ! -x "$ANDROID_HOME/build-tools/35.0.0/aapt2" ]]; then
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-35' 'build-tools;35.0.0'
+          fi
           python mobile/android/build.py --output data/mobile-build/ci.apk
           python mobile/android/build.py --test --output data/mobile-build/tests.apk
       - name: Enable Android emulator acceleration
