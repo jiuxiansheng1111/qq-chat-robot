@@ -81,6 +81,22 @@ def test_local_web_panel_isolates_tabs_and_releases_browser_on_shutdown(hub, mon
 
 
 @pytest.mark.asyncio
+async def test_mobile_health_requires_real_adapter_identity_and_online_status(hub):
+    assert await hub.qq_health()=={"state":"not_configured"}
+    hub.settings.onebot_self_id="99"
+    api = SimpleNamespace(call_action=AsyncMock(side_effect=[{"user_id":99},{"online":True,"good":True}]))
+    context = SimpleNamespace(get_config=lambda:{"platform":[{"id":"qq","type":"aiocqhttp","enable":True}]},
+                              get_platform_inst=lambda pid:SimpleNamespace(get_client=lambda:SimpleNamespace(api=api)))
+    hub.brain.context=context
+    assert await hub.qq_health()=={"state":"online"}
+    assert [call.args[0] for call in api.call_action.await_args_list]==["get_login_info","get_status"]
+    api.call_action.side_effect=[{"user_id":98}]
+    assert await hub.qq_health()=={"state":"disconnected"}
+    api.call_action.side_effect=[{"user_id":99},{"online":False,"good":True}]
+    assert await hub.qq_health()=={"state":"disconnected"}
+
+
+@pytest.mark.asyncio
 async def test_device_login_cancels_or_finishes_without_joining_a_server(hub):
     if not shutil.which("node"):
         pytest.skip("Node is required for device login")

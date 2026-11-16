@@ -30,6 +30,7 @@ OWNED = {
     "home_control": ("app/astrbot_home_control.py",),
     "web_assistant": ("app/astrbot_web_assistant.py",),
     "desktop_control": ("app/astrbot_desktop_control.py",),
+    "phone_control": ("app/astrbot_phone_control.py",),
     "item_finder": ("app/astrbot_item_finder.py",),
     "project_resume": ("app/astrbot_project_resume.py",),
     "fridge": ("app/astrbot_fridge.py",),

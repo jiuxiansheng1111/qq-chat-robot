@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from app.chatgpt_subscription import DEFAULT_MODEL, ChatGPTSubscription, SubscriptionError
 from app.config import Settings
 from app.services import game_clients
-from app.services.chat_brain import BrainError, ChatBrain
+from app.services.chat_brain import WEB_SESSION, BrainError, ChatBrain
 from app.services.home_devices import DeviceError, HomeDevices
 from app.services.local_listener import LocalListener
 from app.services.mahjong.majsoul_client import MajsoulError
@@ -291,6 +291,26 @@ class AccountHub:
         return {key: value if isinstance(value, dict) else {"state": "unavailable"}
                 for key, value in zip((*sources, "netease"), results)}
 
+    async def qq_health(self):
+        context = self.brain.context
+        configured = [p["id"] for p in (context.get_config().get("platform",[]) if context else [])
+                      if p.get("enable") and p.get("id") and p.get("type") in {"aiocqhttp","onebot","onebot_v11"}]
+        if not configured: return {"state":"not_configured"}
+        async def connected(pid):
+            try:
+                async with asyncio.timeout(4):
+                    api = context.get_platform_inst(pid).get_client().api
+                    expected = self.settings.onebot_self_id
+                    login = await api.call_action("get_login_info",**({"self_id":expected} if expected else {}))
+                    actual = str(login.get("user_id") or "")
+                    if not actual or expected and actual!=expected: return False
+                    status = await api.call_action("get_status",self_id=actual)
+                    return status.get("online") is True and status.get("good") is not False
+            except Exception:  # noqa: BLE001 -- optional adapters report different errors; return only connection state
+                return False
+        online = any(await asyncio.gather(*(connected(pid) for pid in configured)))
+        return {"state":"online" if online else "disconnected"}
+
     async def update(self, service, action, data):
         if service == "web" and action == "command":
             session = data.get("session")
@@ -308,7 +328,12 @@ class AccountHub:
             text = text.strip()
             if text.lower().startswith(("https://", "http://")):
                 text = "打开网页 " + text
-            reply = await self.web.command(session, text)
+            async def brain():
+                if self.brain.context is None: return None
+                active = self.brain.status()["active"]
+                if active: return self.brain.context.get_provider_by_id(active)
+                return await self.brain.context.get_using_provider_async(WEB_SESSION)
+            reply = await self.web.command(session, text,brain=brain)
             if reply is None:
                 raise AccountActionError("发一个网址，或告诉我该点哪个按钮、填写哪个输入框。")
             return {"text": reply}
@@ -393,6 +418,10 @@ def account_routes(root: Path, hub, csrf):
     @router.get("/api/home")
     async def home():
         return hub.home.status()
+
+    @router.get("/api/qq-health")
+    async def qq_health():
+        return await hub.qq_health()
 
     @router.post("/api/accounts/{service}/{action}")
     async def update(service: str, action: str, request: Request):

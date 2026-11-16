@@ -84,13 +84,46 @@ temporary.replace(target)
 print("已登记可通过 QQ 私聊操作本机的主人。")
 PY
     ;;
+  phone)
+    pkg install -y termux-api
+    proot-distro login "$container" --env "QQCHAT_TERMUX_BIN=$PREFIX/bin" -- /bin/bash -c 'cd /root/qq-chatrobot && exec /root/dafeiyu-venv/bin/python -' <<'PHONE'
+from app.astrbot_phone_control import termux_action
+answer = termux_action("battery")
+print(answer)
+raise SystemExit(0 if "%" in answer else 1)
+PHONE
+    ;;
+  onebot|pairing)
+    if [ "$mode" = pairing ]; then
+      set -- --show-token
+    else
+      set -- --address "${2:-127.0.0.1}"
+      mkdir -p "$HOME/.local/state/dafeiyu"
+      exec 8>"$HOME/.local/state/dafeiyu/instance.lock"
+      flock -n 8 || { printf '%s\n' '手机上的 AstrBot 正在运行，请在其面板修改连接，或先关闭手机实例。' >&2; exit 1; }
+    fi
+    proot-distro login "$container" -- /bin/bash -c 'cd /root/qq-chatrobot && exec /root/dafeiyu-venv/bin/python -m scripts.configure_mobile_qq data/astrbot/instance/data/cmd_config.json "$@"' mobile "$@"
+    ;;
   run)
-    command -v termux-wake-lock >/dev/null && termux-wake-lock
-    exec proot-distro login "$container" -- /bin/bash -c 'cd /root/qq-chatrobot/data/astrbot/instance && ASTRBOT_ROOT="$PWD" exec /root/dafeiyu-venv/bin/astrbot run'
+    mkdir -p "$HOME/.local/state/dafeiyu"
+    exec 8>"$HOME/.local/state/dafeiyu/instance.lock"
+    if ! flock -n 8; then
+      printf '%s\n' '这台手机上已经有一个大肥鱼实例在运行。' >&2
+      exit 1
+    fi
+    if command -v termux-wake-lock >/dev/null; then
+      termux-wake-lock || printf '%s\n' '系统未接受保持唤醒请求，请检查后台运行权限。' >&2
+    fi
+    exec proot-distro login "$container" --env "QQCHAT_TERMUX_BIN=$PREFIX/bin" -- /bin/bash -c 'cd /root/qq-chatrobot/data/astrbot/instance && ASTRBOT_ROOT="$PWD" exec /root/dafeiyu-venv/bin/astrbot run'
+    ;;
+  password)
+    exec proot-distro login "$container" -- /bin/bash -c 'cd /root/qq-chatrobot/data/astrbot/instance && ASTRBOT_ROOT="$PWD" exec /root/dafeiyu-venv/bin/astrbot password --username admin'
     ;;
   enable-boot)
     mkdir -p "$HOME/.termux/boot" "$HOME/.local/bin"
-    cp "$0" "$HOME/.local/bin/dafeiyu-termux"
+    if [ ! "$0" -ef "$HOME/.local/bin/dafeiyu-termux" ]; then
+      cp "$0" "$HOME/.local/bin/dafeiyu-termux"
+    fi
     chmod 700 "$HOME/.local/bin/dafeiyu-termux"
     cat > "$boot_file" <<'BOOT'
 #!/data/data/com.termux/files/usr/bin/bash
@@ -106,10 +139,16 @@ BOOT
     chmod 700 "$boot_file"
     ;;
   status)
-    curl --silent --show-error --fail --max-time 4 --output /dev/null http://127.0.0.1:6185/
+    curl --noproxy 127.0.0.1 --silent --show-error --fail --max-time 4 --output /dev/null http://127.0.0.1:6185/
     printf '%s\n' '手机本机的 AstrBot 网页已有响应。'
-    curl --silent --show-error --fail --max-time 4 --output /dev/null http://127.0.0.1:6190/accounts
+    curl --noproxy 127.0.0.1 --silent --show-error --fail --max-time 4 --output /dev/null http://127.0.0.1:6190/accounts
     printf '%s\n' '大肥鱼的账号页和网页助手入口已有响应。'
+    connection=$(curl --noproxy 127.0.0.1 --silent --show-error --fail --max-time 10 http://127.0.0.1:6190/api/qq-health)
+    case "$connection" in
+      *'"state":"online"'*) printf '%s\n' 'QQ 已通过反向连接回报在线。' ;;
+      *'"state":"not_configured"'*) printf '%s\n' '这个实例尚未配置 QQ。' ;;
+      *) printf '%s\n' 'QQ 暂未回报在线，请检查 OneBot 连接。' >&2; exit 1 ;;
+    esac
     ;;
-  *) printf '%s\n' '用法：bash termux-dafeiyu.sh prepare|browser|owner QQ号|run|enable-boot|status' >&2; exit 2 ;;
+  *) printf '%s\n' '用法：bash termux-dafeiyu.sh prepare|password|browser|owner QQ号|phone|onebot 私网地址|pairing|run|enable-boot|status' >&2; exit 2 ;;
 esac

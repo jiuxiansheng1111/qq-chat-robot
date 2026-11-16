@@ -29,6 +29,7 @@
 | 插件 | 功能 | 安装包 |
 | --- | --- | --- |
 | 网页助手 | 主人私聊打开网页、浏览文字、点击链接与填写搜索框。也能从手机本机账号页操作。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_web_assistant.zip) |
+| 安卓手机助手 | 查看机器人所在手机的电量和充电状态，控制振动或手电筒。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_phone_control.zip) |
 | 安静自习 | 计时、暂停、继续和到点提醒。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_study.zip) |
 | 冰箱食材搭配 | 读食材和真实照片，按可用时间配菜。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_fridge.zip) |
 | 用照片找物品 | 按会话找回自己的物品位置和照片。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_item_finder.zip) |

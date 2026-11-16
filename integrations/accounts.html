@@ -54,14 +54,17 @@
       <div class="actions"><a class="action" href="/">管理雀魂账号</a></div>
     </article>
   </div></section>
-  <section aria-labelledby="brain-title"><h2 id="brain-title">QQ 聊天大脑</h2>
+  <section aria-labelledby="brain-title"><h2 id="brain-title">聊天和网页助手的模型</h2>
     <article><p id="brain-current" aria-live="polite">正在读取当前模型…</p>
+      <div class="actions"><button id="qq-check" type="button">检查 QQ 连接</button><span id="qq-status" role="status"></span></div>
       <form id="brain-form">
         <label for="brain-service">模型服务或已保存的模型</label><select id="brain-service" required></select>
         <fieldset id="brain-fields" hidden><legend>连接设置</legend>
           <label for="brain-base">接口基础地址</label><input id="brain-base" type="url" maxlength="700" autocomplete="off" spellcheck="false">
           <label for="brain-protocol">接口协议</label><select id="brain-protocol"><option value="chat">Chat Completions</option><option value="responses">OpenAI Responses</option><option value="messages">Anthropic Messages</option></select>
           <label for="brain-model">模型名</label><input id="brain-model" list="brain-models" maxlength="200" autocomplete="off" spellcheck="false"><datalist id="brain-models"></datalist>
+          <label for="brain-mode">模型能力</label><select id="brain-mode"><option value="auto">默认（Ollama 自动检测）</option><option value="text">纯文字</option><option value="tools">文字和工具</option><option value="image">文字和看图</option><option value="image_tools">文字、看图和工具</option></select>
+          <label for="brain-context">上下文长度（可选）</label><input id="brain-context" type="number" min="1" max="2147483647" step="1" placeholder="留空自动读取模型信息">
           <button id="brain-discover" type="button" hidden>读取已安装的 Ollama 模型</button>
           <label for="brain-key">API 密钥</label><input id="brain-key" type="password" maxlength="2048" autocomplete="off">
           <small id="brain-hint"></small>
@@ -76,7 +79,8 @@
       <input id="web-command" maxlength="1600" placeholder="输入网址，或说「点击详情」「在网页的搜索框里输入鲸鱼」" autocomplete="off">
       <div class="actions"><button class="primary" type="submit" value="">执行</button>
         <button type="submit" value="网页往上翻">上一屏</button><button type="submit" value="网页往下翻">下一屏</button>
-        <button type="submit" value="读当前页面">重读</button><button type="submit" value="关闭这个网页">关闭网页</button></div>
+        <button type="submit" value="读当前页面">重读</button><button type="submit" value="总结当前网页">总结本页</button>
+        <button type="submit" value="关闭这个网页">关闭网页</button></div>
       <output id="web-result" aria-live="polite"></output></form>
   </article></section>
   <section aria-labelledby="home-title"><h2 id="home-title">家里的设备</h2><article>
@@ -207,6 +211,17 @@
     event.preventDefault(); act(event.submitter, 'steam','bind',{account:$('steam-id').value});
   });
   $('refresh').addEventListener('click', refresh);
+  $('qq-check').addEventListener('click', async event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      const response = await fetch('/api/qq-health');
+      if (!response.ok) throw Error();
+      const data = await response.json();
+      $('qq-status').textContent = {online:'QQ 已回报在线。',not_configured:'还没有启用 QQ 连接。',disconnected:'QQ 暂未通过反向连接回报在线。'}[data.state];
+    } catch { $('qq-status').textContent = '这次没有取得 QQ 回报。'; }
+    finally { button.disabled = false; }
+  });
   const webSession = crypto.randomUUID();
   $('web-form').addEventListener('submit', async event => {
     event.preventDefault();
@@ -231,6 +246,8 @@
     fields.hidden = fields.disabled = preset.id === 'luna';
     $('brain-base').value = saved?.base || preset.base;
     $('brain-model').value = saved?.model || '';
+    $('brain-mode').value = saved?.mode || 'auto';
+    $('brain-context').value = saved?.context || '';
     $('brain-model').required = $('brain-base').required = !fields.disabled;
     $('brain-protocol').value = saved?.protocol || preset.protocol || 'chat';
     $('brain-key').value = '';
@@ -256,9 +273,10 @@
     const button = event.currentTarget;
     button.disabled = true;
     try {
-      const result = await request('brain','models',{base:$('brain-base').value});
+      const result = await request('brain','models',{base:$('brain-base').value, saved:$('brain-service').value, key:$('brain-key').value});
       $('brain-models').replaceChildren(...result.models.map(name => new Option(name, name)));
       $('brain-feedback').textContent = result.models.length ? '可选模型 · ' + result.models.join('，') : 'Ollama 没有列出已安装的模型。';
+      if (result.unavailable?.length) $('brain-feedback').textContent += '。Ollama 找不到这些模型的数据：' + result.unavailable.join('，');
     } catch (error) { $('brain-feedback').textContent = error.message; }
     finally { button.disabled = false; }
   });
@@ -272,9 +290,11 @@
     $('brain-feedback').textContent = '正在等模型实际回复…';
     try {
       const result = await request('brain', action, {preset:saved?.preset || service, saved:saved?.id,
-        base:$('brain-base').value, model:$('brain-model').value, protocol:$('brain-protocol').value, key:$('brain-key').value});
+        base:$('brain-base').value, model:$('brain-model').value, protocol:$('brain-protocol').value, key:$('brain-key').value,
+        mode:$('brain-mode').value, context:$('brain-context').value ? $('brain-context').valueAsNumber : 0});
       if (result.applied) await loadBrain();
       $('brain-feedback').textContent = (result.applied ? '已切换至 ' : '已连通 ') + result.model + '。模型回复：' + result.reply;
+      if (result.context) $('brain-feedback').textContent += ' · 上下文 ' + result.context + ' tokens';
     } catch (error) { $('brain-feedback').textContent = error.message; }
     finally { buttons.forEach(button => { button.disabled = false; }); }
   });

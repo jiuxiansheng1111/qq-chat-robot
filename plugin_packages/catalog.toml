@@ -296,6 +296,11 @@ title = "Windows 电脑助手"
 description = "主人私聊让电脑开计算器、记事本或画图，查看当前窗口、锁屏和控制多媒体键。"
 batch = 2
 
+[phone_control]
+title = "安卓手机助手"
+description = "主人私聊查看运行机器人手机的电量和充电状态，或通过 Termux:API 请求振动和手电筒。"
+batch = 2
+
 [item_finder]
 title = "用照片找物品"
 description = "保存自己指定的物品、位置和照片，按当前会话找回或删除。"

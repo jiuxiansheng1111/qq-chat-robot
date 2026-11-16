@@ -15,6 +15,7 @@ async def test_switch_reaches_native_qq_selector_and_the_next_http_request(tmp_p
     monkeypatch.chdir(tmp_path)
     _load_astrbot_types(root, monkeypatch)
     from aiohttp import web
+    from astrbot.core.agent.runners.tool_loop_agent_runner import ToolLoopAgentRunner
     from astrbot.core.astr_main_agent import _select_provider
     from astrbot.core.provider.entities import ProviderType
     from astrbot.core.provider.manager import ProviderManager
@@ -27,6 +28,13 @@ async def test_switch_reaches_native_qq_selector_and_the_next_http_request(tmp_p
                                   "choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"来自新大脑"}}]})
     app = web.Application()
     app.router.add_post("/v1/chat/completions", respond)
+    async def models_in_memory(request):
+        return web.json_response({"models":[{"name":"qwen-test:latest","context_length":8192}]})
+    app.router.add_get("/api/ps",models_in_memory)
+    async def model_card(request):
+        assert (await request.json())["model"] == "qwen-test"
+        return web.json_response({"capabilities":["completion"]})
+    app.router.add_post("/api/show", model_card)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner,"127.0.0.1",0)
@@ -60,14 +68,19 @@ async def test_switch_reaches_native_qq_selector_and_the_next_http_request(tmp_p
         brain = ChatBrain(context)
         applied = await brain.change({"preset":"ollama","base":url,"model":"qwen-test"}, apply=True)
         assert applied["model"] == "qwen-test"
+        assert applied["context"]==8192
         event = SimpleNamespace(unified_msg_origin="qq:FriendMessage:fixture", get_extra=lambda k:None)
         selected = await _select_provider(event, context)
+        assert selected.provider_config["modalities"] == ["text"]
+        agent = SimpleNamespace(req=SimpleNamespace(func_tool=object()), provider=selected)
+        assert ToolLoopAgentRunner._func_tool_for_provider(agent) is None
         assert (await selected.text_chat(prompt="下一轮普通 QQ 对话")).completion_text == "来自新大脑"
         assert [item[:2] for item in calls] == [("/v1/chat/completions","qwen-test")]*2
         assert "普通 QQ" in str(calls[-1][2])
         assert json.loads((tmp_path/"qq.json").read_text())["agent_runner"]["config"]["model"]["provider_id"] == brain.status()["active"]
         assert base["agent_runner"]["config"]["model"]["provider_id"] == "bilibili-original"
         assert json.loads((tmp_path/"base.json").read_text())["provider"][0]["model"] == "qwen-test"
+        assert json.loads((tmp_path/"base.json").read_text())["provider"][0]["max_context_tokens"] == 8192
     finally:
         for pid in list(manager.inst_map):
             await manager.terminate_provider(pid)
