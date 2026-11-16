@@ -50,6 +50,12 @@ public final class MobileChecks extends Instrumentation {
             } else {
                 String rss="<rss><channel><item><title>蜂鸟</title><link>https://example.org/bird</link><description>鸟类资料</description></item></channel></rss>";
                 check(Agent.rss(rss).get("https://example.org/bird").contains("蜂鸟"),"手机解析搜索来源失败");
+                JSONObject forecast=new JSONObject().put("current",new JSONObject().put("temperature_2m",9).put("apparent_temperature",7).put("time","2026-11-17T08:00"))
+                    .put("daily",new JSONObject().put("time",new JSONArray().put("2026-11-17").put("2026-11-18"))
+                    .put("temperature_2m_max",new JSONArray().put(15).put(9)).put("temperature_2m_min",new JSONArray().put(7).put(4))
+                    .put("precipitation_probability_max",new JSONArray().put(10).put(80)));
+                String weather=MobileWeather.format("深圳",false,forecast);
+                check(weather.contains("外套") && weather.contains("带把伞") && weather.contains("低至少 5℃"),"天气温差及降水提醒");
                 try(ServerSocket server=new ServerSocket(0,4,InetAddress.getByName("127.0.0.1"))) {
                     server.setSoTimeout(25000);
                     AtomicReference<Throwable> failure=new AtomicReference<>();

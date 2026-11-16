@@ -37,9 +37,16 @@ def open_app():
 
 def native_search():
     nodes=tree()
-    tap(next(n for n in nodes.iter("node") if n.get("class")=="android.widget.EditText"))
+    tap(next(n for n in nodes.iter("node") if n.get("package")==PACKAGE and n.get("class")=="android.widget.EditText"))
     adb("shell","input","text","Android%smobile%soperating%ssystem")
-    tap(next(n for n in tree().iter("node") if n.get("text")=="联网搜索"))
+    ime=adb("shell","dumpsys","input_method")
+    if "mInputShown=true" in ime or "mIsInputViewShown=true" in ime: adb("shell","input","keyevent","KEYCODE_BACK")
+    nodes=tree()
+    actions=[n for n in nodes.iter("node") if n.get("package")==PACKAGE and n.get("text")=="联网搜索"]
+    if not actions:
+        visible=[(n.get("package"),n.get("class"),n.get("text","")[:64]) for n in nodes.iter("node") if n.get("text")]
+        raise RuntimeError("Search button was not visible: "+str(visible)[:1400])
+    tap(actions[0])
     def shows_search_sources():
         return any(n.get("text","").startswith("1. ") and "http" in n.get("text","") for n in tree().iter("node"))
     wait_for(shows_search_sources,120)
@@ -84,4 +91,12 @@ def main():
 
 
 if __name__=="__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        # This harness only runs on a clean emulator populated with our test queries.
+        try:
+            print("Android foreground window:",next((s for s in adb("shell","dumpsys","window").splitlines() if "mCurrentFocus" in s),""),flush=True)
+            print("Android application crash:",adb("logcat","-d","-b","crash")[-2600:],flush=True)
+        finally:
+            raise

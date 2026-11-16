@@ -60,7 +60,7 @@ def build(sdk, destination, key, env, test):
             run(tools / ("aapt2"+ext),"compile","--dir",source / "res","-o",temp / "resources.zip")
             resources=[temp / "resources.zip"]
         run(tools / ("aapt2"+ext),"link","-o",apk,"-I",platform,"--manifest",source / "AndroidManifest.xml",
-            "--min-sdk-version","26","--target-sdk-version","35","--version-code","1","--version-name","1.0","--java",gen,*resources)
+            "--min-sdk-version","26","--target-sdk-version","35","--version-code","2","--version-name","1.1","--java",gen,*resources)
         files = [*gen.rglob("*.java"), *(source / "src").rglob("*.java")]
         classpath = platform
         if test:
@@ -68,7 +68,7 @@ def build(sdk, destination, key, env, test):
             stubs.mkdir()
             impl = SOURCE / "src/cn/dafeiyu/agent"
             run("javac","-encoding","UTF-8","--release","8","-classpath",platform,"-d",stubs,
-                impl / "Agent.java",impl / "Settings.java",impl / "Turns.java")
+                impl / "Agent.java",impl / "Settings.java",impl / "Turns.java",impl / "MobileWeather.java")
             classpath = os.pathsep.join(os.path.relpath(p, ROOT) for p in (platform, stubs))
         run("javac","-encoding","UTF-8","--release","8","-classpath",classpath,"-d",classes,*files)
         compiled=temp / "classes.jar"

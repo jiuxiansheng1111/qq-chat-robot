@@ -8,6 +8,8 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.*;
+import android.speech.tts.TextToSpeech;
+import android.speech.tts.Voice;
 import android.text.InputType;
 import android.text.util.Linkify;
 import android.view.*;
@@ -22,6 +24,8 @@ public final class MainActivity extends Activity {
     private EditText input;
     private Settings config;
     private Turns turns;
+    private TextToSpeech speech;
+    private boolean canRead;
     private final BroadcastReceiver updates=new BroadcastReceiver() {
         public void onReceive(Context c,Intent i) { render(); }
     };
@@ -63,6 +67,19 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams gap=new LinearLayout.LayoutParams(-2,-2); gap.leftMargin=dp(8); gap.topMargin=dp(5);
         actions.addView(button("发送",v->send("chat"),true),gap);
         if(state!=null) input.setText(state.getString("draft",""));
+        input.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEND);
+        input.setOnEditorActionListener((v,action,event)->{
+            if(action!=android.view.inputmethod.EditorInfo.IME_ACTION_SEND) return false;
+            send("chat"); return true;
+        });
+        speech=new TextToSpeech(this,code->runOnUiThread(()->{
+            if(code!=TextToSpeech.SUCCESS || speech==null || isDestroyed() || speech.getVoices()==null) return;
+            for(Voice voice:speech.getVoices()) {
+                if("zh".equals(voice.getLocale().getLanguage()) && !voice.isNetworkConnectionRequired()
+                        && (voice.getFeatures()==null || !voice.getFeatures().contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED))
+                        && speech.setVoice(voice)==TextToSpeech.SUCCESS) { canRead=true; render(); break; }
+            }
+        }));
         if(config.running() || turns.hasQueued()) AgentService.start(this);
     }
     public void onSaveInstanceState(Bundle b) { super.onSaveInstanceState(b); b.putString("draft",input.getText().toString()); }
@@ -73,6 +90,7 @@ public final class MainActivity extends Activity {
         render();
     }
     public void onStop() { unregisterReceiver(updates); super.onStop(); }
+    public void onDestroy() { if(speech!=null) speech.shutdown(); super.onDestroy(); }
     void send(String mode) {
         String q=input.getText().toString().trim();
         if(q.isEmpty()) { input.setError("先写一句话"); return; }
@@ -94,6 +112,12 @@ public final class MainActivity extends Activity {
             bubble(t.question,true); bubble(t.answer.isEmpty()?("queued".equals(t.state)?"等候处理…":"正在回复…"):t.answer,false);
             if("failed".equals(t.state)) feed.addView(button("重试",v->{ if(turns.retry(t.id)) { render(); AgentService.start(this); } },false),new LinearLayout.LayoutParams(-2,-2));
         }
+        Turns.Turn last=items.get(items.size()-1);
+        if(canRead && "done".equals(last.state)) feed.addView(button("朗读回复",v->{
+            if(speech.isSpeaking()) { speech.stop(); return; }
+            String prose=last.answer.replaceAll("https?://\\S+","");
+            speech.speak(Agent.clip(prose,TextToSpeech.getMaxSpeechInputLength()),TextToSpeech.QUEUE_FLUSH,null,"last-reply");
+        },false),new LinearLayout.LayoutParams(-2,-2));
         scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));
     }
     EditText field(LinearLayout box,String title,int type) {

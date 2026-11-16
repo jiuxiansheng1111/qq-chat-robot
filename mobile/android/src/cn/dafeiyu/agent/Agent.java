@@ -108,6 +108,10 @@ final class Agent {
     }
     String answer(Turns.Turn turn) throws Exception {
         String question=turn.question;
+        if(!"search".equals(turn.mode)) {
+            String weather=MobileWeather.ask(question,settings);
+            if(weather!=null) return weather;
+        }
         Matcher explicit=SEARCH.matcher(question), read=READER.matcher(question);
         if("search".equals(turn.mode) || explicit.matches()) {
             return search(explicit.matches()?explicit.group(1).trim():question);
