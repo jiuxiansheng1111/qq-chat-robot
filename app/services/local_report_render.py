@@ -322,7 +322,7 @@ class LocalReportRenderer:
                     browser = await playwright.chromium.launch(
                         executable_path=executable,
                         headless=True,
-                        timeout=8000,
+                        timeout=settings.timeout * 1000,
                         args=[
                             "--no-proxy-server",
                             "--disable-background-networking",

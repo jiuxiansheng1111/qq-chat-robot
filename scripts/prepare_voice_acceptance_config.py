@@ -9,7 +9,7 @@ import argparse
 import re
 import shutil
 import sys
-from pathlib import Path
+from pathlib import Path, PurePath
 
 
 def _custom_block_bounds(lines: list[str]) -> tuple[int, int]:
@@ -48,7 +48,7 @@ def _yaml_double_quoted(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def _with_custom_sovits_weights(config_text: str, weights: Path) -> str:
+def _with_custom_sovits_weights(config_text: str, weights: PurePath) -> str:
     """只替换 custom.vits_weights_path 的行内值；无法确认时停止。"""
     lines = config_text.splitlines(keepends=True)
     matches = _custom_scalar_lines(lines, "vits_weights_path")

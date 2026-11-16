@@ -1,5 +1,5 @@
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -75,7 +75,7 @@ def test_custom_sovits_replacement_removes_wrapped_scalar_continuation():
         "  vits_weights_path: untouched.pth\n"
     )
 
-    result = _with_custom_sovits_weights(config, Path(r"C:\\accepted\\candidate.pth"))
+    result = _with_custom_sovits_weights(config, PureWindowsPath("C:/accepted/candidate.pth"))
 
     assert "wrapped" not in result
     assert '  vits_weights_path: "C:\\\\accepted\\\\candidate.pth"' in result

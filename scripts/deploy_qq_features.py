@@ -62,6 +62,19 @@ def restart_owned_bridge():
             stdout=stream,stderr=subprocess.STDOUT,timeout=60,creationflags=subprocess.CREATE_NO_WINDOW,env=windows_env())
 
 
+def _run_astrbot_health_probe() -> subprocess.CompletedProcess[bytes]:
+    command = """$ErrorActionPreference='Stop'
+. './scripts/astrbot_windows_common.ps1'
+. './scripts/astrbot_process.ps1'
+. './scripts/astrbot_lifecycle.ps1'
+Get-AstrbotHealth -Layout (Get-AstrbotLayout) | ConvertTo-Json -Compress
+"""
+    return subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Command", command], cwd=ROOT, capture_output=True,
+        timeout=30, creationflags=subprocess.CREATE_NO_WINDOW, env=windows_env(),
+    )
+
+
 def qq_connection_status():
     """Read the actual QQ transport; a responsive dashboard is insufficient."""
     from scripts.connect_astrbot_qq import (
@@ -81,14 +94,7 @@ def qq_connection_status():
                 json={},headers={"Authorization":f"Bearer {account.access_token}"}))
             status=body.get("data",{})
             result["napcat_online"]=status.get("online") is True and status.get("good") is True
-        command="""$ErrorActionPreference='Stop'
-. './scripts/astrbot_windows_common.ps1'
-. './scripts/astrbot_process.ps1'
-. './scripts/astrbot_lifecycle.ps1'
-Get-AstrbotHealth -Layout (Get-AstrbotLayout) | ConvertTo-Json -Compress
-"""
-        probe=subprocess.run(["powershell.exe","-NoProfile","-Command",command],cwd=ROOT,
-            capture_output=True,timeout=30,creationflags=subprocess.CREATE_NO_WINDOW,env=windows_env())
+        probe=_run_astrbot_health_probe()
         if probe.returncode==0:
             health=json.loads(probe.stdout.decode("utf-8-sig"))
             result["reverse_ws_connected"]=health.get("Status")=="healthy"
