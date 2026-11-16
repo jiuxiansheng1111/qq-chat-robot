@@ -28,6 +28,9 @@
 
 | 插件 | 功能 | 安装包 |
 | --- | --- | --- |
+| 网页助手 | 主人私聊打开网页、浏览文字、点击链接与填写搜索框。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_web_assistant.zip) |
+| 电脑助手 | 主人通过私聊打开 Windows 应用、查看当前窗口、锁屏与控制媒体键。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_desktop_control.zip) |
+| 家里的设备 | 通过 Home Assistant 配对灯光、音乐、空调、手机动作与场景。账号管理分件提供连接表单。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_home_control.zip) |
 | 实时天气 | 识别自然语言城市名，查询实时天气和预报。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_weather.zip) |
 | 联网检索与攻略 | 按问题查询公开资料，整理来源和攻略。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_search.zip) |
 | 热点查询 | 在被问到今日热点时查询新闻。 | [下载 ZIP](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/plugin_packages/downloads/astrbot_plugin_qqchat_news.zip) |

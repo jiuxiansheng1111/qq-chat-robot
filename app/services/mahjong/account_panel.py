@@ -16,10 +16,10 @@ from app.services.local_listener import LocalListener
 from app.services.mahjong.majsoul_client import OFFICIAL_PAGE, PANEL_URL, MajsoulError, service_for
 
 
-def account_app(root: Path, service=None, *, player=None, hub=None) -> FastAPI:
+def account_app(root: Path, service=None, *, player=None, hub=None, context=None) -> FastAPI:
     service = service or service_for(root)
     csrf = secrets.token_urlsafe(32)
-    hub = hub or AccountHub(root, service, player)
+    hub = hub or AccountHub(root, service, player, context=context)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -94,10 +94,11 @@ def account_app(root: Path, service=None, *, player=None, hub=None) -> FastAPI:
 
 
 class AccountPanel(LocalListener):
-    def __init__(self, root: Path, player=None):
+    def __init__(self, root: Path, player=None, context=None):
         super().__init__(6190)
         self.root = root
         self.player = player
+        self.context = context
 
     async def start(self):
-        await super().start(account_app(self.root, player=self.player))
+        await super().start(account_app(self.root, player=self.player, context=self.context))

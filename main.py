@@ -339,7 +339,7 @@ class QQChatPlugin(Star):
             alerts.start(self)
         from app.services.mahjong.account_panel import AccountPanel
 
-        self._mahjong_panel = AccountPanel(project_root, self._get_companion_turns().games.mc)
+        self._mahjong_panel = AccountPanel(project_root, self._get_companion_turns().games.mc, self.context)
         try:
             await self._mahjong_panel.start()
         except OSError:

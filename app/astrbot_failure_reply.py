@@ -144,7 +144,9 @@ async def describe_failure(context,event,info:Failure) -> str:
         try:
             provider=await context.get_using_provider_async(event.unified_msg_origin)
             # This feature phrases only; it never chooses another chat model.
-            if provider is not None and str(provider.get_model()).casefold()=="gpt-6-luna":
+            configured = getattr(provider, "provider_config", {})
+            if provider is not None and (str(provider.get_model()).casefold()=="gpt-6-luna"
+                                         or isinstance(configured, dict) and configured.get("qqchat_preset")):
                 from app.astrbot_identity import QQ_PERSONA_PATH
                 from app.services.usage_ledger import usage_purpose
                 system=QQ_PERSONA_PATH.read_text(encoding="utf-8").strip()+(

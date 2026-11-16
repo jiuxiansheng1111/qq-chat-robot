@@ -8,6 +8,10 @@
 
 ## AstrBot 部署
 
+QQ 的默认聊天模型可以在本机账号页 `http://127.0.0.1:6190/accounts` 的「QQ 聊天大脑」中验证和切换。支持本机 Ollama、DeepSeek、智谱、OpenAI GPT、Anthropic Claude、Gemini，以及提供 Chat Completions、Responses 或 Anthropic Messages 协议的自定义地址。Ollama 可以直接读取已安装的模型名。密钥在本机输入。
+
+网页浏览、Windows 操作、Home Assistant 蓝牙或红外设备，以及 Android 常驻部署方式见[网页助手与设备联动](docs/网页助手与设备联动.md)。
+
 在 AstrBot 插件市场的 GitHub 安装入口填本仓库地址即可安装。角色聊天、音色和网易云会员配置继续由部署者自己填写；原来已经训练的本机模型可以继续使用。
 
 Windows 本机在仓库目录运行：

@@ -260,3 +260,18 @@ turns = ["meetups"]
 title = "群聊猜炉石卡"
 description = "根据卡画猜卡名或简称，逐步给费用、职业、效果提示，揭晓时翻完整卡面。"
 batch = 4
+
+[home_control]
+title = "家里的设备"
+description = "主人在私聊里开灯、调空调和音量，执行已绑定的电脑、手机动作或灯光音乐场景。"
+batch = 2
+
+[web_assistant]
+title = "网页助手"
+description = "主人私聊发送网址，读取网页、翻页、点击文字按钮或填写带标签的输入框。"
+batch = 2
+
+[desktop_control]
+title = "Windows 电脑助手"
+description = "主人私聊让电脑开计算器、记事本或画图，查看当前窗口、锁屏和控制多媒体键。"
+batch = 2

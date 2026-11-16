@@ -20,6 +20,8 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from app.chatgpt_subscription import DEFAULT_MODEL, ChatGPTSubscription, SubscriptionError
 from app.config import Settings
 from app.services import game_clients
+from app.services.chat_brain import BrainError, ChatBrain
+from app.services.home_devices import DeviceError, HomeDevices
 from app.services.local_listener import LocalListener
 from app.services.mahjong.majsoul_client import MajsoulError
 from app.services.netease_member import NeteaseMemberError, _bridge_connection
@@ -198,13 +200,15 @@ class ChatLogin:
 
 
 class AccountHub:
-    def __init__(self, root, mahjong, player=None):
+    def __init__(self, root, mahjong, player=None, context=None):
         self.root, self.mahjong = root, mahjong
         self.settings = Settings(_env_file=root / ".env")
         self.minecraft = MinecraftLogin(root, player or game_clients.MinecraftPlayer())
         self.chat = ChatGPTSubscription(_subscription_directory(root))
         self.chat_login = ChatLogin(self.chat.store.directory)
         self.chat_action = asyncio.Lock()
+        self.brain = ChatBrain(context)
+        self.home = HomeDevices(root)
 
     async def close(self):
         await self.minecraft.cancel()
@@ -285,6 +289,28 @@ class AccountHub:
                 for key, value in zip((*sources, "netease"), results)}
 
     async def update(self, service, action, data):
+        if service == "home":
+            try:
+                if action == "connect":
+                    return await self.home.connect(data)
+                if action == "list":
+                    return {"available": await self.home.available()}
+                if action == "bind":
+                    return await self.home.bind(data.get("name"), data.get("entity"))
+                if action == "remove":
+                    return self.home.remove(data.get("name"))
+                if action == "disconnect":
+                    return self.home.disconnect()
+            except DeviceError as exc:
+                raise AccountActionError(str(exc)) from None
+        if service == "brain":
+            try:
+                if action == "models":
+                    return await self.brain.models(data)
+                if action in {"test", "apply"}:
+                    return await self.brain.change(data, apply=action == "apply")
+            except BrainError as exc:
+                raise AccountActionError(str(exc)) from None
         if service == "minecraft":
             if action in {"login", "cancel", "forget", "progress"}:
                 if action == "progress":
@@ -336,6 +362,14 @@ def account_routes(root: Path, hub, csrf):
     @router.get("/api/accounts")
     async def statuses():
         return await hub.statuses()
+
+    @router.get("/api/brain")
+    async def brain():
+        return hub.brain.status()
+
+    @router.get("/api/home")
+    async def home():
+        return hub.home.status()
 
     @router.post("/api/accounts/{service}/{action}")
     async def update(service: str, action: str, request: Request):

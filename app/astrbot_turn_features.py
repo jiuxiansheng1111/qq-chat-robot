@@ -14,7 +14,8 @@ from app.astrbot_qq_persona import is_qq
 from app.services.social_plans import scope
 
 _LOG = logging.getLogger(__name__)
-_FEATURES = {"listen_first": "ListenFirst", "card_quiz": "CardQuiz", "watchlist": "Watchlist", "corrections": "Corrections"}
+_FEATURES = {"listen_first": "ListenFirst", "card_quiz": "CardQuiz", "watchlist": "Watchlist", "corrections": "Corrections",
+             "web_assistant": "WebAssistant", "desktop_control": "DesktopControl", "home_control": "HomeControl"}
 
 
 def enabled_parts(host, event):

@@ -18,7 +18,10 @@
     :focus-visible{outline:3px solid #307858;outline-offset:3px}button:disabled{opacity:.6;cursor:wait}
     details{border-top:1px solid #e0e7e1;padding-top:12px}summary{cursor:pointer;color:#385849;font-size:.93rem;width:fit-content}
     form,.device{display:grid;gap:8px;margin-top:12px}label{font-size:.91rem}input{width:100%;min-height:40px;padding:8px;border-radius:6px;border:1px solid #aebeb4;font:inherit}
+    fieldset{display:grid;gap:8px;border:1px solid #cbd8ce;border-radius:8px;padding:12px;min-width:0}
+    select{font:inherit;min-height:40px;border:1px solid #aebeb4;border-radius:6px;padding:6px}
     small,.server{color:#596a61;font-size:.85rem;overflow-wrap:anywhere}output{font:600 1.4rem/1.6 ui-monospace,monospace;letter-spacing:.08em}
+    #brain-feedback{font:inherit;letter-spacing:normal;overflow-wrap:anywhere}
     #notice{margin-top:8px;color:#28563e}#notice:empty{margin:0}#notice.error{color:#95351e}[hidden]{display:none!important}
     @media(max-width:820px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
     @media(max-width:550px){main{padding:24px 15px 40px}.grid{grid-template-columns:1fr}article{padding:16px}header{align-items:flex-start}}
@@ -51,6 +54,33 @@
       <div class="actions"><a class="action" href="/">管理雀魂账号</a></div>
     </article>
   </div></section>
+  <section aria-labelledby="brain-title"><h2 id="brain-title">QQ 聊天大脑</h2>
+    <article><p id="brain-current" aria-live="polite">正在读取当前模型…</p>
+      <form id="brain-form">
+        <label for="brain-service">模型服务或已保存的模型</label><select id="brain-service" required></select>
+        <fieldset id="brain-fields" hidden><legend>连接设置</legend>
+          <label for="brain-base">接口基础地址</label><input id="brain-base" type="url" maxlength="700" autocomplete="off" spellcheck="false">
+          <label for="brain-protocol">接口协议</label><select id="brain-protocol"><option value="chat">Chat Completions</option><option value="responses">OpenAI Responses</option><option value="messages">Anthropic Messages</option></select>
+          <label for="brain-model">模型名</label><input id="brain-model" list="brain-models" maxlength="200" autocomplete="off" spellcheck="false"><datalist id="brain-models"></datalist>
+          <button id="brain-discover" type="button" hidden>读取已安装的 Ollama 模型</button>
+          <label for="brain-key">API 密钥</label><input id="brain-key" type="password" maxlength="2048" autocomplete="off">
+          <small id="brain-hint"></small>
+        </fieldset>
+        <div class="actions"><button type="submit" value="test">测试回复</button><button class="primary" type="submit" value="apply">验证并切换</button></div>
+        <output id="brain-feedback" aria-live="polite"></output>
+      </form>
+    </article>
+  </section>
+  <section aria-labelledby="home-title"><h2 id="home-title">家里的设备</h2><article>
+    <form id="home-connect"><label for="home-base">Home Assistant 地址</label><input id="home-base" type="url" placeholder="http://homeassistant.local:8123" required>
+      <label for="home-token">长期访问令牌</label><input id="home-token" type="password" autocomplete="off" required>
+      <div class="actions"><button type="submit">验证并连接</button><button id="home-disconnect" type="button" hidden>断开连接</button></div></form>
+    <form id="home-bind" hidden><div class="actions"><button id="home-list" type="button">从家里读取设备</button></div>
+      <label for="home-entity">设备或场景</label><select id="home-entity" required></select>
+      <label for="home-name">在 QQ 私聊里怎么叫它</label><input id="home-name" placeholder="例如 卧室灯" required maxlength="32">
+      <div class="actions"><button type="submit">绑定这个名字</button></div></form>
+    <ul id="home-devices"></ul><p id="home-status" aria-live="polite"></p>
+  </article></section>
   <section aria-labelledby="media"><h2 id="media">聊天与影音</h2><div class="grid">
     <article><div class="heading"><h3>ChatGPT</h3><span class="state" id="chatgpt-state">正在检查…</span></div>
       <p>管理 QQ 聊天使用的订阅授权。登录完成后会用现有订阅测试一次 Luna 回复。</p>
@@ -169,6 +199,94 @@
     event.preventDefault(); act(event.submitter, 'steam','bind',{account:$('steam-id').value});
   });
   $('refresh').addEventListener('click', refresh);
+  let brainState;
+  function chooseBrain() {
+    const id = $('brain-service').value;
+    const saved = brainState.profiles.find(item => item.id === id);
+    const preset = brainState.options.find(item => item.id === (saved?.preset || id));
+    if (!preset) return;
+    const fields = $('brain-fields');
+    fields.hidden = fields.disabled = preset.id === 'luna';
+    $('brain-base').value = saved?.base || preset.base;
+    $('brain-model').value = saved?.model || '';
+    $('brain-model').required = $('brain-base').required = !fields.disabled;
+    $('brain-protocol').value = saved?.protocol || preset.protocol || 'chat';
+    $('brain-key').value = '';
+    $('brain-hint').textContent = saved ? '留空可沿用这个地址和协议下已保存的密钥。' : preset.id === 'ollama' ? '本机 Ollama 可留空。' : '请输入提供方签发的密钥。';
+    $('brain-discover').hidden = preset.id !== 'ollama';
+    $('brain-models').replaceChildren();
+    $('brain-feedback').textContent = '';
+  }
+  async function loadBrain() {
+    const response = await fetch('/api/brain');
+    if (!response.ok) throw Error('无法读取模型配置');
+    brainState = await response.json();
+    const select = $('brain-service');
+    select.replaceChildren(...brainState.options.map(p => new Option(p.label, p.id)),
+      ...brainState.profiles.map(p => new Option(p.model + ' · ' + p.preset, p.id)));
+    const active = brainState.profiles.find(p => p.id === brainState.active);
+    select.value = active?.id || 'luna';
+    $('brain-current').textContent = '当前模型 · ' + (active?.model || (brainState.active === brainState.luna ? 'GPT-6 Luna' : brainState.active || '尚未连接'));
+    chooseBrain();
+  }
+  $('brain-service').addEventListener('change', chooseBrain);
+  $('brain-discover').addEventListener('click', async event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      const result = await request('brain','models',{base:$('brain-base').value});
+      $('brain-models').replaceChildren(...result.models.map(name => new Option(name, name)));
+      $('brain-feedback').textContent = result.models.length ? '可选模型 · ' + result.models.join('，') : 'Ollama 没有列出已安装的模型。';
+    } catch (error) { $('brain-feedback').textContent = error.message; }
+    finally { button.disabled = false; }
+  });
+  $('brain-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const service = $('brain-service').value;
+    const saved = brainState.profiles.find(p => p.id === service);
+    const action = event.submitter?.value || 'test';
+    const buttons = [...event.currentTarget.querySelectorAll('button')];
+    buttons.forEach(button => { button.disabled = true; });
+    $('brain-feedback').textContent = '正在等模型实际回复…';
+    try {
+      const result = await request('brain', action, {preset:saved?.preset || service, saved:saved?.id,
+        base:$('brain-base').value, model:$('brain-model').value, protocol:$('brain-protocol').value, key:$('brain-key').value});
+      if (result.applied) await loadBrain();
+      $('brain-feedback').textContent = (result.applied ? '已切换至 ' : '已连通 ') + result.model + '。模型回复：' + result.reply;
+    } catch (error) { $('brain-feedback').textContent = error.message; }
+    finally { buttons.forEach(button => { button.disabled = false; }); }
+  });
+  loadBrain().catch(() => { $('brain-current').textContent = '无法读取当前模型'; });
+  function paintHome(data) {
+    $('home-base').value = data.base;
+    $('home-bind').hidden = $('home-disconnect').hidden = !data.base;
+    $('home-devices').replaceChildren(...data.devices.map(device => {
+      const li = document.createElement('li'), remove = document.createElement('button');
+      li.append(device.name + ' · ' + device.entity + ' ');
+      remove.type = 'button'; remove.textContent = '解除绑定';
+      remove.addEventListener('click', () => runHome('remove', {name:device.name}, remove));
+      li.append(remove); return li;
+    }));
+  }
+  async function runHome(action, data, button) {
+    button.disabled = true;
+    try {
+      const result = await request('home',action,data);
+      if (action === 'list') {
+        $('home-entity').replaceChildren(...result.available.map(x => new Option(x.name + ' · ' + x.entity,x.entity)));
+        $('home-status').textContent = '发现 ' + result.available.length + ' 个可选设备或场景。';
+      } else {
+        paintHome(result); $('home-token').value = '';
+        $('home-status').textContent = {connect:'连接已验证。',bind:'已绑定，可以在 QQ 私聊里用这个名字。',remove:'已解除绑定。',disconnect:'已断开并清除本机绑定。'}[action];
+      }
+    } catch (error) { $('home-status').textContent = error.message; }
+    finally { button.disabled = false; }
+  }
+  $('home-connect').addEventListener('submit', e => { e.preventDefault(); runHome('connect',{base:$('home-base').value,token:$('home-token').value},e.submitter); });
+  $('home-list').addEventListener('click', e => runHome('list',{},e.currentTarget));
+  $('home-bind').addEventListener('submit', e => { e.preventDefault(); runHome('bind',{name:$('home-name').value,entity:$('home-entity').value},e.submitter); });
+  $('home-disconnect').addEventListener('click', e => { if (confirm('断开 Home Assistant 并清除已绑定的设备？')) runHome('disconnect',{},e.currentTarget); });
+  fetch('/api/home').then(r => { if (!r.ok) throw Error(); return r.json(); }).then(paintHome).catch(() => { $('home-status').textContent = '暂时不能读取绑定。'; });
   window.addEventListener('focus', refresh);
   refresh();
 </script></body></html>

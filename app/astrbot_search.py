@@ -659,7 +659,8 @@ async def _plan_group_search(context: Any, event: Any, request: Any) -> dict | N
     }
     if str(model).startswith("glm-4.5"):
         kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-    if getattr(provider, "qqchat_subscription", False) is True:
+    if (getattr(provider, "qqchat_subscription", False) is True
+            or isinstance(getattr(provider, "provider_config", None), dict) and provider.provider_config.get("qqchat_preset")):
         # This provider owns an OAuth Responses route. Its compatibility client
         # carries no API key and must never be used for Chat Completions.
         response = await asyncio.wait_for(provider.text_chat(
