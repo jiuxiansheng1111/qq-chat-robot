@@ -1,6 +1,15 @@
 import pytest
 
 
+@pytest.fixture(scope="session", autouse=True)
+def disable_astrbot_usage_uploads():
+    # Native OneBot sends schedule SDK usage counters on the current event loop.
+    # Keep optional telemetry out of the tests and their per-test database lifetimes.
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("ASTRBOT_DISABLE_METRICS", "1")
+        yield
+
+
 @pytest.fixture
 def room(monkeypatch):
     from test_astrbot_companion_turns import make_room

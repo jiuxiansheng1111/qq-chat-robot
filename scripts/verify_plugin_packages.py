@@ -286,7 +286,7 @@ if __name__ == "__main__":
     directory = parser.parse_args().directory.resolve()
     with tempfile.TemporaryDirectory(prefix="qqchat-package-") as tmp:
         temp, previous = Path(tmp), Path.cwd()
-        os.environ.update(ASTRBOT_ROOT=str(temp), WEB_PROXY_AUTO_DETECT="false")
+        os.environ.update(ASTRBOT_ROOT=str(temp), ASTRBOT_DISABLE_METRICS="1", WEB_PROXY_AUTO_DETECT="false")
         try:
             os.chdir(temp)
             asyncio.run(verify(directory, temp))
