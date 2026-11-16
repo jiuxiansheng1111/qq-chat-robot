@@ -109,7 +109,8 @@ async def test_model_window_and_failure_after_native_provider_save(brain,monkeyp
 
 
 @pytest.mark.asyncio
-async def test_web_only_phone_can_select_model_before_pairing_and_recovers_from_failed_save(brain):
+async def test_web_only_phone_can_select_model_before_pairing_and_recovers_from_failed_save(brain, monkeypatch):
+    monkeypatch.setenv("QQCHAT_TERMUX_BIN","/data/data/com.termux/files/usr/bin")
     acm = brain.context.astrbot_config_mgr
     original = acm.confs.pop(PROFILE)
     base = {"agent_runner": original["agent_runner"], "provider": brain.context.provider_manager.saved, "platform": []}
@@ -133,9 +134,11 @@ async def test_web_only_phone_can_select_model_before_pairing_and_recovers_from_
     await brain.change(data, apply=True)
     assert brain.status()["active"] == base["provider"][0]["id"]
     assert base["provider"][0]["modalities"] == ["text"]
-    assert acm.ucr.umop_to_conf_id == {WEB_SESSION:"new", MOBILE_ONEBOT_ID + "::":"new", **routes}
+    assert acm.ucr.umop_to_conf_id == {WEB_SESSION:"new", MOBILE_ONEBOT_ID + "::":"new", "webchat::":"new", **routes}
     assert base["agent_runner"]["config"]["model"]["provider_id"] == LUNA
+    del acm.ucr.umop_to_conf_id["webchat::"]  # Upgrade an already configured web-assistant-only phone.
     await brain.change(dict(data, saved=brain.status()["active"], mode="image_tools"), apply=True)
+    assert acm.ucr.umop_to_conf_id["webchat::"] == "new"
     assert base["provider"][1]["modalities"] == ["text", "image", "tool_use"]
     assert brain.status()["profiles"][1]["mode"] == "image_tools"
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import ipaddress
+import os
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -132,10 +133,23 @@ class ChatBrain:
                 raise
         else:
             current = profile["agent_runner"]
+            # On a phone, the built-in WebChat is also a user-facing entry to this agent.
+            router = None
+            if os.environ.get("QQCHAT_TERMUX_BIN") and profile.get("qqchat_brain_profile"):
+                manager = self.context.astrbot_config_mgr
+                profile_id = next(k for k, value in manager.confs.items() if value is profile)
+                router = manager.ucr
+                prior_routes = dict(router.umop_to_conf_id)
+                if prior_routes.get("webchat::") == profile_id:
+                    router = None
             try:
+                if router is not None:
+                    await router.update_routing_data({"webchat::":profile_id,**{k:v for k,v in prior_routes.items() if k!="webchat::"}})
                 await profile.save_config_async({"agent_runner": runner_with_provider(current, provider_id)})
             except BaseException:
                 profile["agent_runner"] = current
+                if router is not None:
+                    await router.update_routing_data(prior_routes)
                 raise
             return
         base = self.context.get_config()
@@ -149,6 +163,8 @@ class ChatBrain:
         profile_id = await manager.create_conf(config=initial, name="大肥鱼 · QQ 和网页助手")
         routing = dict(manager.ucr.umop_to_conf_id)
         target_routes = [WEB_SESSION, *(platforms or [MOBILE_ONEBOT_ID + "::"])]
+        if os.environ.get("QQCHAT_TERMUX_BIN"):
+            target_routes.append("webchat::")
         try:
             await manager.ucr.update_routing_data({**dict.fromkeys(target_routes, profile_id),
                                                    **{k:v for k,v in routing.items() if k not in target_routes}})
