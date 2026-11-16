@@ -40,6 +40,22 @@ async def attached_photo(event):
     return data
 
 
+async def attached_voice(host,event):
+    from app.astrbot_soundtry import _field, attachment_path, collect_attachments
+    for index,part in enumerate(collect_attachments(event)):
+        kind = _field(part,"type","")
+        if str(getattr(kind,"value",kind)).lower() not in {"record","audio"}:
+            continue
+        path = await attachment_path(event,index,host.runtime._core.settings)
+        try:
+            if path.stat().st_size > 10_000_000:
+                raise ValueError("这段语音太长了，可以留一段较短的。")
+            return await asyncio.to_thread(path.read_bytes)
+        finally:
+            path.unlink(missing_ok=True)
+    return None
+
+
 async def send_photo_note(event, text, image=None):
     if image:
         from astrbot.api.message_components import Image as QQImage

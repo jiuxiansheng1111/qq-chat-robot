@@ -209,8 +209,11 @@ class AccountHub:
         self.chat_action = asyncio.Lock()
         self.brain = ChatBrain(context)
         self.home = HomeDevices(root)
+        self.web = None
 
     async def close(self):
+        if self.web is not None:
+            await self.web.close()
         await self.minecraft.cancel()
         await self.chat_login.close()
         await self.chat.aclose()
@@ -289,6 +292,26 @@ class AccountHub:
                 for key, value in zip((*sources, "netease"), results)}
 
     async def update(self, service, action, data):
+        if service == "web" and action == "command":
+            session = data.get("session")
+            text = data.get("text")
+            if not isinstance(session, str) or not re.fullmatch(r"[a-f0-9-]{36}", session):
+                raise AccountActionError("请从当前标签页打开网页助手。")
+            if not isinstance(text, str) or not 0 < len(text.strip()) <= 1600:
+                raise AccountActionError("请填入网址或网页操作。")
+            if self.web is None:
+                try:
+                    from app.astrbot_web_assistant import WebAssistant
+                except ModuleNotFoundError:
+                    raise AccountActionError("请先在机器人上安装网页助手及其浏览器依赖。", 503) from None
+                self.web = WebAssistant()
+            text = text.strip()
+            if text.lower().startswith(("https://", "http://")):
+                text = "打开网页 " + text
+            reply = await self.web.command(session, text)
+            if reply is None:
+                raise AccountActionError("发一个网址，或告诉我该点哪个按钮、填写哪个输入框。")
+            return {"text": reply}
         if service == "home":
             try:
                 if action == "connect":

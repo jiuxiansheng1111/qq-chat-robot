@@ -16,7 +16,7 @@ from app.services.social_plans import scope
 _LOG = logging.getLogger(__name__)
 _FEATURES = {"listen_first": "ListenFirst", "card_quiz": "CardQuiz", "watchlist": "Watchlist", "corrections": "Corrections",
              "item_finder": "ItemFinder", "project_resume": "ProjectResume", "fridge": "Fridge", "dinner_split": "DinnerSplit",
-             "study": "Study", "time_capsule": "TimeCapsule",
+             "study": "Study", "time_capsule": "TimeCapsule", "steam_library": "SteamLibrary", "group_radio": "GroupRadio",
              "web_assistant": "WebAssistant", "desktop_control": "DesktopControl", "home_control": "HomeControl"}
 
 

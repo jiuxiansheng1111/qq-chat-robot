@@ -8,6 +8,7 @@ import socket
 from urllib.parse import urljoin, urlsplit
 
 import httpx
+from playwright.async_api import Error as BrowserError
 
 from app.services.bounded_http import request_json
 from app.services.http_routing import outbound_http_client
@@ -210,16 +211,28 @@ class WebAssistant:
     async def handle(self, host, event, key, text):
         if key[2] or not is_owner_event(event):
             return False
+        reply = await self.command(key, text)
+        if reply is None:
+            return False
+        await event.send(event.plain_result(reply))
+        return True
+
+    async def command(self, key, text):
+        opened, clicked, fill = _OPEN.search(text), _CLICK.fullmatch(text), _FILL.fullmatch(text)
+        read = _READ.fullmatch(text)
+        if not any((opened, clicked, fill, read)):
+            return None
         async with self.lock:
-            opened, clicked, fill = _OPEN.search(text), _CLICK.fullmatch(text), _FILL.fullmatch(text)
             try:
                 if opened:
+                    if key not in self.tabs and len(self.tabs) >= 4:
+                        return "已经开了四个网页会话。关掉用完的会话后就可以打开新网页。"
                     new = await BrowserSession.open(opened[1].rstrip("，。；！？、）)"))
                     await self.drop(key)
                     self.tabs[key] = new
                     self.touch(key)
                     reply = await new.snapshot()
-                elif "关闭" in text:
+                elif read and "关闭" in text:
                     await self.drop(key)
                     reply = "网页已经关了。"
                 elif key not in self.tabs:
@@ -237,5 +250,6 @@ class WebAssistant:
                         reply = await tab.snapshot()
             except ValueError as exc:
                 reply = str(exc)
-        await event.send(event.plain_result(reply))
-        return True
+            except (BrowserError, httpx.HTTPError, OSError, TimeoutError):
+                reply = "浏览器没能完成这一步。请检查浏览器是否已安装、网页能否访问，再试一次。"
+            return reply

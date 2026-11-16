@@ -250,6 +250,16 @@ description = "绑定专用 SteamID，核对本机账号并接收大厅邀请。
 batch = 4
 turns = ["steam"]
 
+[steam_library]
+title = "Steam 共同游戏库"
+description = "比较本群玩家自愿共享的游戏，按实际参加人数和商店联机信息推荐，可以撤回自己的清单。"
+batch = 4
+
+[group_radio]
+title = "群轮值电台"
+description = "主持人按报名顺序轮值，每人选一首真实歌曲并配文字或语音串词。播出和回听本群最近四期。"
+batch = 3
+
 [meetups]
 title = "群聊约局"
 description = "在群里报开黑时间、报名或候补，汇总缺几人和最早开局时间，支持改期和退出。"

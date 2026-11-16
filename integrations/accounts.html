@@ -21,7 +21,7 @@
     fieldset{display:grid;gap:8px;border:1px solid #cbd8ce;border-radius:8px;padding:12px;min-width:0}
     select{font:inherit;min-height:40px;border:1px solid #aebeb4;border-radius:6px;padding:6px}
     small,.server{color:#596a61;font-size:.85rem;overflow-wrap:anywhere}output{font:600 1.4rem/1.6 ui-monospace,monospace;letter-spacing:.08em}
-    #brain-feedback{font:inherit;letter-spacing:normal;overflow-wrap:anywhere}
+    #brain-feedback,#web-result{font:inherit;letter-spacing:normal;overflow-wrap:anywhere;white-space:pre-wrap}
     #notice{margin-top:8px;color:#28563e}#notice:empty{margin:0}#notice.error{color:#95351e}[hidden]{display:none!important}
     @media(max-width:820px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
     @media(max-width:550px){main{padding:24px 15px 40px}.grid{grid-template-columns:1fr}article{padding:16px}header{align-items:flex-start}}
@@ -71,6 +71,14 @@
       </form>
     </article>
   </section>
+  <section aria-labelledby="web-title"><h2 id="web-title">网页助手</h2><article>
+    <form id="web-form"><label for="web-command">网址或网页操作</label>
+      <input id="web-command" maxlength="1600" placeholder="输入网址，或说「点击详情」「在网页的搜索框里输入鲸鱼」" autocomplete="off">
+      <div class="actions"><button class="primary" type="submit" value="">执行</button>
+        <button type="submit" value="网页往上翻">上一屏</button><button type="submit" value="网页往下翻">下一屏</button>
+        <button type="submit" value="读当前页面">重读</button><button type="submit" value="关闭这个网页">关闭网页</button></div>
+      <output id="web-result" aria-live="polite"></output></form>
+  </article></section>
   <section aria-labelledby="home-title"><h2 id="home-title">家里的设备</h2><article>
     <form id="home-connect"><label for="home-base">Home Assistant 地址</label><input id="home-base" type="url" placeholder="http://homeassistant.local:8123" required>
       <label for="home-token">长期访问令牌</label><input id="home-token" type="password" autocomplete="off" required>
@@ -199,6 +207,20 @@
     event.preventDefault(); act(event.submitter, 'steam','bind',{account:$('steam-id').value});
   });
   $('refresh').addEventListener('click', refresh);
+  const webSession = crypto.randomUUID();
+  $('web-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const text = event.submitter?.value || $('web-command').value.trim();
+    if (!text) { $('web-command').focus(); return; }
+    const buttons = [...event.currentTarget.querySelectorAll('button')];
+    buttons.forEach(button => { button.disabled = true; });
+    $('web-result').textContent = '正在打开或读取页面…';
+    try {
+      const result = await request('web','command',{session:webSession,text});
+      $('web-result').textContent = result.text;
+    } catch (error) { $('web-result').textContent = error.message; }
+    finally { buttons.forEach(button => { button.disabled = false; }); }
+  });
   let brainState;
   function chooseBrain() {
     const id = $('brain-service').value;

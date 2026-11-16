@@ -7,7 +7,7 @@ import json
 import re
 from datetime import date, datetime, time
 
-from app.services.activity_notes import attached_photo
+from app.services.activity_notes import attached_photo, attached_voice
 from app.services.activity_timer import ActivityTimer
 from app.services.social_plans import (
     CHINA,
@@ -38,22 +38,6 @@ def opening_time(text, now):
     if instant <= now:
         raise ValueError("开封时间要在以后，按北京时间算。")
     return instant
-
-
-async def attached_voice(host,event):
-    from app.astrbot_soundtry import _field, attachment_path, collect_attachments
-    for index,part in enumerate(collect_attachments(event)):
-        kind = _field(part,"type","")
-        if str(getattr(kind,"value",kind)).lower() not in {"record","audio"}:
-            continue
-        path = await attachment_path(event,index,host.runtime._core.settings)
-        try:
-            if path.stat().st_size > 10_000_000:
-                raise ValueError("这段语音太长了，可以留一段较短的。")
-            return await asyncio.to_thread(path.read_bytes)
-        finally:
-            path.unlink(missing_ok=True)
-    return None
 
 
 class TimeCapsule(ActivityTimer):

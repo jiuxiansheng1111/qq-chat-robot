@@ -290,6 +290,15 @@ async def test_quiz_timer_reveals_or_respects_disabled_group(chat, monkeypatch):
     assert ev.send.await_count == 1 and not game.rooms
 
 
+@pytest.mark.asyncio
+async def test_game_library_and_radio_share_group_entry_without_consuming_normal_messages(chat):
+    assert "自愿共享" in reply(await chat.post("我们两个人能一起玩哪些游戏？"))
+    assert "第1期" in reply(await chat.post("开个群电台 夏夜"))
+    assert "还没有" in reply(await chat.post("电台节目单",group="1000000002"))
+    assert "筹备中" in reply(await chat.post("电台节目单"))
+    assert not (await chat.post("听见路边电台了吗")).stopped
+
+
 def test_quiz_crop_strips_full_frame_nameplate_and_metadata():
     im = Raster.new("RGB", (430, 585), "red")
     im.paste("blue", (135, 109, 300, 235))

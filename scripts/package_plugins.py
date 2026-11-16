@@ -36,6 +36,8 @@ OWNED = {
     "dinner_split": ("app/astrbot_dinner_split.py",),
     "study": ("app/astrbot_study.py",),
     "time_capsule": ("app/astrbot_time_capsule.py",),
+    "steam_library": ("app/astrbot_steam_library.py",),
+    "group_radio": ("app/astrbot_group_radio.py",),
     "card_quiz": ("app/astrbot_card_quiz.py",),
     "meetups": ("app/astrbot_meetups.py",),
     "followups": ("app/astrbot_followups.py",),

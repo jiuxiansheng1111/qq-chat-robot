@@ -58,6 +58,28 @@ def test_account_page_controls_share_robot_config_without_exposing_credentials(h
         assert action("steam/bind", ["wrong shape"]).status_code == 400
 
 
+def test_local_web_panel_isolates_tabs_and_releases_browser_on_shutdown(hub, monkeypatch):
+    from uuid import uuid4
+
+    from app.astrbot_web_assistant import BrowserSession
+    tab = SimpleNamespace(close=AsyncMock(),snapshot=AsyncMock(return_value="已读到示例网页"))
+    monkeypatch.setattr(BrowserSession,"open",AsyncMock(return_value=tab))
+    base = "http://127.0.0.1:6190"
+    with TestClient(account_app(game_clients.ROOT,hub.mahjong,hub=hub),base_url=base) as client:
+        page = client.get("/accounts").text
+        assert 'id="web-command"' in page
+        nonce = re.search(r'<script nonce="([^"]+)">',page)[1]
+        headers = {"Origin":base,"X-QQChat-CSRF":nonce}
+        url = "/api/accounts/web/command"
+        session = str(uuid4())
+        payload = {"session":session,"text":"https://example.org"}
+        assert client.post(url,json=payload).status_code == 403
+        assert client.post(url,json=payload,headers=headers).json()["text"] == "已读到示例网页"
+        assert "先把" in client.post(url,json={"session":str(uuid4()),"text":"读当前页面"},headers=headers).json()["text"]
+        assert client.post(url,json={"session":session,"text":"读当前页面"},headers=headers).json()["text"] == "已读到示例网页"
+    tab.close.assert_awaited_once()
+
+
 @pytest.mark.asyncio
 async def test_device_login_cancels_or_finishes_without_joining_a_server(hub):
     if not shutil.which("node"):
