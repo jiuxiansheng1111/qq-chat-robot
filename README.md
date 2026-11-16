@@ -4,11 +4,13 @@
 
 按需安装请打开[独立插件下载目录](plugin_packages/README.md)。先装共享运行时，再选天气、炉石查卡、Minecraft 等功能。每个功能都有单独的 ZIP，可以在 AstrBot 面板分别启停。
 
+安卓手机可以独立运行大肥鱼，支持文字对话、联网搜索和网页阅读。直接从手机安装并选择模型，电脑关机后也可以使用。[安卓 APK](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/mobile/android/downloads/Dafeiyu.apk) · [手机版说明](mobile/android/README.md)
+
 整合版版本为 `0.3.0`，分件版为 `0.5.0`。账号、登录状态、密钥和本机模型由部署者在本地配置。
 
 ## AstrBot 部署
 
-QQ 的默认聊天模型可以在本机账号页 `http://127.0.0.1:6190/accounts` 的「QQ 聊天大脑」中验证和切换。支持本机 Ollama、DeepSeek、智谱、OpenAI GPT、Anthropic Claude、Gemini，以及提供 Chat Completions、Responses 或 Anthropic Messages 协议的自定义地址。Ollama 可以直接读取已安装的模型名。密钥在本机输入。
+QQ 的默认聊天模型可以在本机账号页 `http://127.0.0.1:6190/accounts` 的「聊天和网页助手的模型」中验证和切换。支持本机 Ollama、DeepSeek、智谱、OpenAI GPT、Anthropic Claude、Gemini，以及提供 Chat Completions、Responses 或 Anthropic Messages 协议的自定义地址。Ollama 可以直接读取已安装的模型名。密钥在本机输入。
 
 网页浏览、Windows 操作、Home Assistant 蓝牙或红外设备，以及 Android 常驻部署方式见[网页助手与设备联动](docs/网页助手与设备联动.md)。
 
