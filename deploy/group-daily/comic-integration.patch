@@ -1,0 +1,757 @@
+--- a/src/application/services/analysis_application_service.py
++++ b/src/application/services/analysis_application_service.py
+@@ -884,7 +884,7 @@
+         Args:
+             group_id: 目标群 ID。
+             platform_id: 平台适配器 ID。为空时使用默认适配器。
+-            days: 可选消息回溯天数。为空时使用普通分析的默认天数。
++            days: 可选历史回溯天数。为空时仅使用最近15分钟的最新真人话题。
+
+         Returns:
+             成功时返回提取到的话题和适配器信息；失败时返回 no_messages、
+@@ -919,15 +919,23 @@
+                     e,
+                 )
+
+-            if days is None:
+-                days = int(self.config_manager.get_analysis_days() or 1)
++            latest_mode = days is None
++            selected_at = time_mod.time()
++            if latest_mode:
++                days = 1
+             else:
+                 days = int(days)
+-            max_count = self.config_manager.get_max_messages()
+-
+-            raw_messages = await adapter.fetch_messages(
+-                group_id=group_id, days=days, max_count=max_count
+-            )
++            max_count = 120 if latest_mode else self.config_manager.get_max_messages()
++
++            if latest_mode:
++                raw_messages = await adapter.fetch_messages(
++                    group_id=group_id, days=days, max_count=max_count,
++                    since_ts=selected_at - 900,
++                )
++            else:
++                raw_messages = await adapter.fetch_messages(
++                    group_id=group_id, days=days, max_count=max_count
++                )
+             logger.info(
+                 "手动漫画消息拉取完成: group=%s, platform=%s, raw_count=%s, days=%s, max_count=%s",
+                 group_id,
+@@ -955,6 +963,43 @@
+             )
+             if not unified_messages:
+                 return {"success": False, "reason": "no_messages"}
++
++            if latest_mode:
++                from app.services.latest_comic_source import (
++                    LatestComicSourceError,
++                    extract_latest_comic_topic,
++                    select_recent_comic_messages,
++                )
++
++                records = select_recent_comic_messages(
++                    unified_messages, now=selected_at,
++                    bot_ids=self.config_manager.get_bot_self_ids(),
++                )
++                if len(records) < 2:
++                    return {"success": False, "reason": "no_recent_topic"}
++                try:
++                    async with self._llm_slot(group_id, "comic_latest"):
++                        topic = await extract_latest_comic_topic(
++                            self.llm_analyzer.context, records,
++                            self.config_manager.get_topic_provider_id(),
++                            selected_at=selected_at,
++                        )
++                except LatestComicSourceError as exc:
++                    logger.warning("最新漫画话题未能提取：%s", str(exc))
++                    return {"success": False, "reason": "no_recent_topic"}
++                trace = TraceContext.current()
++                if trace:
++                    trace.metadata["qqchat_comic_source_window"] = topic["source_window"]
++                logger.info(
++                    "手动漫画已使用最新话题: messages=%s, source_start=%s, source_end=%s",
++                    len(records), topic["source_window"]["start_ts"], topic["source_window"]["end_ts"],
++                )
++                return {
++                    "success": True, "topics": [topic], "token_usage": None,
++                    "messages_count": len(records), "source_window": topic["source_window"],
++                    "adapter": adapter, "group_id": group_id,
++                    "platform_id": getattr(adapter, "platform_id", platform_id),
++                }
+
+             legacy_messages = self.statistics_service._convert_to_legacy_dict(
+                 unified_messages
+--- a/src/application/services/comic_application_service.py
++++ b/src/application/services/comic_application_service.py
+@@ -70,31 +70,72 @@
+             return None, None
+
+         character = self.config_manager.get_selected_comic_character()
+-        character_name = (
+-            str(character.get("name", "")).strip() if character else ""
+-        ) or "默认配置"
++        character_name = (str(character.get("name", "")).strip() if character else "") or "默认配置"
+         persona_id = self.config_manager.get_comic_character_persona_id(character)
+-        prompt_template = self.config_manager.get_comic_character_storyboard_prompt(
+-            character
++        prompt_template = self.config_manager.get_comic_character_storyboard_prompt(character)
++        logger.info(f"[Comic] 开始为群 {group_id} 生成每日漫画，角色方案: {character_name}")
++
++        trace = TraceContext.current()
++
++        from app.astrbot_comic import (
++            build_comic_plan,
++            uses_free_comic_backend,
+         )
+-        logger.info(
+-            f"[Comic] 开始为群 {group_id} 生成每日漫画，角色方案: {character_name}"
+-        )
+-
+-        trace = TraceContext.current()
++
++        if uses_free_comic_backend(self.config_manager):
++            from app.services.group_comic_generation import (
++                ComicGenerationError,
++                generate_illustrated_comic,
++            )
++
++            drawing_ctx = trace.span(AnalysisStage.COMIC_DRAWING) if trace else nullcontext()
++            with drawing_ctx as drawing_rec:
++                try:
++                    illustrated, comic_plan = await generate_illustrated_comic(
++                        topics, self.config_manager, self.drawing_client,
++                        self.plugin_data_dir / "illustrated_comics" / str(group_id),
++                        character_name=character_name,
++                        source_window=trace.metadata.get("qqchat_comic_source_window") if trace else None,
++                    )
++                except Exception as exc:
++                    reason = str(exc) if isinstance(exc, ComicGenerationError) else "漫画绘图未完成"
++                    if trace:
++                        trace.metadata["qqchat_comic_failure"] = reason
++                    if drawing_rec is not None:
++                        drawing_rec.setdefault("payload", {}).update(
++                            backend="free_illustrated_story", success=False, error=reason,
++                        )
++                    logger.warning(f"[Comic] 连环漫画未完成（{type(exc).__name__}），不发送替代示意卡。")
++                    return None, None
++                if trace:
++                    trace.metadata["qqchat_comic_plan"] = comic_plan
++                if drawing_rec is not None:
++                    drawing_rec.setdefault("payload", {}).update(
++                        backend="free_illustrated_story", success=True,
++                        image_bytes=len(illustrated), selected_topic=comic_plan["selected_topics"],
++                        panel_captions=comic_plan["panel_captions"],
++                    )
++                logger.info("[Comic] 单话题三格插画已生成，中文在本地排版。")
++                return illustrated, None
+
+         # 1. 提取分镜和金句
+         sb_ctx = trace.span(AnalysisStage.COMIC_STORYBOARD) if trace else nullcontext()
+         with sb_ctx as sb_rec:
+-            (
+-                storyboards,
+-                storyboard_usage,
+-            ) = await self.llm_analyzer.analyze_comic_storyboards(
+-                topics,
+-                umo,
+-                persona_id=persona_id or None,
+-                prompt_template=prompt_template or None,
+-            )
++            try:
++                (
++                    storyboards,
++                    storyboard_usage,
++                ) = await self.llm_analyzer.analyze_comic_storyboards(
++                    topics,
++                    umo,
++                    persona_id=persona_id or None,
++                    prompt_template=prompt_template or None,
++                )
++            except Exception as exc:
++                logger.warning(
++                    f"[Comic] 分镜未完成（{type(exc).__name__}），使用真实话题的受控分镜。"
++                )
++                storyboards, storyboard_usage = [], None
+             if sb_rec:
+                 sb_prompts: dict[str, object] = {}
+                 llm_prompts = trace.metadata.get("llm_prompts") if trace else None
+@@ -114,14 +155,11 @@
+                         else ""
+                     )
+                     sb_prompts["comic_storyboards"] = {
+-                        "prompt": prompt_template
+-                        or "自动从群聊话题中提取漫画多格分镜与生图提示词",
++                        "prompt": prompt_template or "自动从群聊话题中提取漫画多格分镜与生图提示词",
+                         "system_prompt": f"漫画分镜师 | 人格: {persona_id or character_name}",
+                         "completion": first_scene,
+                         "prompt_tokens": getattr(storyboard_usage, "prompt_tokens", 0),
+-                        "completion_tokens": getattr(
+-                            storyboard_usage, "completion_tokens", 0
+-                        ),
++                        "completion_tokens": getattr(storyboard_usage, "completion_tokens", 0),
+                         "tokens": getattr(storyboard_usage, "total_tokens", 0),
+                     }
+                 sb_rec.setdefault("payload", {}).update(
+@@ -130,9 +168,7 @@
+                         "topics_count": len(topics),
+                         "storyboards_count": len(storyboards) if storyboards else 0,
+                         "prompt_tokens": getattr(storyboard_usage, "prompt_tokens", 0),
+-                        "completion_tokens": getattr(
+-                            storyboard_usage, "completion_tokens", 0
+-                        ),
++                        "completion_tokens": getattr(storyboard_usage, "completion_tokens", 0),
+                         "total_tokens": getattr(storyboard_usage, "total_tokens", 0),
+                         "prompts": sb_prompts,
+                     }
+@@ -140,24 +176,20 @@
+                 if not storyboards:
+                     sb_rec["payload"]["warning"] = "未能从群聊话题中提取出漫画分镜"
+
+-        if not storyboards:
+-            logger.warning(
+-                f"[Comic] 群 {group_id} 未能提取到任何金句分镜，取消漫画生成。"
+-            )
+-            return None, None
+-
+         logger.info("[Comic] 成功提取到全景分镜提示词，开始调用绘画 API...")
+
+         # 2. 直接生成一张图片
+-        first_sb = storyboards[0]
++        first_sb = storyboards[0] if storyboards else {}
+         scene_prompt = (
+-            first_sb.scene
+-            if isinstance(first_sb, ComicStoryboard)
+-            else first_sb.get("scene", "")
++            first_sb.scene if isinstance(first_sb, ComicStoryboard) else first_sb.get("scene", "")
+         )
+-        if not scene_prompt:
+-            logger.error("[Comic] 提取到的场景提示词为空，取消漫画生成。")
+-            return None, None
++        comic_plan = build_comic_plan(topics, str(scene_prompt or ""), character_name)
++        scene_prompt = comic_plan["drawing_prompt"]
++        if trace:
++            trace.metadata["qqchat_comic_plan"] = comic_plan
++        logger.info(
++            f"[Comic] 三格人物互动提示词已准备，使用受控后备: {comic_plan['scene_fallback']}"
++        )
+
+         logger.debug(f"[Comic] 漫画 Prompt 已生成，长度: {len(scene_prompt)}")
+
+@@ -170,9 +202,7 @@
+                 images_data.append(reference_image)
+                 logger.info(f"[Comic] 已加载参考图: {Path(reference_image_path).name}")
+             else:
+-                logger.warning(
+-                    f"[Comic] 无法加载参考图: {Path(reference_image_path).name}"
+-                )
++                logger.warning(f"[Comic] 无法加载参考图: {Path(reference_image_path).name}")
+
+         draw_ctx = trace.span(AnalysisStage.COMIC_DRAWING) if trace else nullcontext()
+         with draw_ctx as draw_rec:
+@@ -256,9 +286,7 @@
+                     scene_prompt, images_data=images_data or None
+                 )
+             except ImageDownloadFailedError as exc:
+-                logger.warning(
+-                    f"[Comic] 图片下载失败，保留 fallback URL: {exc.fallback_url}"
+-                )
++                logger.warning(f"[Comic] 图片下载失败，保留 fallback URL: {exc.fallback_url}")
+                 if draw_rec:
+                     draw_rec.setdefault("payload", {}).update(
+                         {
+@@ -276,23 +304,22 @@
+                 final_comic_bytes = None
+                 last_error = "绘图服务原样返回了参考图"
+
+-            exception_keywords = (
+-                self.config_manager.get_drawing_output_exception_retry_keywords()
+-            )
++            exception_keywords = self.config_manager.get_drawing_output_exception_retry_keywords()
+             should_rewrite_prompt = bool(
+                 last_error
+-                and any(
+-                    keyword in last_error for keyword in exception_keywords if keyword
+-                )
++                and any(keyword in last_error for keyword in exception_keywords if keyword)
+             )
+             if not final_comic_bytes and last_error and should_rewrite_prompt:
+-                logger.info(
+-                    f"[Comic] 画图重试已用尽，请求 LLM 分析报错并重写 Prompt: {last_error}"
+-                )
++                logger.info(f"[Comic] 画图重试已用尽，请求 LLM 分析报错并重写 Prompt: {last_error}")
+                 new_prompt = await self.llm_analyzer.analyze_retry_prompt(
+                     scene_prompt, last_error, umo
+                 )
+                 if new_prompt:
++                    comic_plan = build_comic_plan(topics, new_prompt, character_name)
++                    new_prompt = comic_plan["drawing_prompt"]
++                    scene_prompt = new_prompt
++                    if trace:
++                        trace.metadata["qqchat_comic_plan"] = comic_plan
+                     logger.info("[Comic] 获取到重写后的 Prompt，进行最后一次尝试...")
+                     try:
+                         final_comic_bytes, _ = await self.drawing_client.generate_image(
+@@ -316,9 +343,7 @@
+                     if final_comic_bytes and any(
+                         final_comic_bytes == reference[0] for reference in images_data
+                     ):
+-                        logger.warning(
+-                            "[Comic] 重写 Prompt 后仍原样返回参考图，拒绝发送。"
+-                        )
++                        logger.warning("[Comic] 重写 Prompt 后仍原样返回参考图，拒绝发送。")
+                         final_comic_bytes = None
+
+             if draw_rec:
+@@ -328,9 +353,7 @@
+                         "system_prompt": f"绘图引擎: {backend} | 角色方案: {character_name} | 参考图数: {len(images_data)}",
+                         "completion": f"出图完成（体积: {round(len(final_comic_bytes) / 1024, 1)} KB）"
+                         if final_comic_bytes
+-                        else (
+-                            f"出图未产出: {last_error}" if last_error else "未产出图像"
+-                        ),
++                        else (f"出图未产出: {last_error}" if last_error else "未产出图像"),
+                         "provider_type": backend,
+                     }
+                 }
+@@ -339,9 +362,7 @@
+                         "backend": backend,
+                         "scene_prompt_len": len(scene_prompt),
+                         "reference_images_count": len(images_data),
+-                        "image_bytes": len(final_comic_bytes)
+-                        if final_comic_bytes
+-                        else 0,
++                        "image_bytes": len(final_comic_bytes) if final_comic_bytes else 0,
+                         "success": bool(final_comic_bytes),
+                         "last_error": last_error,
+                         "prompts": draw_prompts,
+@@ -349,9 +370,7 @@
+                 )
+
+             if final_comic_bytes:
+-                logger.info(
+-                    f"[Comic] 漫画生成成功，大小: {len(final_comic_bytes)} bytes"
+-                )
++                logger.info(f"[Comic] 漫画生成成功，大小: {len(final_comic_bytes)} bytes")
+             else:
+                 logger.error("[Comic] 漫画生成最终失败。")
+
+@@ -379,9 +398,7 @@
+             return None
+         image_plugin = meta.star_cls if meta and meta.activated else None
+         if image_plugin is None:
+-            logger.warning(
+-                "[Comic] 未检测到已激活的「通用生图」插件，回退内置绘图后端。"
+-            )
++            logger.warning("[Comic] 未检测到已激活的「通用生图」插件，回退内置绘图后端。")
+             return None
+
+         public_api = getattr(image_plugin, "public_api", None)
+@@ -472,9 +489,7 @@
+                 if resource:
+                     image_list.append(resource)
+             if not image_list:
+-                logger.warning(
+-                    "[Comic] 参考图无法解析为「大香蕉」图片资源，将不带参考图生成。"
+-                )
++                logger.warning("[Comic] 参考图无法解析为「大香蕉」图片资源，将不带参考图生成。")
+
+         params: dict[str, object] = {
+             "prompt": scene_prompt,
+@@ -584,9 +599,7 @@
+                 async with httpx.AsyncClient(timeout=15.0) as client:
+                     resp = await client.get(image_ref)
+                     if resp.status_code == 200:
+-                        mime_type = resp.headers.get("content-type", "image/png").split(
+-                            ";"
+-                        )[0]
++                        mime_type = resp.headers.get("content-type", "image/png").split(";")[0]
+                         return resp.content, mime_type
+             except Exception as e:
+                 logger.error(f"[Comic] 下载远程参考图失败 {image_ref}: {e}")
+@@ -625,10 +638,7 @@
+             if hasattr(self, "plugin_data_dir") and self.plugin_data_dir:
+                 search_roots.append(Path(self.plugin_data_dir))
+             search_roots.append(
+-                Path.cwd()
+-                / "data"
+-                / "plugin_data"
+-                / "astrbot_plugin_qq_group_daily_analysis"
++                Path.cwd() / "data" / "plugin_data" / "astrbot_plugin_qq_group_daily_analysis"
+             )
+
+             for root in search_roots:
+--- a/src/application/handlers/comic_command_handler.py
++++ b/src/application/handlers/comic_command_handler.py
+@@ -64,9 +64,7 @@
+         self.comic_service = comic_service
+         self.analysis_service = analysis_service
+         self.active_task_manager = active_task_manager
+-        self.plugin_data_dir = (
+-            plugin_data_dir or Path.cwd() / "data" / "plugin_data" / PLUGIN_NAME
+-        )
++        self.plugin_data_dir = plugin_data_dir or Path.cwd() / "data" / "plugin_data" / PLUGIN_NAME
+         self.plugin_instance = plugin_instance
+         self.terminating: bool = False
+
+@@ -120,11 +118,7 @@
+             return ".webp"
+         if data.startswith((b"GIF87a", b"GIF89a")):
+             return ".gif"
+-        if (
+-            len(data) >= 12
+-            and data[4:8] == b"ftyp"
+-            and data[8:12] in {b"avif", b"avis"}
+-        ):
++        if len(data) >= 12 and data[4:8] == b"ftyp" and data[8:12] in {b"avif", b"avis"}:
+             return ".avif"
+         return ".png"
+
+@@ -160,9 +154,7 @@
+
+             self.bot_manager.update_from_event(event)
+
+-            check_target = (
+-                event.unified_msg_origin or f"{platform_id}:GroupMessage:{group_id}"
+-            )
++            check_target = event.unified_msg_origin or f"{platform_id}:GroupMessage:{group_id}"
+
+             if not self.config_manager.get_enable_daily_comic():
+                 yield event.plain_result("❌ 漫画生成功能未启用")
+@@ -188,9 +180,7 @@
+                 except Exception:
+                     pass
+
+-            trace_id = TraceContext.generate(
+-                prefix="comic", group_name=group_name or group_id
+-            )
++            trace_id = TraceContext.generate(prefix="comic", group_name=group_name or group_id)
+             trace = TraceContext.set(
+                 trace_id=trace_id,
+                 group_id=group_id,
+@@ -225,6 +215,8 @@
+                     await self.active_task_manager.finish_task(trace_id)
+                 if reason == "no_messages":
+                     yield event.plain_result("❌ 未找到可用于生成漫画的群聊记录")
++                elif reason == "no_recent_topic":
++                    yield event.plain_result("最近15分钟没有足够明确的新话题，暂时不生成漫画。")
+                 elif reason == "no_topics":
+                     yield event.plain_result("❌ 未提取到可用于生成漫画的话题")
+                 elif reason == "muted":
+@@ -234,6 +226,8 @@
+                 return
+
+             raw_topics = result.get("topics", [])
++            if trace and result.get("source_window"):
++                trace.metadata["qqchat_comic_source_window"] = result["source_window"]
+             status = self.try_trigger_comic_generation(
+                 group_id,
+                 platform_id,
+@@ -242,20 +236,16 @@
+                 trace=trace,
+             )
+             if status == "started":
+-                yield event.plain_result("✅ 漫画生成任务已启动，完成后会发送到群里")
++                return  # 已有一次初始进度；等待后台最终图文，不再重复发送启动预告。
+             elif status == "duplicate":
+                 if trace and trace.status == "running":
+-                    trace.finish(
+-                        event=TaskEvent.WARN, error_message="该群已有漫画任务正在执行"
+-                    )
++                    trace.finish(event=TaskEvent.WARN, error_message="该群已有漫画任务正在执行")
+                 if trace_id and self.active_task_manager:
+                     await self.active_task_manager.finish_task(trace_id)
+                 yield event.plain_result("🎨 该群已有漫画任务正在执行，请稍后再试哦~")
+             elif status == "blocked":
+                 if trace and trace.status == "running":
+-                    trace.finish(
+-                        event=TaskEvent.WARN, error_message="此群未启用漫画生成功能"
+-                    )
++                    trace.finish(event=TaskEvent.WARN, error_message="此群未启用漫画生成功能")
+                 if trace_id and self.active_task_manager:
+                     await self.active_task_manager.finish_task(trace_id)
+                 yield event.plain_result("❌ 此群未启用漫画生成功能")
+@@ -270,27 +260,21 @@
+                 yield event.plain_result("❌ 未提取到可用于生成漫画的话题")
+             else:
+                 if trace and trace.status == "running":
+-                    trace.finish(
+-                        event=TaskEvent.FAIL, error_message="漫画生成任务未启动"
+-                    )
++                    trace.finish(event=TaskEvent.FAIL, error_message="漫画生成任务未启动")
+                 if trace_id and self.active_task_manager:
+                     await self.active_task_manager.finish_task(trace_id)
+                 yield event.plain_result("⚠️ 漫画生成任务未启动，请查看插件日志")
+
+         except DuplicateGroupTaskError:
+             if trace and trace.status == "running":
+-                trace.finish(
+-                    event=TaskEvent.FAIL, error_message="该群的漫画话题提取任务正在执行"
+-                )
++                trace.finish(event=TaskEvent.FAIL, error_message="该群的漫画话题提取任务正在执行")
+             if trace_id and self.active_task_manager:
+                 await self.active_task_manager.finish_task(trace_id)
+             yield event.plain_result("🎨 该群的漫画话题提取任务正在执行，请稍后再试哦~")
+         except asyncio.CancelledError:
+             if trace and trace.status == "running":
+                 try:
+-                    trace.finish(
+-                        event=TaskEvent.ABORT, error_message="Task cancelled by system"
+-                    )
++                    trace.finish(event=TaskEvent.ABORT, error_message="Task cancelled by system")
+                 except RuntimeError as transition_error:
+                     logger.info(f"取消收尾时任务已由并发事件收敛: {transition_error}")
+             if trace_id and self.active_task_manager:
+@@ -302,9 +286,7 @@
+             if trace_id and self.active_task_manager:
+                 await self.active_task_manager.finish_task(trace_id)
+             logger.error(f"手动漫画生成失败: {e}", exc_info=True)
+-            yield event.plain_result(
+-                f"❌ 漫画生成失败: {e!s}。请检查消息获取、LLM 和绘图配置"
+-            )
++            yield event.plain_result(f"❌ 漫画生成失败: {e!s}。请检查消息获取、LLM 和绘图配置")
+         finally:
+             if current_task:
+                 self._background_tasks.discard(current_task)
+@@ -376,10 +358,8 @@
+                 title = ""
+                 detail = ""
+             if str(title).strip():
+-                comic_topics.append(
+-                    {"topic": str(title).strip(), "detail": str(detail).strip()}
+-                )
+-        if not comic_topics:
++                comic_topics.append({"topic": str(title).strip(), "detail": str(detail).strip()})
++        if not comic_topics and not require_auto_enabled:
+             logger.warning(f"群 {group_id} 没有有效话题，跳过漫画生成。")
+             return "no_topics"
+
+@@ -397,6 +377,7 @@
+                 umo,
+                 trace=trace,
+                 stop_request=stop_request,
++                refresh_latest=require_auto_enabled,
+             )
+         )
+         self._comic_group_tasks[task_key] = task
+@@ -421,6 +402,58 @@
+         umo: str,
+         trace: TraceContext | None = None,
+         stop_request: StopRequest | None = None,
++        refresh_latest: bool = False,
++    ) -> None:
++        """后台任务无论交付、失败还是排队中取消，都只收敛仍在运行的当前 trace。"""
++        cur_trace = trace or TraceContext.current()
++        outcome = {"event": TaskEvent.FAIL, "error": "漫画生成或发送未完成"}
++        try:
++            if refresh_latest:
++                fresh = await self.analysis_service.execute_comic_topic_analysis(
++                    group_id=group_id, platform_id=platform_id, days=None,
++                )
++                if not fresh.get("success"):
++                    outcome.update(event=TaskEvent.WARN, error="近期没有明确话题，跳过漫画")
++                    return
++                topics = fresh["topics"]
++                if cur_trace and fresh.get("source_window"):
++                    cur_trace.metadata["qqchat_comic_source_window"] = fresh["source_window"]
++            await self._generate_and_deliver_comic(
++                topics,
++                group_id,
++                platform_id,
++                umo,
++                trace=cur_trace,
++                stop_request=stop_request,
++                outcome=outcome,
++            )
++        except asyncio.CancelledError:
++            if outcome["event"] != TaskEvent.SUCCEED:
++                outcome.update(
++                    event=TaskEvent.ABORT if self.terminating else TaskEvent.CANCEL,
++                    error="漫画任务已取消",
++                )
++            raise
++        finally:
++            try:
++                if cur_trace and cur_trace.status == "running":
++                    try:
++                        cur_trace.finish(event=outcome["event"], error_message=outcome["error"])
++                    except RuntimeError:
++                        logger.info("[Comic] 任务已由并发取消或完成事件收敛，保留既有状态。")
++            finally:
++                if cur_trace and self.active_task_manager:
++                    await self.active_task_manager.finish_task(cur_trace.trace_id)
++
++    async def _generate_and_deliver_comic(
++        self,
++        topics: list[dict[str, object]],
++        group_id: str,
++        platform_id: str | None,
++        umo: str,
++        trace: TraceContext | None = None,
++        stop_request: StopRequest | None = None,
++        outcome: dict | None = None,
+     ) -> None:
+         """后台生成并上传漫画，通过信号量控制并发。
+
+@@ -439,15 +472,26 @@
+             asyncio.CancelledError: 本次漫画任务被取消。
+         """
+         cur_trace = trace or TraceContext.current()
++        outcome = (
++            outcome
++            if outcome is not None
++            else {"event": TaskEvent.FAIL, "error": "漫画生成或发送未完成"}
++        )
+         if cur_trace:
+             from ...shared.trace_context import _current_trace
+
+             _current_trace.set(cur_trace)
+
+         async with self._comic_semaphore:
+-            if self.terminating or (
+-                stop_request is not None and stop_request.refresh()
++            if (
++                self.terminating
++                or (stop_request is not None and stop_request.refresh())
++                or (cur_trace and cur_trace.status in {"cancelled", "aborted", "failed", "skipped"})
+             ):
++                outcome.update(
++                    event=TaskEvent.ABORT if self.terminating else TaskEvent.CANCEL,
++                    error="漫画任务开始前已停止",
++                )
+                 return
+             try:
+                 if cur_trace and self.active_task_manager:
+@@ -458,7 +502,10 @@
+                 comic_bytes, fallback_url = await self.comic_service.generate_comic(
+                     topics, group_id, umo
+                 )
+-                if stop_request is not None and stop_request.refresh():
++                if (stop_request is not None and stop_request.refresh()) or (
++                    cur_trace and cur_trace.status in {"cancelled", "aborted", "failed", "skipped"}
++                ):
++                    outcome.update(event=TaskEvent.CANCEL, error="漫画任务已停止，未发送结果")
+                     return
+                 if comic_bytes:
+                     logger.info(f"群 {group_id} 漫画生成成功，准备发送和保存副本...")
+@@ -470,15 +517,24 @@
+                     reports_dir = (
+                         self.plugin_data_dir / "reports"
+                         if self.plugin_data_dir
+-                        else Path.cwd()
+-                        / "data"
+-                        / "plugin_data"
+-                        / PLUGIN_NAME
+-                        / "reports"
++                        else Path.cwd() / "data" / "plugin_data" / PLUGIN_NAME / "reports"
+                     )
+                     reports_dir.mkdir(parents=True, exist_ok=True)
+                     comic_file_path = reports_dir / filename
+                     comic_file_path.write_bytes(comic_bytes)
++                    from app.astrbot_comic import (
++                        mark_generated_comic_delivered,
++                        write_generated_comic_sidecar,
++                    )
++
++                    comic_source = write_generated_comic_sidecar(
++                        comic_file_path,
++                        group_id,
++                        topics,
++                        trace_id=cur_trace.trace_id if cur_trace else "",
++                        platform_id=platform_id or "",
++                        plan=cur_trace.metadata.get("qqchat_comic_plan") if cur_trace else None,
++                    )
+
+                     if cur_trace:
+                         rfiles = cur_trace.metadata.setdefault("report_files", [])
+@@ -493,28 +549,17 @@
+                             )
+
+                     adapter = (
+-                        self.bot_manager.get_adapter(platform_id)
+-                        if self.bot_manager
+-                        else None
++                        self.bot_manager.get_adapter(platform_id) if self.bot_manager else None
+                     )
+                     if adapter:
+-                        show_caption_fn = (
+-                            getattr(
+-                                self.config_manager, "get_show_report_caption", None
+-                            )
+-                            if self.config_manager
+-                            else None
+-                        )
+-                        show_caption = (
+-                            show_caption_fn() if callable(show_caption_fn) else True
+-                        )
+-                        caption = (
+-                            TraceContext.make_report_caption() if show_caption else ""
+-                        )
++                        caption = str(comic_source["caption"])
+                         sent = await adapter.send_image(
+                             group_id, str(comic_file_path), caption=caption
+                         )
+                         if sent:
++                            # 主图片已经送达；相册上传或旁注持久化失败不能把已交付任务改成失败。
++                            outcome.update(event=TaskEvent.SUCCEED, error=None)
++                            mark_generated_comic_delivered(comic_file_path, group_id)
+                             if self.plugin_instance:
+                                 inst_upload = getattr(
+                                     self.plugin_instance, "_try_upload_image", None
+@@ -549,9 +594,29 @@
+                 elif fallback_url:
+                     adapter = self.bot_manager.get_adapter(platform_id)
+                     if adapter:
+-                        await adapter.send_image(group_id, fallback_url)
++                        from app.astrbot_comic import build_comic_plan
++
++                        source = build_comic_plan(topics)
++                        sent = await adapter.send_text(
++                            group_id,
++                            "漫画图片未能保存，本次先给群聊说明。\n群聊摘要："
++                            + source["source_summary"]
++                            + "\n创作意图："
++                            + source["creation_intent"],
++                        )
++                        if sent:
++                            outcome.update(
++                                event=TaskEvent.WARN, error="图片未能保存，已交付真实话题文字说明"
++                            )
+                 else:
+                     logger.warning(f"群 {group_id} 漫画生成未产生有效输出。")
++                    adapter = self.bot_manager.get_adapter(platform_id) if self.bot_manager else None
++                    reason = (
++                        cur_trace.metadata.get("qqchat_comic_failure", "漫画绘图未完成")
++                        if cur_trace else "漫画绘图未完成"
++                    )
++                    if adapter:
++                        await adapter.send_text(group_id, f"这次漫画未完成：{reason}。可以稍后再试。")
+             except Exception as e:
+                 logger.error(f"群 {group_id} 后台漫画生成执行异常: {e}", exc_info=True)
+
+@@ -567,9 +632,7 @@
+             return
+         if not self.config_manager.get_enable_comic_album_upload():
+             return
+-        adapter = (
+-            self.bot_manager.get_adapter(platform_id) if self.bot_manager else None
+-        )
++        adapter = self.bot_manager.get_adapter(platform_id) if self.bot_manager else None
+         upload_fn = getattr(adapter, "upload_group_album", None)
+         if not callable(upload_fn):
+             return
+@@ -577,11 +640,7 @@
+         album_name = self.config_manager.get_comic_album_name() or "daily_analysis"
+         strict_mode = self.config_manager.get_group_album_strict_mode()
+         try:
+-            target_path = (
+-                str(Path(image_url).resolve())
+-                if Path(image_url).exists()
+-                else image_url
+-            )
++            target_path = str(Path(image_url).resolve()) if Path(image_url).exists() else image_url
+             res = upload_fn(
+                 group_id,
+                 target_path,

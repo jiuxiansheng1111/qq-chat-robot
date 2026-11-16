@@ -47,11 +47,12 @@ def _long_wav(path, seconds: int = 122, rate: int = 24_000) -> bytes:
 
 def test_configured_runtime_tool_resolves_outside_project_cwd(tmp_path, monkeypatch):
     project_root = Path(__file__).resolve().parents[1]
-    runtime = project_root / "data" / "singing" / "runtime" / "bin" / "ffmpeg.exe"
+    relative = Path("data/singing/runtime/bin") / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+    runtime = project_root / relative
     if not runtime.is_file():
         pytest.skip("project runtime FFmpeg is unavailable")
     monkeypatch.chdir(tmp_path)
-    assert locate_audio_tool("ffmpeg", "./data/singing/runtime/bin/ffmpeg.exe") == runtime
+    assert locate_audio_tool("ffmpeg", str(relative)) == runtime.resolve()
 
 
 @pytest.mark.asyncio

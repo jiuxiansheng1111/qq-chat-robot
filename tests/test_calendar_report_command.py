@@ -5,6 +5,7 @@ import inspect
 import sys
 import types
 import typing
+from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -81,7 +82,10 @@ async def test_native_handler_stopping_pipeline_still_finishes_owned_delivery(mo
     # first yield, so a command that itself yields early would lose the report.
     source = Path(__file__).resolve().parents[1] / "data/astrbot/runtime/tool-envs/astrbot/Lib/site-packages/astrbot/core/pipeline/context_utils.py"
     if not source.is_file():
-        pytest.skip("local AstrBot runtime is not installed")
+        try:
+            source = distribution("astrbot").locate_file("astrbot/core/pipeline/context_utils.py")
+        except PackageNotFoundError:
+            pytest.skip("AstrBot runtime is not installed")
     node = next(item for item in ast.parse(source.read_text(encoding="utf-8")).body
                 if isinstance(item, ast.AsyncFunctionDef) and item.name == "call_handler")
     namespace = {"inspect": inspect, "T": typing, "AstrMessageEvent": object,

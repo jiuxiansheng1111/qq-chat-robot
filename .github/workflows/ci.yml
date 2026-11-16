@@ -22,12 +22,68 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: integrations/minecraft-player/package-lock.json
       - name: Install dependencies
-        run: python -m pip install -e ".[dev]"
+        run: |
+          python -m pip install -e ".[dev]" "astrbot==4.28.2" "diskcache==5.6.3" "ulid-py==1.1.0"
+          npm ci --prefix integrations/minecraft-player --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org --replace-registry-host=always
+          echo "ASTRBOT_ROOT=$RUNNER_TEMP/astrbot-test-home" >> "$GITHUB_ENV"
+      - name: Get the group reporting plugin (v5.8.4)
+        uses: actions/checkout@v7
+        with:
+          repository: SXP-Simon/astrbot_plugin_qq_group_daily_analysis
+          ref: ca0e3017b833472b872e7d18df63ed6ff72d6358
+          path: data/astrbot/instance/data/plugins/astrbot_plugin_qq_group_daily_analysis
+          sparse-checkout: src
+          persist-credentials: false
+      - name: Apply the deployed reporting integrations
+        working-directory: data/astrbot/instance/data/plugins/astrbot_plugin_qq_group_daily_analysis
+        run: |
+          git apply -p7 "$GITHUB_WORKSPACE/integrations/group-daily-analysis/napcat-avatar.patch"
+          git apply "$GITHUB_WORKSPACE/deploy/group-daily/history-pagination.patch"
+          git apply "$GITHUB_WORKSPACE/deploy/group-daily/comic-integration.patch"
+      - name: Get the proactive sender (v1.2.6)
+        uses: actions/checkout@v7
+        with:
+          repository: Pancakes-Labs/astrbot_plugin_proactive_chat
+          ref: 635fc18eeb84e3c7b58661425359244552286835
+          path: data/astrbot/instance/data/plugins/astrbot_plugin_proactive_chat
+          sparse-checkout: core
+          persist-credentials: false
+      - name: Get the companion prompt implementation (v6.5.6)
+        uses: actions/checkout@v7
+        with:
+          repository: menglimi/astrbot_plugin_private_companion
+          ref: d718763429e7efee3078529501595cf0ec62498e
+          path: data/astrbot/instance/data/plugins/astrbot_plugin_private_companion
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /main.py
+            /conversation_prompt_section.py
+          persist-credentials: false
+      - name: Get the original GIF used in QQ delivery tests (v1.0.0)
+        uses: actions/checkout@v7
+        with:
+          repository: anka-afk/blue-fat-fish-meme-pack
+          ref: 0bbf1c546135ad55e6049241922a90fcb5332777
+          path: data/astrbot/instance/data/plugin_data/meme_manager/packs/blue-fat-fish-meme-pack
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /source_index.json
+            /memes/happy/0064_庆祝.gif
+          persist-credentials: false
       - name: Install Chinese fonts and the matching Chromium for image tests
         run: |
           python -m playwright install --with-deps --no-shell chromium
-          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk ffmpeg
+          mkdir -p data/singing/runtime/bin
+          ln -s "$(command -v ffmpeg)" data/singing/runtime/bin/ffmpeg
+          ln -s "$(command -v ffprobe)" data/singing/runtime/bin/ffprobe
           # The report renderer finds the chromium executable on PATH.
           mkdir -p "$RUNNER_TEMP/report-browser"
           python - "$RUNNER_TEMP/report-browser/chromium" <<'PY'
@@ -41,6 +97,16 @@ jobs:
           PY
           echo "$RUNNER_TEMP/report-browser" >> "$GITHUB_PATH"
       - name: Run tests
-        run: python -m pytest -q -rs
+        run: |
+          python -m pytest -q -rs --junitxml="$RUNNER_TEMP/qqchat-tests.xml"
+          python - "$RUNNER_TEMP/qqchat-tests.xml" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          skipped = [case for case in ET.parse(sys.argv[1]).iter("testcase") if case.find("skipped") is not None]
+          unexpected = [case.get("name") for case in skipped if case.get("classname") != "tests.live.test_live_services"]
+          if unexpected:
+              raise SystemExit(f"Offline integration tests skipped: {', '.join(unexpected)}")
+          PY
       - name: Run lint
         run: python -m ruff check app tests

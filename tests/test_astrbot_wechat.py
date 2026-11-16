@@ -387,9 +387,8 @@ async def test_installed_astrbot_4282_event_and_components_route_in_isolation(tm
     monkeypatch.chdir(tmp_path)
     repo_root = Path(__file__).resolve().parents[1]
     site_packages = repo_root / "data" / "astrbot" / "runtime" / "tool-envs" / "astrbot" / "Lib" / "site-packages"
-    if not site_packages.is_dir():
-        pytest.skip("本机 AstrBot runtime 未附在此 checkout")
-    monkeypatch.syspath_prepend(str(site_packages))
+    if site_packages.is_dir():
+        monkeypatch.syspath_prepend(str(site_packages))
     try:
         import astrbot
         from astrbot.api.event import MessageChain
