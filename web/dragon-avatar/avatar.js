@@ -148,6 +148,7 @@ async function init() {
   const face=(expression,alpha)=>{for(const item of faces[expressions[expression]??0])draw(item,coherent,alpha,.045);if(blink>0)for(const item of faces[closed[expression]??8])draw(item,coherent,alpha*blink,.045);draw(rests[expressions[expression]??0],coherent,alpha,.09);};
   if(mix<1)face(previousExpression,1);face(state.expression,mix);
   if(mouth>.06){const open=mouth>.65?2:1;const blend=Math.min(1,mouth*7);draw(lips[open],atlas,blend);}
+  if(!canvas.dataset.renderReady)canvas.dataset.renderReady='true';
   requestAnimationFrame(frame);
  }
  if(!inspecting)connect();requestAnimationFrame(frame);report('ready');

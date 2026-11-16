@@ -19,6 +19,7 @@ def _load_plugin(monkeypatch: pytest.MonkeyPatch):
     """Load main.py against a tiny AstrBot API stub, so tests need no AstrBot install."""
     monkeypatch.setattr("app.astrbot_flash_provider.register_flash_provider", lambda: None)
     monkeypatch.setattr("app.astrbot_chatgpt_provider.register_chatgpt_provider", lambda: None)
+    monkeypatch.setattr("app.astrbot_vision_provider.register_vision_provider", lambda: None)
     astrbot = types.ModuleType("astrbot")
     astrbot.__path__ = []
     api = types.ModuleType("astrbot.api")
@@ -61,6 +62,7 @@ def _load_plugin(monkeypatch: pytest.MonkeyPatch):
         on_decorating_result = staticmethod(decorator_factory)
         on_llm_request = staticmethod(decorator_factory)
         on_llm_response = staticmethod(decorator_factory)
+        on_llm_tool_respond = staticmethod(decorator_factory)
         llm_tool = staticmethod(decorator_factory)
         command = staticmethod(decorator_factory)
         custom_filter = staticmethod(decorator_factory)

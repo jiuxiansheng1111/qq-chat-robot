@@ -144,7 +144,7 @@ class Settings(BaseSettings):
     voice_sovits_weights_by_profile_json: str = ""
     # 可选 profile -> GPT 检查点映射。启用后，每个 profile（包括默认角色）都必须有明确路由。
     voice_gpt_weights_by_profile_json: str = ""
-    daily_news_enabled: bool = True
+    daily_news_enabled: bool = False
     daily_news_hour: int = 12
     daily_news_minute: int = 0
     daily_news_timezone: str = "Asia/Shanghai"

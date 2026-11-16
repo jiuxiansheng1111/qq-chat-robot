@@ -4,7 +4,6 @@ import asyncio
 import base64
 import io
 import json
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -76,11 +75,18 @@ def isolate_video_cache(monkeypatch):
     video._CACHE.clear()
 
 
+def _ffmpeg():
+    try:
+        binary = video._binary(None, "ffmpeg")
+        video._binary(None, "ffprobe")
+    except video.VideoReadError:
+        pytest.skip("需要已安装的 ffmpeg 和 ffprobe 以创建和读取测试视频")
+    return binary
+
+
 async def _two_scenes(tmp_path):
     destination = tmp_path / "real-video.mp4"
-    ffmpeg = Path(video._binary(None, "ffmpeg"))
-    if not ffmpeg.is_file():
-        pytest.skip("需要本机已安装 ffmpeg")
+    ffmpeg = _ffmpeg()
     await video._run(
         str(ffmpeg),
         "-v",
@@ -272,7 +278,7 @@ async def test_longer_audio_and_one_fps_video_do_not_sample_past_last_real_frame
 ):
     path = tmp_path / "audio-longer-than-video.mp4"
     await video._run(
-        video._binary(None, "ffmpeg"),
+        _ffmpeg(),
         "-v",
         "error",
         "-nostdin",

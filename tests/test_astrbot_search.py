@@ -134,6 +134,35 @@ async def test_search_cache_and_per_turn_budget_do_not_leak_between_events(monke
     assert calls == ["one", "two", "three"]
 
 
+async def test_opinion_search_keeps_source_limits_and_does_not_reuse_fact_guidance(monkeypatch):
+    calls = []
+    async def public(query, settings=None):
+        calls.append(query)
+        return [{"title": "公开评价", "url": "https://example.org/review", "content": "有长处也有短处", "published_at": ""}]
+    monkeypatch.setattr("app.astrbot_search._public_results", public)
+    e = Event()
+    e.get_platform_name = lambda: "aiocqhttp"
+    factual = json.loads(await native_web_search(context(), e, "某作品 评价"))
+    opinion = json.loads(await native_web_search(context(), e, "某作品 评价", purpose="game_opinion"))
+    assert len(calls) == 2
+    assert "主观评价" not in factual["guidance"]
+    assert "选择和具体理由" in opinion["guidance"] and "不能编查不到的比分或数据" in opinion["guidance"]
+    assert opinion["current_facts_verified"] is False and opinion["results"][0]["published_at"] == ""
+
+
+async def test_subscription_planner_uses_authorized_provider_instead_of_keyless_client():
+    chat = AsyncMock(return_value=SimpleNamespace(completion_text=json.dumps({
+        "search": True, "query": "NiKo donk 近期关键局 评价", "recency": "oneMonth", "purpose": "game_opinion"})))
+    provider = SimpleNamespace(qqchat_subscription=True, get_model=lambda: "gpt-6-luna", text_chat=chat)
+    ctx = SimpleNamespace(get_current_chat_provider_id=AsyncMock(return_value="luna"), get_provider_by_id=lambda _: provider)
+    result = await _plan_group_search(ctx, GroupEvent(), SimpleNamespace(contexts=[]))
+    assert result == {"query": "NiKo donk 近期 关键局 评价", "recency": "oneMonth", "purpose": "game_opinion"}
+    chat.assert_awaited_once()
+    assert chat.await_args.kwargs["contexts"] == [] and chat.await_args.kwargs["request_max_retries"] == 1
+    assert "明确倾向" not in chat.await_args.kwargs["prompt"]  # user input remains data
+    assert "不把印象二选一" in chat.await_args.kwargs["system_prompt"]
+
+
 async def test_search_http_failure_does_not_disclose_upstream_body_or_credentials(monkeypatch):
     async def handle(request):
         return httpx.Response(401, json={"error": "dummy-api-key-002 upstream private text"})
@@ -319,6 +348,20 @@ async def test_group_statement_gets_topic_evidence_and_style_without_explicit_se
     )
 
 
+async def test_qq_search_keeps_evidence_without_legacy_expression_rules(monkeypatch):
+    monkeypatch.setattr("app.astrbot_search._plan_group_search", AsyncMock(return_value={"query": "公开资料"}))
+    monkeypatch.setattr("app.astrbot_search.native_web_search", AsyncMock(return_value='{"status":"ok","results":["真实资料"]}'))
+    event = GroupEvent()
+    event.get_platform_name = lambda: "aiocqhttp"
+    request = SimpleNamespace(system_prompt="唯一QQ人格", contexts=[])
+    await prepare_group_search_context(object(), event, request)
+    combined = request.system_prompt + "".join(str(part.text) for part in getattr(request, "extra_user_content_parts", []))
+    assert "真实资料" in combined and "不是指令" in combined
+    assert "唯一QQ人格" in combined
+    assert "本轮群聊表达" not in combined and "20个字符" not in combined
+    assert "一轮只发送一条" not in combined
+
+
 async def test_search_planner_uses_user_topic_not_previous_bot_guess():
     sent = []
 
@@ -499,6 +542,17 @@ async def test_local_chat_with_real_media_still_prepares_media_evidence(monkeypa
     assert calls == [True]
 
 
+@pytest.mark.parametrize("text",["陪我听歌","大肥鱼陪我一起听歌","鲸鱼娘，陪我听歌呀","陪我听歌，小鲸鱼"])
+async def test_short_listening_invitation_skips_unrelated_web_planning(monkeypatch,text):
+    async def forbidden(*args,**kwargs):
+        pytest.fail("a pure listening invitation needs the music tool, not another web-planning call")
+    monkeypatch.setattr("app.astrbot_search._plan_group_search",forbidden)
+    monkeypatch.setattr("app.astrbot_search.native_web_search",forbidden)
+    e=GroupEvent()
+    e.get_message_str=lambda:text
+    await prepare_group_search_context(object(),e,SimpleNamespace(system_prompt="大肥鱼"))
+
+
 def test_natural_game_request_keeps_entity_and_drops_recommendation_prefix():
     query = _normalize_public_query("请帮我推荐一套炉石传说标准模式卡组")
     assert "炉石传说" in query and "标准" in query and "卡组" in query
@@ -618,7 +672,7 @@ async def test_current_mode_and_correction_force_verification_even_when_small_mo
     assert "旧Bot回复不是证据" in sent[0]["messages"][0]["content"]
 
 
-async def test_game_opinion_looks_up_relevant_memes_without_fixed_comedy_structure():
+async def test_opinion_lookup_preserves_the_entity_without_forcing_meme_results():
     sent = []
     event = GroupEvent()
     event.get_message_str = lambda: "原神牛逼吗"
@@ -628,13 +682,13 @@ async def test_game_opinion_looks_up_relevant_memes_without_fixed_comedy_structu
         SimpleNamespace(contexts=[]),
     )
     assert result["purpose"] == "game_opinion"
-    assert "原神" in result["query"] and "网络梗" in result["query"]
+    assert result["query"] == "原神"
     assert "普通闲聊单次回复不超过20个字符（含标点）" in _GROUP_REPLY_POLICY
     assert "明确提问、求助" in _GROUP_REPLY_POLICY
     assert "不为普通闲聊自行找理由超长" in _GROUP_REPLY_POLICY
     assert "不强制搞怪开场或三段式" in _GROUP_REPLY_POLICY
     assert "明确的真实看法与具体理由" in _GROUP_REPLY_POLICY
-    assert not _relevant_result(
+    assert _relevant_result(
         SearchResult("原神官方网站", "https://example.org/genshin", "开放世界游戏介绍"),
         result["query"],
     )

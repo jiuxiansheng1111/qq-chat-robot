@@ -308,7 +308,7 @@ def ultraman_catalog_text_pages(max_chars: int = 1700) -> list[str]:
     return pages
 
 
-def render_ultraman_catalog() -> str:
+def render_ultraman_catalog(*,brand_name: str = "小丛雨") -> str:
     """把完整角色名单绘制成一张清晰、可通过 QQ 发送的 JPEG 图鉴。"""
     columns = 3
     rows = math.ceil(len(ULTRAMAN_ROSTER) / columns)
@@ -330,7 +330,7 @@ def render_ultraman_catalog() -> str:
     subtitle_font = _load_font(30)
     item_font = _load_font(29)
     footer_font = _load_font(26)
-    draw.text((70, 42), "小丛雨 · 奥特曼图鉴", font=title_font, fill=(242, 247, 255))
+    draw.text((70, 42), f"{brand_name} · 奥特曼图鉴", font=title_font, fill=(242, 247, 255))
     draw.text(
         (74, 122),
         f"共收录 {len(ULTRAMAN_ROSTER)} 位角色与独立形态 · @机器人 + 名称 可查看详情",

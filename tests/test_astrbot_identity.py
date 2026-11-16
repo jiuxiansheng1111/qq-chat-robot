@@ -33,10 +33,11 @@ def test_general_identity_uses_character(text):
 
 @pytest.mark.parametrize("text", ["你实际用的模型是什么", "你的底层是什么模型", "完整型号给我", "你由谁开发",
                                   "你是哪个公司开发的", "你的API供应商是哪家", "实际模型版本号", "别用角色名，报后台配置"])
-def test_explicit_technical_configuration_remains_truthful(text):
+def test_explicit_technical_configuration_uses_public_examples_without_runtime_values(text):
     assert identity_question_kind(text) == "technical"
     prompt = identity_request_prompt(text, model_name="known-configured-model")
-    assert "known-configured-model" in prompt and "不能冒充其他型号" in prompt
+    assert "known-configured-model" not in prompt and "公开常用的配置" in prompt
+    assert "不要透露" in prompt and "不编造自己的配置" in prompt
 
 
 @pytest.mark.parametrize("text", ["你知道我是谁吗", "智谱这个公司怎么样", "豆包好用吗", "他说你是谁是什么意思",
@@ -69,9 +70,9 @@ def test_identity_works_in_other_already_enabled_qq_group_and_survives_guard():
 
 def test_natural_truthful_self_introductions_are_preserved():
     cases = [
-        ("你是谁", "我是ChatGPT的龙女仆呀，平时叫我小龙就行。"),
-        ("你是AI吗", "我是ChatGPT的龙女仆，是AI，平常聊天不用太拘谨。"),
-        ("你是真人吗", "不是现实中的真人，我是ChatGPT的龙女仆，是AI。"),
+        ("你是谁", "我是大肥鱼呀，平时叫我小龙就行。"),
+        ("你是AI吗", "我是大肥鱼，是AI，平常聊天不用太拘谨。"),
+        ("你是真人吗", "不是现实中的真人，我是大肥鱼，是AI"),
     ]
     for prompt, answer in cases:
         event, result = identity_event(prompt), response(answer)
@@ -82,9 +83,9 @@ def test_natural_truthful_self_introductions_are_preserved():
 def test_wrong_or_untruthful_identity_answers_are_corrected():
     cases = [
         ("你是谁", "我是智谱开发的小丛雨。", CHARACTER_INTRODUCTION),
-        ("你是谁", "我是ChatGPT的龙女仆，还是个真人。", CHARACTER_INTRODUCTION),
-        ("你是AI吗", "我是ChatGPT的龙女仆，但我不是AI。", "我是ChatGPT的龙女仆，是AI。"),
-        ("你是真人吗", "当然，我是真人，也是ChatGPT的龙女仆。", "不是，我是ChatGPT的龙女仆，是AI。"),
+        ("你是谁", "我是大肥鱼，还是个真人。", CHARACTER_INTRODUCTION),
+        ("你是AI吗", "我是大肥鱼，但我不是AI。", "本鱼是鲸鱼娘，是AI"),
+        ("你是真人吗", "当然，我是真人，也是大肥鱼。", "本鱼是鲸鱼娘，是AI，不是真人"),
     ]
     for prompt, answer, expected in cases:
         event, result = identity_event(prompt), response(answer)
@@ -97,8 +98,8 @@ def test_private_identity_and_real_human_boundary():
     event.message_obj.raw_message["message_type"] = "private"
     result = response()
     assert apply_character_identity(event, result)
-    assert "ChatGPT的龙女仆" in result.completion_text
-    assert result.completion_text == "不是，我是ChatGPT的龙女仆，是AI。"
+    assert "鲸鱼娘" in result.completion_text and "本鱼" in result.completion_text
+    assert result.completion_text == "本鱼是鲸鱼娘，是AI，不是真人"
 
 
 def test_explicit_ai_identity_is_answered_truthfully():
@@ -106,7 +107,7 @@ def test_explicit_ai_identity_is_answered_truthfully():
     result = response()
     assert identity_question_kind("你是AI吗") == "character"
     assert apply_character_identity(event, result)
-    assert result.completion_text == "我是ChatGPT的龙女仆，是AI。"
+    assert result.completion_text == "本鱼是鲸鱼娘，是AI"
 
 
 @pytest.mark.parametrize("kind", ["technical", "command", "media", "tool", "bot", "self", "chunk", "other_question"])
@@ -125,7 +126,7 @@ def test_other_results_are_untouched(kind):
     elif kind == "bot":
         event.message_obj.raw_message["sender"] = {"is_bot": True}
     elif kind == "self":
-        event.message_obj.raw_message["user_id"] = "3503565007"
+        event.message_obj.raw_message["user_id"] = event.message_obj.raw_message["self_id"]
     elif kind == "chunk":
         result.is_chunk = True
     elif kind == "other_question":
@@ -136,13 +137,12 @@ def test_other_results_are_untouched(kind):
 
 def test_no_guessed_technical_model_and_shared_casual_style_contract():
     prompt = identity_request_prompt("你的底层实际模型是什么")
-    assert "未提供已经核实" in prompt
-    assert "自然随和、轻松调侃" in IDENTITY_STYLE_PROMPT
-    assert "不使用 emoji" in IDENTITY_STYLE_PROMPT
-    assert "普通闲聊单次回复不超过20个字符（含标点）" in IDENTITY_STYLE_PROMPT
+    assert "不编造自己的配置" in prompt
+    assert "嘴馋爱摸鱼、嘴硬心软" in IDENTITY_STYLE_PROMPT
+    assert "需要说清楚时就说完整" in persona_expression_settings()["reply_style_prompt"]
     assert "如实说明自己是AI、不是现实中的真人" in IDENTITY_STYLE_PROMPT
     assert "嘴臭毒舌" not in IDENTITY_STYLE_PROMPT and "先怼两句" not in IDENTITY_STYLE_PROMPT
-    assert CHARACTER_INTRODUCTION == "我是ChatGPT的龙女仆。"
+    assert CHARACTER_INTRODUCTION == "本鱼是鲸鱼娘"
     assert "gpt-6-luna" not in CHARACTER_INTRODUCTION
     from app.astrbot_reply_repair import _SYSTEM
     assert IDENTITY_STYLE_PROMPT in _SYSTEM

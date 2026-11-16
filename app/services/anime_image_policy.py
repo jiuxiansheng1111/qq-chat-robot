@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+import httpx
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -167,15 +168,23 @@ async def fetch_theme_candidates(plugin: Any, event: Any, themes: tuple[str, ...
             if not preferred:
                 preferred = ["御姐", "大人女性", "お姉さん", "お姉様", "OL", "人妻", *_MATURE_CHARACTER_TAGS]
             params.append(("tag", "|".join(preferred)))
-            async with outbound_http_client(timeout=12) as http:
-                response = await http.get(client.api_url, params=params)
-                response.raise_for_status()
-                payload = response.json()
+            for attempt in range(2):
+                try:
+                    async with outbound_http_client(timeout=12) as http:
+                        response = await http.get(client.api_url, params=params)
+                        response.raise_for_status()
+                        payload = response.json()
+                    break
+                except (httpx.ConnectError,httpx.ConnectTimeout,httpx.ReadTimeout, httpx.RemoteProtocolError):
+                    if attempt:raise
+                    # Gallery GET is idempotent. One fresh connection prevents a
+                    # transient proxy/DNS failure sending us straight to login.
+                    await asyncio.sleep(.25)
             if isinstance(payload, dict) and not payload.get("error"):
                 rows = [client._normalize(row) for row in payload.get("data", []) if isinstance(row, dict)]
                 if rows:
                     return rows, len(rows), "lolicon:adult-fashion:" + ("+".join(themes) or "general")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- Try the next provider after an adapter-specific lookup failure.
             _SOURCE_COOLDOWN[source_id] = time.monotonic() + 60
             logger.info("QQ成熟角色标签检索回退：%s", type(exc).__name__)
     # Do not immediately request the failed primary source a second time.
@@ -307,7 +316,7 @@ async def send_styled_anime_image(event: Any, context: Any, plugin: Any, request
                             artwork, plugin._cfg_str("image_quality", "large"), timeout=15,
                             downgrade_limit_bytes=3 * 1024 * 1024, log_context="QQ题材插画",
                         )
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001 -- A failed candidate download should advance the search.
                         logger.info("QQ题材插画下载候选跳过：%s", type(exc).__name__)
                         continue
                     # Generic “来份色图” does not require a specific outfit. Its
@@ -319,7 +328,8 @@ async def send_styled_anime_image(event: Any, context: Any, plugin: Any, request
                     if not chosen:
                         continue
                     claimed = True
-                    from astrbot.api.all import Image as AstrImage, Plain
+                    from astrbot.api.all import Image as AstrImage
+                    from astrbot.api.all import Plain
 
                     # The title is untrusted metadata; keep the outgoing text short and neutral.
                     pid = re.sub(r"[^0-9:]", "", str(artwork.get("id") or ""))[:32]
@@ -332,7 +342,7 @@ async def send_styled_anime_image(event: Any, context: Any, plugin: Any, request
                     logger.info("QQ题材插画已发送：id=%s", pid)
                     try:
                         await plugin._record_image_usage(event, source_key, artwork, feature="normal", user_id=str(event.get_sender_id() or ""))
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001 -- A delivered image must not be reported as an unsuccessful send.
                         # The picture is already delivered. A bookkeeping failure
                         # must not send a misleading second "image failed" reply.
                         logger.warning("QQ插画已发送但使用记录未完成：%s", type(exc).__name__)
@@ -346,7 +356,7 @@ async def send_styled_anime_image(event: Any, context: Any, plugin: Any, request
                     if claimed and not sent and plugin.image_index is not None:
                         try:
                             await plugin.image_index.release_usage(scope=scope, source_key=source_key, illust_id=str(artwork.get("id") or ""), feature="normal_pending")
-                        except Exception:
+                        except Exception:  # noqa: BLE001 -- Release is best effort during cleanup.
                             logger.warning("QQ题材插画待发送索引释放失败")
             yield event.plain_result("这批没找到合适的非R18插画，换一批再试试")
     except ImageCheckBusy:
@@ -355,7 +365,7 @@ async def send_styled_anime_image(event: Any, context: Any, plugin: Any, request
         yield event.plain_result("图片源连接超时，稍后再试试")
     except ImageCheckUnavailable:
         yield event.plain_result("识图接口暂时没响应，稍后再试试")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 -- External image adapters can fail before a verified image is available.
         logger.warning("QQ题材插画未发送：%s", type(exc).__name__)
         yield event.plain_result("图片源或画面检查暂时没完成，稍后再试试")
     finally:

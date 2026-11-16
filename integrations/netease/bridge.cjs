@@ -52,6 +52,7 @@ const xeapiKeyPath = path.join(os.tmpdir(), 'xeapi_public_key');
 let xeapiKeyReady = false;
 let xeapiKeyPending = null;
 const api = {};
+let roomMemberProfile = {};
 try {
   sdkRoot = path.dirname(sdkRequire.resolve('@neteasecloudmusicapienhanced/api/package.json'));
   const requireFromSdk = createRequire(path.join(sdkRoot, 'package.json'));
@@ -62,7 +63,8 @@ try {
   request = sdkRequire(path.join(sdkRoot, 'util', 'request.js'));
   ({ cookieToJson } = sdkRequire(path.join(sdkRoot, 'util', 'index.js')));
   ({ getXeapiPublicKey } = sdkRequire(path.join(sdkRoot, 'util', 'xeapiKey.js')));
-  for (const name of ['login_qr_key', 'login_qr_create', 'login_qr_check', 'login_status', 'song_url_v1']) {
+  for (const name of ['login_qr_key', 'login_qr_create', 'login_qr_check', 'login_status', 'song_url_v1',
+    'listentogether_accept', 'listentogether_status', 'listentogether_heatbeat', 'listentogether_sync_playlist_get']) {
     api[name] = sdkRequire(path.join(sdkRoot, 'module', name + '.js'));
   }
 } catch {
@@ -93,6 +95,7 @@ try {
 } catch { /* 首次安装还没有登录。 */ }
 let cachedStatus = null;
 let statusAt = 0;
+let accountUserId = '';
 let qr = null;
 let qrBusy = false;
 
@@ -147,7 +150,14 @@ async function accountStatus(force = false, candidate = cookie) {
   const status = profile && data.account && data.code === 200
     ? { logged_in: true, nickname: String(profile.nickname || '').slice(0, 100), vip_type: Number(profile.vipType || 0) }
     : { logged_in: false };
-  if (candidate === cookie) { cachedStatus = status; statusAt = Date.now(); }
+  if (candidate === cookie) {
+    cachedStatus = status;
+    statusAt = Date.now();
+    accountUserId = status.logged_in ? String(profile.userId || data.account.id || '') : '';
+    roomMemberProfile = status.logged_in ? { userId: accountUserId,
+      nick: String(profile.nickname || ''), avatar: String(profile.avatarUrl || ''),
+      gender: Number(profile.gender) || 0 } : {};
+  }
   return status;
 }
 
@@ -161,8 +171,24 @@ function saveCookie(value) {
   } finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
   cookie = normalized;
   cachedStatus = null;
+  accountUserId = '';
+  roomMemberProfile = {};
   statusAt = 0;
+  roomChat.close();
 }
+
+const { RoomChatBridge } = require('./realtime/bridge.cjs');
+const roomChat = new RoomChatBridge({ dataRoot, getCookie: () => cookie,
+  getProfile: () => roomMemberProfile,
+  getRoom: async () => {
+    const result = await call('listentogether_status');
+    const data = result.data || {};
+    const info = data.roomInfo || {};
+    return { in_room: result.code === 200 && data.inRoom === true,
+      room_id: String(info.roomId || ''), chat_room_id: String(info.chatRoomId || data.chatRoomId || '') };
+  },
+});
+process.once('exit', () => roomChat.close());
 
 function secureEquals(left, right) {
   const a = Buffer.from(String(left || ''));
@@ -203,7 +229,7 @@ const server = http.createServer(async (req, res) => {
   try { route = new URL(req.url, 'http://127.0.0.1:' + port).pathname; }
   catch { return reply(res, 400, { error: '请求地址无效。' }); }
   if (req.method === 'GET' && route === '/health') {
-    return reply(res, 200, { provider: 'netease_member_bridge', status: 'ok' });
+    return reply(res, 200, { provider: 'netease_member_bridge', status: 'ok', capabilities: ['song_url', 'listen_together', 'listen_together_chat'] });
   }
   if (req.method === 'GET' && ['/', '/login', '/login.js', '/login.css'].includes(route)) {
     const name = route === '/login.js' ? 'login.js' : route === '/login.css' ? 'login.css' : 'login.html';
@@ -213,7 +239,7 @@ const server = http.createServer(async (req, res) => {
     return reply(res, 200, content, type);
   }
   if (req.method !== 'POST') return reply(res, 404, { error: '接口不存在。' });
-  const isBot = route === '/api/song/url';
+  const isBot = ['/api/song/url', '/api/listen', '/api/listen/chat', '/api/account/status'].includes(route);
   if (isBot ? !secureEquals(req.headers.authorization, 'Bearer ' + token)
     : !secureEquals(req.headers['x-bridge-csrf'], csrfToken)) {
     return reply(res, 403, { error: '本机连接验证失败，请重新打开登录页面。' });
@@ -222,6 +248,62 @@ const server = http.createServer(async (req, res) => {
   try { body = await readJson(req); }
   catch { return reply(res, 400, { error: '请求内容无效。' }); }
   try {
+    if (route === '/api/account/status') {
+      const status = await accountStatus();
+      return reply(res, 200, { provider: 'netease_member_bridge', logged_in: status.logged_in });
+    }
+    if (route === '/api/listen/chat') {
+      const status = await accountStatus();
+      if (!status.logged_in) return reply(res, 401, { error: '请在本机页面登录网易云账号。' });
+      return reply(res, 200, await roomChat.handle(body));
+    }
+    if (route === '/api/listen') {
+      const action = String(body.action || 'status');
+      if (!['status', 'accept', 'heartbeat'].includes(action)) return reply(res, 400, { error: '一起听动作无效。' });
+      const status = await accountStatus();
+      if (!status.logged_in) return reply(res, 401, { error: '请在本机页面登录网易云账号。' });
+      const roomId = String(body.room_id || '');
+      if (action !== 'status' && !/^[a-zA-Z0-9_-]{1,128}$/.test(roomId)) return reply(res, 400, { error: '房间编号无效。' });
+      let result;
+      if (action === 'accept') {
+        const inviterId = String(body.inviter_id || '');
+        if (!/^\d{1,20}$/.test(inviterId)) return reply(res, 400, { error: '邀请人编号无效。' });
+        if (accountUserId && inviterId === accountUserId) return reply(res, 200, {
+          provider: 'netease_listen', code: 200, success: false, self_invite: true,
+          message: '机器人与邀请者使用同一个网易云账号，无法作为第二位成员加入；现有账号仍可用于听歌分析。'
+        });
+        result = await call('listentogether_accept', { roomId, inviterId });
+      } else if (action === 'heartbeat') {
+        const songId = String(body.song_id || '');
+        if (!/^\d{1,20}$/.test(songId)) return reply(res, 400, { error: '歌曲编号无效。' });
+        result = await call('listentogether_heatbeat', { roomId, songId,
+          playStatus: body.play_status === 'PAUSE' ? 'PAUSE' : 'PLAY',
+          progress: Math.min(36000000, Math.max(0, Number(body.progress) || 0)) });
+      } else result = await call('listentogether_status');
+      // Do not return cookies, account profiles or the full upstream payload.
+      const data = result.data || {};
+      const info = data.roomInfo || {};
+      let playback = {};
+      function findPlay(value, depth = 0) {
+        if (!value || typeof value !== 'object' || depth > 4) return;
+        const id = String(value.targetSongId || value.songId || value.musicId || '');
+        if (/^\d{1,20}$/.test(id) && id !== '0') playback = { song_id: id,
+          progress: Math.max(0, Number(value.progress) || 0),
+          play_status: value.playStatus === 'PAUSE' ? 'PAUSE' : 'PLAY' };
+        for (const key of ['data', 'roomInfo', 'playInfo', 'playingInfo', 'playerInfo', 'currentPlay', 'playStatus', 'playCommand']) {
+          if (typeof value[key] === 'object') findPlay(value[key], depth + 1);
+        }
+      }
+      findPlay(data);
+      if (action === 'status' && data.inRoom === true && info.roomId) {
+        const sync = await call('listentogether_sync_playlist_get', { roomId: String(info.roomId) });
+        findPlay(sync.data || {});
+      }
+      return reply(res, 200, { provider: 'netease_listen', code: result.code,
+        success: data.success !== false && result.code === 200,
+        in_room: data.inRoom === true, room_id: String(info.roomId || ''),
+        chat_room_id: String(info.chatRoomId || data.chatRoomId || ''), ...playback });
+    }
     if (route === '/api/status') return reply(res, 200, await accountStatus(true));
     if (route === '/api/qr/start') {
       if (qrBusy) return reply(res, 409, { error: '正在处理二维码，请稍后再试。' });
@@ -266,7 +348,7 @@ const server = http.createServer(async (req, res) => {
       return reply(res, 200, status);
     }
     if (route === '/api/logout') {
-      cookie = ''; cachedStatus = null; statusAt = 0; qr = null;
+      cookie = ''; cachedStatus = null; statusAt = 0; accountUserId = ''; qr = null;
       if (fs.existsSync(authPath)) fs.unlinkSync(authPath);
       return reply(res, 200, { logged_in: false });
     }

@@ -24,6 +24,7 @@ from redis.exceptions import RedisError
 
 from app.api.admin import router as admin_router
 from app.api.auth import router as auth_router
+from app.astrbot_settings_reply import setting_ack
 from app.config import get_settings
 from app.core.auth import AuthService
 from app.core.idempotency import EventDeduplicator, RedisEventDeduplicator
@@ -192,10 +193,8 @@ from app.services.voice import (
 )
 from app.services.voice_persona import (
     character_invocation,
-    has_voice_persona,
     is_self_introduction_request,
     resolve_voice_persona_alias,
-    voice_persona_prompt,
     voice_persona_romance_prompt,
 )
 from app.services.weather import WeatherServiceError, fetch_weather, format_weather_report
@@ -407,13 +406,21 @@ def _daily_news_titles_similar(left: str, right: str) -> bool:
     return SequenceMatcher(None, left, right, autojunk=False).ratio() >= 0.86
 
 
+def _function_brand(group_id: str) -> str:
+    if str(group_id).startswith("wechat:"):
+        return settings.persona_name
+    from app.astrbot_identity import CHARACTER_NAME
+    return CHARACTER_NAME
+
+
 def _format_daily_news_digest(
     news_date: str,
     items: list[SearchResult],
+    *,brand_name: str = "大肥鱼",
 ) -> str:
     lines = [
-        f"☀️ 小丛雨 · 今日热点｜{news_date}",
-        f"实时联网整理的 {len(items)} 条最新热点（同日复用、跨日去重）：",
+        f"☀️ {brand_name} · 今日热点｜{news_date}",
+        f"今天值得看看的 {len(items)} 条消息：",
     ]
     for index, item in enumerate(items, 1):
         host = (urlsplit(item.url).hostname or "来源").removeprefix("www.")
@@ -430,7 +437,7 @@ def _format_daily_news_digest(
     return "\n".join(lines)
 
 
-async def build_daily_news_digest(database: Database | None = None) -> str:
+async def build_daily_news_digest(database: Database | None = None,*,brand_name: str = "大肥鱼") -> str:
     tz = _daily_news_timezone()
     now = datetime.now(tz)
     news_date = now.strftime("%Y-%m-%d")
@@ -440,6 +447,7 @@ async def build_daily_news_digest(database: Database | None = None) -> str:
             return _format_daily_news_digest(
                 news_date,
                 [SearchResult(title, url, snippet) for title, url, snippet in cached],
+                brand_name=brand_name,
             )
 
     topics = (
@@ -553,10 +561,12 @@ async def build_daily_news_digest(database: Database | None = None) -> str:
         selected = [
             SearchResult(title, url, snippet) for title, url, snippet in stored
         ]
-    return _format_daily_news_digest(news_date, selected)
+    return _format_daily_news_digest(news_date, selected,brand_name=brand_name)
 
 
 async def broadcast_daily_news(app: FastAPI) -> None:
+    if not settings.daily_news_enabled:
+        return
     try:
         digest = await build_daily_news_digest(app.state.db)
     except (ValueError, RuntimeError, httpx.HTTPError) as exc:
@@ -599,6 +609,8 @@ async def broadcast_daily_news(app: FastAPI) -> None:
     logger.info("daily noon news: %s joined targets, %s skipped", len(eligible), len(groups) - len(eligible))
 
     for group_id in eligible:
+        if not settings.daily_news_enabled:
+            return
         # 微信会话没有 QQ 群接口，私人对话也不接收每日群推送。
         if group_id.startswith("wechat:"):
             continue
@@ -617,7 +629,7 @@ async def daily_news_loop(app: FastAPI) -> None:
     tz = _daily_news_timezone()
     hour = max(0, min(int(settings.daily_news_hour), 23))
     minute = max(0, min(int(settings.daily_news_minute), 59))
-    while True:
+    while settings.daily_news_enabled:
         now = datetime.now(tz)
         next_run = now.replace(
             hour=hour,
@@ -721,6 +733,8 @@ async def initialize_runtime(app: FastAPI):
         if settings.daily_news_enabled
         else None
     )
+    if app.state.daily_news_task is None:
+        logger.info("每日热点自动推送未启动，仅保留用户主动查询")
     if settings.redis_url:
         try:
             redis_ingress_limiter = RedisRateLimiter(
@@ -1011,15 +1025,21 @@ def is_targeted_possession_command(event: dict, text: str) -> bool:
     )
 
 
+def _explicit_memory_text(event: dict, text: str) -> str:
+    from app.services.owner_policy import is_owner_id
+    qq_owner="wechat_private" not in event and is_owner_id(event.get("user_id"))
+    return text if qq_owner else text[:300]
+
+
 def extract_long_memory(event: dict, text: str) -> str | None:
     prefixes = ("记住：", "记住:", "请记住", "帮我记住")
     if text.startswith("/长期记忆 "):
-        return text.split(" ", 1)[1].strip()[:300]
+        return _explicit_memory_text(event,text.split(" ", 1)[1].strip())
     if not bot_mentioned(event):
         return None
     for prefix in prefixes:
         if text.startswith(prefix):
-            return text[len(prefix) :].strip(" ：:")[:300]
+            return _explicit_memory_text(event,text[len(prefix) :].strip(" ：:"))
     return None
 
 
@@ -1028,14 +1048,14 @@ def extract_group_memory(event: dict, text: str) -> str | None:
         return None
     for prefix in ("记住，", "记住,", "记住 ", "群里记住：", "群里记住:"):
         if text.startswith(prefix):
-            return text[len(prefix) :].strip(" ，,：:")[:300]
+            return _explicit_memory_text(event,text[len(prefix) :].strip(" ，,：:"))
     # “记住我是……”和“让你记住我是……”这类自然说法。
     # 保留开头的“我/你”，这样 qualify_group_memory 才能在
     # 保存前绑定说话者或当前机器人身份。
     if text.startswith(("记住我", "记住你")):
-        return text[len("记住") :].strip(" ，,：:")[:300]
+        return _explicit_memory_text(event,text[len("记住") :].strip(" ，,：:"))
     if text.startswith(("让你记住我", "让你记住你")):
-        return text[len("让你记住") :].strip(" ，,：:")[:300]
+        return _explicit_memory_text(event,text[len("让你记住") :].strip(" ，,：:"))
     return None
 
 
@@ -1620,6 +1640,16 @@ def requires_live_web_data(prompt: str) -> bool:
 def format_search_sources(results: list[SearchResult]) -> str:
     return "\n".join(f"{index}. {item.title}\n{item.url}" for index, item in enumerate(results, 1))
 
+def conversation_identity(voice_profile_id: str, event: dict | None = None) -> tuple[str, str, str]:
+    """QQ文字身份独立于发声选择；其他平台保留现有配置。"""
+    if event is not None and "wechat_private" not in event:
+        from app.astrbot_identity import CHARACTER_NAME, QQ_PERSONA_PATH
+        from app.astrbot_qq_persona import QQ_PERSONA_ID
+
+        return QQ_PERSONA_ID, CHARACTER_NAME, QQ_PERSONA_PATH.read_text(encoding="utf-8").strip()
+    return "murasame", settings.persona_name, settings.persona_prompt()
+
+
 async def llm_web_fallback_answer(
     request: Request,
     question: str,
@@ -1629,6 +1659,7 @@ async def llm_web_fallback_answer(
     romance_mode: bool = False,
     guidance: str = "",
     voice_profile_id: str = "murasame",
+    event: dict | None = None,
 ) -> str | None:
     query = (search_query or question).strip()[:160]
     if not query:
@@ -1648,10 +1679,7 @@ async def llm_web_fallback_answer(
         f"标题：{item.title}\n摘要：{item.snippet}\n网址：{item.url}"
         for item in results
     )
-    selected_profile = voice_profiles(settings).get(voice_profile_id, {})
-    role_name = str(selected_profile.get("label") or settings.persona_name)
-    persona_id = voice_profile_id if has_voice_persona(voice_profile_id) else "murasame"
-    persona = voice_persona_prompt(settings, voice_profile_id) or settings.persona_prompt()
+    persona_id, role_name, persona = conversation_identity(voice_profile_id, event)
     romance_prompt = (
         romance_mode_prompt()
         if romance_mode and persona_id == "murasame"
@@ -2727,6 +2755,8 @@ async def maybe_send_voice_reply(
             target_language=target_language,
             bot_self_id=current_onebot_self_id(),
         )
+        if not await request.app.state.db.voice_mode(group_id, user_id):
+            return False
         return await send_group_record(group_id, record)
     except Exception as exc:  # noqa: BLE001 - voice failure must fall back to text
         logger.warning("voice reply failed: %s", exc)
@@ -3250,6 +3280,10 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
     )
     group_id = str(event.get("group_id", ""))
     user_id = str(event.get("user_id", event.get("sender", {}).get("user_id", "")))
+    from app.services.owner_policy import load_owner_policy
+    owner_policy = load_owner_policy()
+    owner_memory_scope = "wechat_private" not in event and not group_id.startswith("wechat:") and owner_policy.enabled
+    verified_memory_owner = owner_memory_scope and owner_policy.matches(user_id)
     sender_role = event.get("sender", {}).get("role", "member")
     is_admin = sender_role in {"admin", "owner"}
     if not group_id:
@@ -3292,7 +3326,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
     today = datetime.now().astimezone().date().isoformat()
     if not direct_request:
         await request.app.state.db.record_group_activity(
-            group_id, user_id, display_name, text, today
+            group_id, user_id, display_name, text, today, learn_style=not owner_memory_scope
         )
         if 2 <= len(text) <= 200 and not text.startswith(("/", "http://", "https://")):
             sample_key = (group_id, user_id)
@@ -3305,6 +3339,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
             text
             and len(text) <= 500
             and not text.startswith(("/", "http://", "https://"))
+            and not owner_memory_scope
         ):
             await request.app.state.db.add_possession_style_message(
                 group_id,
@@ -3407,8 +3442,8 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
                 request.app.state.voice_persona_romance_turns.pop(key, None)
         await send_group_message(
             group_id,
-            "恋爱模式已开启：会使用亲密语气和互动设定。" if romance_mode
-            else "恋爱模式已关闭：恢复普通助手模式，不再计算好感度。",
+            setting_ack(event, "恋爱模式已开启：会使用亲密语气和互动设定。" if romance_mode
+                        else "恋爱模式已关闭：恢复普通助手模式，不再计算好感度。"),
         )
         return {"ok": True, "source": "romance_mode", "enabled": romance_mode}
 
@@ -3673,7 +3708,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
         invocation or murasame_addressed(event, text)
     ):
         voice_profile_id = request_voice_profile_id
-        if has_voice_persona(voice_profile_id) and voice_profile_id == "murasame":
+        if "wechat_private" in event:
             reply = ensure_default_murasame_voice(
                 deterministic_logic,
                 seed=f"logic:{group_id}:{user_id}:{text}",
@@ -3744,10 +3779,10 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
 
     if text in {"/bot off", "/机器人关闭"} and is_admin:
         await request.app.state.db.set_group_enabled(group_id, False)
-        await send_group_message(group_id, "本群机器人已关闭。")
+        await send_group_message(group_id, setting_ack(event, "本群机器人已关闭。"))
     elif text in {"/bot on", "/机器人开启"} and is_admin:
         await request.app.state.db.set_group_enabled(group_id, True)
-        await send_group_message(group_id, "本群机器人已开启。")
+        await send_group_message(group_id, setting_ack(event, "本群机器人已开启。"))
     elif text.startswith("/blacklist ") and is_admin:
         parts = text.split()
         if len(parts) == 3 and parts[1] in {"add", "remove"}:
@@ -3764,11 +3799,11 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
             )
         else:
             await request.app.state.db.set_memory_enabled(group_id, user_id, True)
-            await send_group_message(group_id, "已开启你的短期对话记忆。输入 /记忆关闭 可停止，输入 /记忆删除 可清除当前记忆。")
+            await send_group_message(group_id, setting_ack(event, "已开启你的短期对话记忆。输入 /记忆关闭 可停止，输入 /记忆删除 可清除当前记忆。"))
     elif text in {"/记忆关闭", "/memory off"}:
         await request.app.state.db.set_memory_enabled(group_id, user_id, False)
         request.app.state.memory.clear(group_id, user_id)
-        await send_group_message(group_id, "已关闭并清除你的短期对话记忆。")
+        await send_group_message(group_id, setting_ack(event, "已关闭并清除你的短期对话记忆。"))
     elif text in {"/记忆删除", "/memory clear"}:
         request.app.state.memory.clear(group_id, user_id)
         await send_group_message(group_id, "你的短期对话记忆已清除。")
@@ -3779,7 +3814,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
         text in LONG_MEMORY_LIST_COMMANDS
         and (text.startswith("/") or bot_mentioned(event))
     ):
-        memories = await request.app.state.db.long_term_memories(group_id, user_id)
+        memories = await request.app.state.db.long_term_memories(group_id, user_id,limit=None if verified_memory_owner else 20)
         if memories:
             listing = "\n".join(f"{index}. {item}" for index, item in enumerate(memories, 1))
             await send_group_message(group_id, f"我长期记住了这些：\n{listing}")
@@ -3792,7 +3827,9 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
         await request.app.state.db.clear_long_term_memories(group_id, user_id)
         await send_group_message(group_id, "已经忘掉你在本群的全部长期记忆了。")
     elif (memory_content := extract_long_memory(event, text)) is not None:
-        if not memory_unlock_enabled or current_affection < MEMORY_UNLOCK_SCORE:
+        if owner_memory_scope and not verified_memory_owner:
+            await send_group_message(group_id,"现在只为固定账号保存长期记忆，普通聊天不受影响")
+        elif not verified_memory_owner and (not memory_unlock_enabled or current_affection < MEMORY_UNLOCK_SCORE):
             await send_group_message(
                 group_id,
                 f"好感度 {current_affection}/100，还没到 {MEMORY_UNLOCK_SCORE}。"
@@ -3803,10 +3840,12 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
         elif SENSITIVE_MEMORY_PATTERN.search(memory_content):
             await send_group_message(group_id, "这类内容可能包含敏感信息，我不帮你长期保存喔。")
         else:
-            await request.app.state.db.add_long_term_memory(group_id, user_id, memory_content)
+            await request.app.state.db.add_long_term_memory(group_id, user_id, memory_content,max_items=None if verified_memory_owner else 20)
             await send_group_message(group_id, "好，我长期记住了。需要删除时对我说“忘记我”。")
     elif (group_memory := extract_group_memory(event, text)) is not None:
-        if not memory_unlock_enabled or current_affection < MEMORY_UNLOCK_SCORE:
+        if owner_memory_scope and not verified_memory_owner:
+            await send_group_message(group_id,"现在只为固定账号保存长期记忆，普通聊天不受影响")
+        elif not verified_memory_owner and (not memory_unlock_enabled or current_affection < MEMORY_UNLOCK_SCORE):
             await send_group_message(
                 group_id,
                 f"好感度 {current_affection}/100。至少到 {MEMORY_UNLOCK_SCORE}，"
@@ -3861,7 +3900,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
                     current_identity,
                     sender_display_name(event),
                 )
-                await request.app.state.db.add_group_memory(group_id, qualified_memory)
+                await request.app.state.db.add_group_memory(group_id, qualified_memory,max_items=None if verified_memory_owner else 50)
                 await send_group_message(group_id, f"记住了：{qualified_memory}")
     elif text in MEMBER_IDENTITY_LIST_COMMANDS and (
         text.startswith("/") or bot_mentioned(event)
@@ -4060,23 +4099,23 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
         if not settings.voice_enabled:
             await send_group_message(
                 group_id,
-                "已开启你的语音回复。语音服务恢复后会自动使用已选角色。\n\n"
+                setting_ack(event, "已开启你的语音回复。语音服务恢复后会自动使用已选音色。\n\n"
                 + voice_profile_menu(settings, current_onebot_self_id())
-                + "\n\n发送“关闭语音”即可关闭。",
+                + "\n\n发送“关闭语音”即可关闭。", notice="语音服务暂时没连上，恢复后就能用了"),
             )
         else:
             await send_group_message(
                 group_id,
-                "已开启你的语音回复。\n\n"
+                setting_ack(event, "已开启你的语音回复。\n\n"
                 + voice_profile_menu(settings, current_onebot_self_id())
-                + "\n\n发送“关闭语音”即可关闭。",
+                + "\n\n发送“关闭语音”即可关闭。"),
             )
     elif text in VOICE_OFF_COMMANDS:
         await request.app.state.db.set_voice_mode(group_id, user_id, False)
         for history_key in tuple(request.app.state.voice_conversation_history):
             if history_key[:2] == (group_id, user_id):
                 request.app.state.voice_conversation_history.pop(history_key, None)
-        await send_group_message(group_id, "已关闭你的语音回复，之后只发送文字。")
+        await send_group_message(group_id, setting_ack(event, "已关闭你的语音回复，之后只发送文字。"))
     elif text in VOICE_STATUS_COMMANDS:
         enabled = await request.app.state.db.voice_mode(group_id, user_id)
         profiles = voice_profiles(settings)
@@ -4100,7 +4139,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
                 ),
                 {},
             )
-        profile_hint = f"；角色：{profile.get('label') or '默认角色'}"
+        profile_hint = f"；音色：{profile.get('label') or '默认音色'}"
         if settings.voice_enabled:
             await send_group_message(
                 group_id,
@@ -4144,21 +4183,17 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
             else:
                 await request.app.state.db.set_voice_profile(group_id, user_id, profile_id)
                 label = profiles[profile_id].get("label") or profile_id
-                selection_notice = (
-                    f"已选择角色：{label}。后续对话会使用该角色人格；开启语音模式后使用对应音色。"
-                    if has_voice_persona(profile_id)
-                    else f"已选择音色：{label}。该角色的人格提示词尚未配置，文字对话暂时仍使用小丛雨人格。"
-                )
+                selection_notice = f"已选择音色：{label}。用于语音回复和唱歌，聊天人格不变。"
+                unavailable_notice = ""
                 if profiles[profile_id].get("tts_enabled") is False:
-                    selection_notice = (
-                        f"已选择角色：{label}。后续使用该角色进行文字聊天；"
-                        f"@我 翻唱 {label} 歌名 可以指定翻唱。"
-                    )
+                    selection_notice += "该音色尚未配置文字朗读。"
+                    unavailable_notice = "这个音色暂时还不能朗读"
                     if profiles[profile_id].get("singing_enabled") is False:
-                        selection_notice = f"已选择角色：{label}。该角色目前仅支持文字聊天。"
+                        selection_notice += "目前也未开放唱歌。"
+                        unavailable_notice += "，唱歌也还没接好"
                 await send_group_message(
                     group_id,
-                    selection_notice,
+                    setting_ack(event, selection_notice, notice=unavailable_notice),
                 )
     elif text in MURASAME_IMAGE_COMMANDS or mentioned_image_command(
         event, MURASAME_IMAGE_COMMANDS
@@ -4294,6 +4329,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
                     voice_profile_id=await selected_voice_profile_id(
                         request, group_id, user_id
                     ),
+                    event=event,
                     guidance=(
                         "优先给出当前温度、天气现象、今日高低温和降水信息；"
                         "搜索结果没有明确数值时不要猜。"
@@ -4515,7 +4551,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
             )
     elif bot_mentioned(event) and text in ANIME_CHARACTER_CATALOG_COMMANDS:
         try:
-            await send_group_image(group_id, render_anime_character_catalog())
+            await send_group_image(group_id, render_anime_character_catalog(brand_name=_function_brand(group_id)))
         except (RuntimeError, ValueError, OSError, httpx.HTTPError) as exc:
             logger.warning("anime character catalog image failed: %s", exc)
             # 仅在图片确实发不出去时回退；
@@ -4536,7 +4572,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
         bot_mentioned(event) and text in DAILY_NEWS_COMMANDS
     ):
         try:
-            digest = await build_daily_news_digest(request.app.state.db)
+            digest = await build_daily_news_digest(request.app.state.db,brand_name=_function_brand(group_id))
             await send_group_long_message(group_id, digest)
         except (ValueError, RuntimeError, httpx.HTTPError) as exc:
             logger.warning("manual daily news failed: %s", exc)
@@ -4552,6 +4588,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
                 voice_profile_id=await selected_voice_profile_id(
                     request, group_id, user_id
                 ),
+                event=event,
                 guidance=(
                     "按重要性列出恰好10条互不重复的最新新闻；"
                     "只陈述联网结果能确认的内容。"
@@ -4605,11 +4642,11 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
             )
     elif bot_mentioned(event) and text in ULTRAMAN_CATALOG_COMMANDS:
         try:
-            catalog = render_ultraman_catalog()
+            catalog = render_ultraman_catalog(brand_name=_function_brand(group_id))
             await send_group_image(
                 group_id,
                 catalog,
-                f"✦ 小丛雨的奥特曼图鉴 ✦\n共收录 {len(ULTRAMAN_ROSTER)} 位角色与独立形态。",
+                f"✦ {_function_brand(group_id)}的奥特曼图鉴 ✦\n共收录 {len(ULTRAMAN_ROSTER)} 位角色与独立形态。",
             )
         except (RuntimeError, OSError, httpx.HTTPError) as exc:
             logger.warning("Ultraman catalog image failed: %s", exc)
@@ -4734,6 +4771,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
                     voice_profile_id=await selected_voice_profile_id(
                         request, group_id, user_id
                     ),
+                    event=event,
                     guidance=(
                         "优先给出最相关的 Bilibili 视频标题和可打开的来源链接，"
                         "不要编造播放量。"
@@ -4767,19 +4805,7 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
                 voice_profile_id = await selected_voice_profile_id(
                     request, group_id, user_id
                 )
-                selected_profile = voice_profiles(settings).get(voice_profile_id, {})
-                selected_role_name = str(
-                    selected_profile.get("label") or settings.persona_name
-                )
-                persona_id = (
-                    voice_profile_id
-                    if has_voice_persona(voice_profile_id)
-                    else "murasame"
-                )
-                persona = (
-                    voice_persona_prompt(settings, voice_profile_id)
-                    or settings.persona_prompt()
-                )
+                persona_id, selected_role_name, persona = conversation_identity(voice_profile_id, event)
                 results = await search_web(search_query)
                 if not results:
                     await send_group_message(group_id, "这次没有搜到可靠结果，换个关键词试试吧。")
@@ -4844,19 +4870,9 @@ async def dispatch_onebot_event(event: dict, request, *, allow_chat: bool = True
             and await request.app.state.db.voice_mode(group_id, user_id)
         )
         # 开始慢速 LLM 或搜索前先保存本次角色配置，确保
-        # 角色对话人格和最终 TTS 音色一致。
+        # 音色仅用于 TTS 和翻唱；QQ文字人格使用独立来源。
         voice_profile_id = request_voice_profile_id
-        selected_voice_profile = voice_profiles(settings).get(voice_profile_id, {})
-        selected_role_name = str(
-            selected_voice_profile.get("label") or settings.persona_name
-        )
-        selected_persona_id = (
-            voice_profile_id if has_voice_persona(voice_profile_id) else "murasame"
-        )
-        selected_persona = (
-            voice_persona_prompt(settings, voice_profile_id)
-            or settings.persona_prompt()
-        )
+        selected_persona_id, selected_role_name, selected_persona = conversation_identity(voice_profile_id, event)
         group_memories = await request.app.state.db.group_memories(group_id)
         active_possession = (
             None

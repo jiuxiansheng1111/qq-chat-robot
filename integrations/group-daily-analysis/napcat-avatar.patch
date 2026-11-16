@@ -1,0 +1,32 @@
+--- a/data/astrbot/instance/data/plugins/astrbot_plugin_qq_group_daily_analysis/src/infrastructure/platform/adapters/onebot_adapter.py
++++ b/data/astrbot/instance/data/plugins/astrbot_plugin_qq_group_daily_analysis/src/infrastructure/platform/adapters/onebot_adapter.py
+@@ -800,10 +800,28 @@
+         部分 OneBot 实现（桥接、映射 ID 场景）的用户 ID 不是真实 QQ 号，
+         官方 CDN 地址只会返回默认头像；此类实现通常会在
+         get_stranger_info / get_user_info 响应中携带真实头像。
++        NapCat 不支持 get_user_info，资料中没有头像时直接使用 CDN 回退。
++
++        Args:
++            user_id: 用户唯一标识。
++
++        Returns:
++            协议端返回的头像地址；未取得时返回 None。
+         """
+         uid_text = str(user_id).strip()
+         uid_param: int | str = int(uid_text) if uid_text.isdigit() else uid_text
+-        for action_name in ("get_stranger_info", "get_user_info"):
++        # 复用已缓存的方言探测；头像查询不能因版本探测而长时间阻塞。
++        action_names = ("get_stranger_info",)
++        try:
++            driver = await asyncio.wait_for(
++                self._ensure_driver(), timeout=self.AVATAR_FETCH_TIMEOUT
++            )
++        except Exception as exc:  # noqa: BLE001 -- 协议端失败不影响头像 CDN 回退。
++            logger.debug(f"[OneBot] 头像查询未确定协议端，仅使用标准资料接口: {exc}")
++        else:
++            if driver.name != "napcat":
++                action_names += ("get_user_info",)
++        for action_name in action_names:
+             try:
+                 result = await asyncio.wait_for(
+                     self.bot.call_action(action_name, user_id=uid_param),

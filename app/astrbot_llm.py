@@ -124,7 +124,7 @@ class AstrBotChatProvider:
             return content
         except LLMError:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             status = getattr(exc, "status_code", None)
             category = f"HTTP {status}" if isinstance(status, int) else type(exc).__name__
             raise LLMError(f"AstrBot 主模型调用失败：{category}") from exc

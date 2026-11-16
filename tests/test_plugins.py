@@ -18,9 +18,8 @@ def test_plugin_registry_help():
     assert "@我 本命二次元角色" in text
     assert "@我 天气 新加坡" in text
     assert "启动语音 / 关闭语音 / 语音状态（无需@）" in text
-    assert "可用角色 / 选择角色 芳乃" in text
-    assert "叫芳乃出来" in text
-    assert "芦花姐陪我聊聊" in text
+    assert "音色列表 / 选择音色 芳乃" in text
+    assert "只影响语音和唱歌" in text
     assert "丛雨语音" not in text
     assert "@我 生成图片" in text
     assert registry.find("图鉴").name == "character_catalog"

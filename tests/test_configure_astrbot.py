@@ -144,7 +144,7 @@ def test_configure_creates_private_password_and_disabled_local_onebot(tmp_path: 
             instance_root / "data" / "config" / "astrbot_plugin_get_px_config.json"
         ).read_text(encoding="utf-8-sig")
     )
-    assert get_px_config["checkin_enabled"] is False
+    assert get_px_config["checkin_enabled"] is True
     assert get_px_config["auto_trigger_enabled"] is False
     assert get_px_config["pixiv_refresh_token"] == ""
 
@@ -171,7 +171,7 @@ def test_configure_is_idempotent_and_preserves_enabled_state_and_other_config(
         instance_root / "data" / "config" / "astrbot_plugin_get_px_config.json"
     )
     get_px_config = json.loads(get_px_path.read_text(encoding="utf-8-sig"))
-    get_px_config["checkin_enabled"] = True
+    get_px_config["checkin_enabled"] = False
     get_px_config["auto_trigger_enabled"] = True
     get_px_config["pixiv_refresh_token"] = "private-token-placeholder"
     get_px_path.write_text(json.dumps(get_px_config), encoding="utf-8")
@@ -197,7 +197,7 @@ def test_configure_is_idempotent_and_preserves_enabled_state_and_other_config(
     assert second["wechat_platform_created"] is False
     saved_get_px = json.loads(get_px_path.read_text(encoding="utf-8-sig"))
     assert saved_get_px["checkin_enabled"] is False
-    assert saved_get_px["auto_trigger_enabled"] is False
+    assert saved_get_px["auto_trigger_enabled"] is True
     assert saved_get_px["pixiv_refresh_token"] == "private-token-placeholder"
 
 
@@ -240,14 +240,14 @@ def test_configure_refuses_to_regenerate_missing_password_file_for_existing_hash
     config_path = instance_root / "data" / "cmd_config.json"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(
-        json.dumps({"dashboard": {"password": "existing-hash"}}), encoding="utf-8"
+        json.dumps({"dashboard": {"password": "existing-hash"}, "platform": []}), encoding="utf-8"
     )
+    setup_get_px(instance_root)
 
-    with pytest.raises(configure_astrbot.ConfigurationError, match="密码文件缺失"):
-        configure_astrbot.configure_instance(
-            private_root, instance_root, api=fake_api()
-        )
+    result = configure_astrbot.configure_instance(private_root, instance_root, api=fake_api())
 
+    assert not result["dashboard_password_created"]
+    assert json.loads(config_path.read_text(encoding="utf-8"))["dashboard"]["password"] == "existing-hash"
     assert not (private_root / "dashboard-login.txt").exists()
 
 

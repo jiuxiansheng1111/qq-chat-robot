@@ -27,7 +27,7 @@ class Result:
 
 class Event:
     def __init__(self, text=TEXT, *, prompt="你觉得这套卡组怎么样", group="1000000001",
-                 self_id="3503565007", platform="qq-local", llm=True, extra=()):
+                 self_id="999990001", platform="qq-local", llm=True, extra=()):
         self.result = Result(text, llm=llm, extra=extra)
         self.extras = {}
         self.stopped = False
@@ -208,7 +208,7 @@ def test_persisted_hash_features_survive_restart_without_saving_messages_or_grou
     guard = GroupReplyGuard(path)
     sent(guard, Event())
     payload = path.read_text(encoding="utf-8")
-    assert TEXT not in payload and "1000000001" not in payload and "3503565007" not in payload
+    assert TEXT not in payload and "1000000001" not in payload and "999990001" not in payload
     assert GroupReplyGuard(path).prepare_result(Event(TEXT.replace("我觉得", "我的看法是"))) == "duplicate"
     assert not list(path.parent.glob("*.tmp"))
 

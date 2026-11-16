@@ -37,7 +37,6 @@ from app.services.singing_excerpt import (
 from app.services.singing_gpu import async_gpu_lock
 from app.services.singing_mix import vocal_clarity_filter, vocal_forward_mix_filter, wav_rms
 from app.services.singing_resources import singing_resource_problem
-from app.services.voice_memory import release_voice_memory_for_singing
 from app.services.singing_sections import plan_conversion_phrases, plan_paused_sections
 from app.services.singing_sources import (
     SINGING_DATA_ROOT,
@@ -51,6 +50,7 @@ from app.services.voice import (
     voice_profile_authorized,
     voice_profiles,
 )
+from app.services.voice_memory import release_voice_memory_for_singing
 from app.services.voice_persona import resolve_voice_persona_alias
 
 logger = logging.getLogger(__name__)
@@ -229,6 +229,8 @@ def _take_singing_profile(
         if alias.isascii() and len(alias) < 6:
             continue
         song = query[end:].strip(" ：:")
+        if song.startswith("的"):
+            continue  # “芳乃的歌”是歌名/描述，不是指定芳乃音色。
         if song:
             return profile_id, song
     return None, query
@@ -380,7 +382,7 @@ def singing_voice_menu(settings: Settings, bot_self_id: str) -> str:
     example = names[0] if names else "角色名"
     return (
         "角色翻唱音色：" + "、".join(names)
-        + "\n@我 唱歌 歌名：使用当前选定的角色"
+        + "\n@我 唱歌 歌名：使用当前选定的音色"
         + f"\n@我 翻唱 {example} 歌名：临时指定音色"
         + f"\n@我 翻唱片段 {example} 歌名：唱约 {settings.singing_clip_seconds:g} 秒的几句歌词"
         + f"\n@我 翻唱完整 {example} 歌名：唱整首"
@@ -944,24 +946,23 @@ async def generate_singing_cover(
     on_chunk: ChunkDelivery | None = None,
 ) -> SingingCover:
     """训练和翻唱轮流用显卡，避免同时生成时爆显存。"""
-    async with release_voice_memory_for_singing(settings) as voice_memory:
-        async with async_gpu_lock():
-            issue = singing_resource_problem(PROJECT_ROOT, starting=True, stage="startup")
-            if issue and getattr(settings, "singing_prefer_recorded_reference", False):
-                # A freshly used speech model can itself push available RAM
-                # below the startup reserve. Reclaim it before rejecting a cover
-                # whose existing reference recording needs no TTS call.
-                recorded = str(voice_profiles(settings).get(profile_id, {}).get("ref_audio_path") or "")
-                if recorded and _project_path(recorded).is_file():
-                    await voice_memory.pause()
-                    issue = singing_resource_problem(PROJECT_ROOT, starting=True, stage="startup_after_voice_release")
-            if issue:
-                raise SingingPipelineError(issue)
-            return await _generate_singing_cover_unlocked(
-                query, profile_id, job_id, settings, progress,
-                bot_self_id=bot_self_id, mode=mode, on_chunk=on_chunk,
-                release_voice_memory=voice_memory.pause,
-            )
+    async with release_voice_memory_for_singing(settings) as voice_memory, async_gpu_lock():
+        issue = singing_resource_problem(PROJECT_ROOT, starting=True, stage="startup")
+        if issue and getattr(settings, "singing_prefer_recorded_reference", False):
+            # A freshly used speech model can itself push available RAM
+            # below the startup reserve. Reclaim it before rejecting a cover
+            # whose existing reference recording needs no TTS call.
+            recorded = str(voice_profiles(settings).get(profile_id, {}).get("ref_audio_path") or "")
+            if recorded and _project_path(recorded).is_file():
+                await voice_memory.pause()
+                issue = singing_resource_problem(PROJECT_ROOT, starting=True, stage="startup_after_voice_release")
+        if issue:
+            raise SingingPipelineError(issue)
+        return await _generate_singing_cover_unlocked(
+            query, profile_id, job_id, settings, progress,
+            bot_self_id=bot_self_id, mode=mode, on_chunk=on_chunk,
+            release_voice_memory=voice_memory.pause,
+        )
 
 
 async def _generate_singing_cover_unlocked(

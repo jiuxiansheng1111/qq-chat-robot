@@ -771,7 +771,7 @@ def test_voice_reply_suppresses_duplicate_text_and_falls_back_on_failure(monkeyp
         settings.voice_enabled = previous_voice_enabled
 
 
-def test_unmentioned_character_invocation_uses_per_member_persona_and_voice(
+def test_voice_selection_keeps_shared_qq_persona_and_per_member_voice(
     monkeypatch, tmp_path
 ):
     previous_database_path = settings.database_path
@@ -837,7 +837,8 @@ def test_unmentioned_character_invocation_uses_per_member_persona_and_voice(
             assert post_event(client, first).json()["ok"] is True
 
             assert len(llm_messages) == 1
-            assert llm_messages[0][0]["content"].count("【当前角色：朝武芳乃】") == 1
+            assert "角色名称：大肥鱼" in llm_messages[0][0]["content"]
+            assert "【当前角色：朝武芳乃】" not in llm_messages[0][0]["content"]
             assert llm_messages[0][-1]["content"] == "陪我聊聊"
             assert sent_text == [("persona-group", "我在，想聊什么？")]
             assert client.portal.call(
@@ -857,7 +858,8 @@ def test_unmentioned_character_invocation_uses_per_member_persona_and_voice(
             second["message_id"] = "persona-mako-no-at"
             assert post_event(client, second).json()["ok"] is True
 
-            assert "【当前角色：常陆茉子】" in llm_messages[1][0]["content"]
+            assert "角色名称：大肥鱼" in llm_messages[1][0]["content"]
+            assert "【当前角色：常陆茉子】" not in llm_messages[1][0]["content"]
             assert llm_messages[1][-1]["content"] == (
                 "有人叫你出来聊聊。请用你自己的身份自然打个招呼。"
             )
@@ -937,7 +939,7 @@ def test_character_invocation_temporarily_overrides_group_possession(
             summoned["self_id"] = "bot-1"
             summoned["message_id"] = "persona-possession-summon"
             assert post_event(client, summoned).json()["ok"] is True
-            assert "【当前角色：朝武芳乃】" in llm_messages[0][0]["content"]
+            assert "角色名称：大肥鱼" in llm_messages[0][0]["content"]
             assert "【最高优先级身份状态】" not in llm_messages[0][0]["content"]
 
             # The next addressed turn resumes the still-active group possession.
@@ -1233,12 +1235,8 @@ def test_romance_chat_starts_natural_then_advances_after_delivered_replies(tmp_p
             ]
             assert post_event(client, payload).json()["ok"] is True
             initial_system = client.app.state.llm.ask.await_args.args[0][0]["content"]
-            assert "当前亲密节奏：刚开始" in initial_system
-            assert client.portal.call(
-                client.app.state.db.romance_turn_count,
-                "romance-group",
-                "romance-user",
-            ) == 1
+            assert "刚开始熟悉" in initial_system
+            assert client.app.state.voice_persona_romance_turns[("romance-group", "romance-user", "大肥鱼")] == 1
     finally:
         settings.database_path = previous_database_path
         settings.onebot_api_base = previous_api_base
@@ -1312,20 +1310,13 @@ def test_default_murasame_voice_does_not_wrap_normal_chat_in_role_markers():
     assert ensure_default_murasame_voice("苟修金，这个没问题") == "苟修金，这个没问题"
 
 
-def test_persona_keeps_role_flavor_only_for_self_introductions():
-    persona = settings.persona_prompt()
-    assert "普通聊天自称“我”" in persona
-    assert "只有对方明确要求你自我介绍" in persona
-    assert "吾辈" in persona
-    assert "Ciallo～" in persona
-    assert "主体必须是自然中文" in persona
-    assert "群聊只用于理解正在聊什么" in persona
-    assert "不得模仿" not in persona or "最近群聊" in persona
-    assert "杂鱼~杂鱼~" in persona
-    assert "有地将臣" in persona
-    assert "不凭空点名群友" in persona
-    assert "お主" not in persona
-    assert "ご主人" not in persona
+def test_qq_persona_does_not_load_speech_character_personality():
+    from app.main import conversation_identity
+    persona = conversation_identity("yoshino", {})[2]
+    assert "角色名称：大肥鱼" in persona
+    assert "选择音色只影响语音回复和唱歌" in persona
+    assert "【当前角色：朝武芳乃】" not in persona
+    assert "不靠随机抽固定台词" in persona
 
 
 def test_webhook_internal_error_returns_200_to_napcat(monkeypatch, tmp_path):

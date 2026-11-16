@@ -707,7 +707,7 @@ def _load_catalog_font(size: int):
         return ImageFont.load_default()
 
 
-def render_anime_character_catalog() -> str:
+def render_anime_character_catalog(*,brand_name: str = "小丛雨") -> str:
     """把完整角色列表绘制成一张 JPEG，避免在 QQ 中刷屏。"""
     columns = 4
     rows = math.ceil(len(ANIME_CHARACTER_ROSTER) / columns)
@@ -724,7 +724,7 @@ def render_anime_character_catalog() -> str:
     item_font = _load_catalog_font(27)
     footer_font = _load_catalog_font(25)
 
-    draw.text((70, 38), "小丛雨 · 二次元角色图鉴", font=title_font, fill=(247, 244, 252))
+    draw.text((70, 38), f"{brand_name} · 二次元角色图鉴", font=title_font, fill=(247, 244, 252))
     draw.text(
         (74, 118),
         f"共收录 {len(ANIME_CHARACTER_ROSTER)} 位角色 · @机器人 + 角色名 可查看图片和资料",

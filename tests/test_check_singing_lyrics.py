@@ -155,8 +155,9 @@ def test_whisper_caches_source_transcript_by_path_stat_and_language(tmp_path, mo
     class FakeProcessor:
         tokenizer = None
 
-        def __call__(self, audio, *, sampling_rate, return_tensors):
-            return SimpleNamespace(input_features=FakeFeatures())
+        def __call__(self, audio, *, sampling_rate, return_tensors, return_attention_mask):
+            assert return_attention_mask
+            return SimpleNamespace(input_features=FakeFeatures(), attention_mask=FakeFeatures())
 
         def get_decoder_prompt_ids(self, *, language, task):
             return [(language, task)]

@@ -9,7 +9,7 @@ section{padding:28px 36px}.badge{background:#f0f5f1;padding:14px 18px;border-rad
 .check{display:flex;gap:10px;align-items:flex-start;line-height:1.6;font-weight:400}.check input{margin-top:5px;accent-color:#245e44}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:25px}button{border:1px solid #b9cbbf;border-radius:8px;background:#fff;color:#28503c;padding:11px 17px;font:inherit;cursor:pointer}button.primary{background:#245e44;color:white;border-color:#245e44}button:disabled{opacity:.55;cursor:wait}.muted{font-size:13px;line-height:1.8;color:#62746a}.status{line-height:1.7;white-space:pre-wrap}footer{padding:0 36px 24px}.status.error{color:#a1372f}.status.success{color:#245e44}@media(max-width:500px){body{padding:16px 10px}header,section{padding:24px}footer{padding:0 24px 20px}}
 </style></head><body><main>
 <header><div class="eyebrow">QQ CHAT ROBOT / MAHJONG SOUL</div><h1>连接雀魂账号</h1><p>连接后，向机器人发送雀魂牌谱链接，即可读取整场对局并复盘。</p></header>
-<section><div id="connection" class="badge">正在检查连接状态…</div>
+<section><p><a href="/accounts">← 返回大肥鱼账号管理</a></p><div id="connection" class="badge">正在检查连接状态…</div>
 <form id="form"><label for="account">雀魂国服账号</label><input id="account" name="account" autocomplete="username" placeholder="填写你注册的账号" maxlength="254" required>
 <label for="password">密码</label><input id="password" name="password" type="password" autocomplete="off" placeholder="填写账号密码" maxlength="256" required>
 <label class="check"><input id="auto-open" type="checkbox" checked><span>收到牌谱分析请求时，在这台电脑打开对应的雀魂页面<br><span class="muted">牌谱读取自动进行；网页注册、登录或验证码由你完成。</span></span></label>

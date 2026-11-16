@@ -88,7 +88,8 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
     target.write_text(text, encoding="utf-8-sig")
 
 
-def visual_filter(shot: str, ass_path: Path, length: float, has_card: bool = False) -> tuple[list[str], str]:
+def visual_filter(shot: str, ass_path: Path, length: float, has_card: bool = False,
+                  image_file: Path | None = None, image_crop: list[int] | None = None) -> tuple[list[str], str]:
     card_box = "drawbox=x=730:y=175:w=515:h=415:color=0x211737@0.82:t=fill," if has_card else ""
     common = (
         "zoompan=z='min(zoom+0.00004,1.035)':x='iw/2-(iw/zoom/2)':"
@@ -103,7 +104,18 @@ def visual_filter(shot: str, ass_path: Path, length: float, has_card: bool = Fal
         inputs = ["-f", "lavfi", "-i", "color=c=0xece5f6:s=1280x720:r=24",
                   "-loop", "1", "-framerate", "24", "-i", str(ASSETS / "chibi-approved.png")]
         return inputs, f"[1:v]scale=-1:720[front];[0:v][front]overlay=x=70:y=0:shortest=1,{common}[v]"
-    if shot.startswith("expression"):
+    if shot == "asset":
+        if image_file is None:
+            raise ValueError("asset shot requires image_file")
+        source = image_file
+        crop = ""
+        if image_crop is not None:
+            if len(image_crop) != 4 or any(type(value) is not int or value < 0 for value in image_crop) or not all(image_crop[2:]):
+                raise ValueError("image_crop must be nonnegative x/y and positive width/height")
+            x,y,width,height=image_crop
+            crop=f"crop={width}:{height}:{x}:{y},"
+        base = crop + "scale=700:540:force_original_aspect_ratio=decrease,pad=720:555:(ow-iw)/2:(oh-ih)/2:color=0xeee8f3,pad=1280:720:0:35:color=0x312544,"
+    elif shot.startswith("expression"):
         number = int(shot[-1])
         x, y = (number % 2) * 627, (number // 2) * 627
         source = ASSETS / "chibi-expressions.png"
@@ -121,7 +133,11 @@ def render_scene(index: int, scene: dict, wav: Path, target: Path) -> None:
     subtitle = subdir / f"scene-{index:02}.ass"
     write_ass(subtitle, scene, length, index)
     relative_subtitle = subtitle.relative_to(ROOT)
-    inputs, filters = visual_filter(scene["shot"], relative_subtitle, length, bool(scene.get("card")))
+    image_file = None
+    if scene.get("image_file"):
+        image_file = (WORK / scene["image_file"]).resolve(strict=True)
+        image_file.relative_to(WORK)
+    inputs, filters = visual_filter(scene["shot"], relative_subtitle, length, bool(scene.get("card")),image_file,scene.get("image_crop"))
     audio_index = 2 if scene["shot"] == "full" else 1
     command = [str(FFMPEG), "-hide_banner", "-loglevel", "error", "-nostdin", "-y", *inputs,
                "-i", str(wav), "-filter_complex", filters, "-map", "[v]", "-map", f"{audio_index}:a:0",
@@ -132,9 +148,13 @@ def render_scene(index: int, scene: dict, wav: Path, target: Path) -> None:
 
 
 def clip_key(scene: dict, wav: Path) -> str:
-    digest = hashlib.sha256(b"dragon-render-v3-news-cards")
+    digest = hashlib.sha256(b"dragon-render-v4-expression-assets")
     digest.update(json.dumps(scene, ensure_ascii=False, sort_keys=True).encode("utf-8"))
     digest.update(wav.read_bytes())
+    if scene.get("image_file"):
+        image_file=(WORK/scene["image_file"]).resolve(strict=True)
+        image_file.relative_to(WORK)
+        digest.update(image_file.read_bytes())
     return digest.hexdigest()
 
 

@@ -18,7 +18,7 @@ def is_local_gpt_sovits(settings) -> bool:
         return False
     try:
         url = urlsplit(str(getattr(settings, "voice_api_url", "")))
-        return url.scheme == "http" and url.hostname in {"127.0.0.1", "localhost", "::1"} and bool(url.port or 80)
+        return url.scheme == "http" and url.hostname in {"127.0.0.1", "localhost", "::1"} and (url.port is None or url.port>0)
     except ValueError:
         return False
 
@@ -27,12 +27,17 @@ async def _powershell(script: str, arguments: list[str], *, timeout: float) -> s
     log_dir = PROJECT_ROOT / "data/logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log = log_dir / ("voice-memory-" + Path(script).stem + ".log")
+    environment=dict(os.environ)
+    if os.name=="nt":
+        environment["PSModulePath"]=str(Path(os.environ["SystemRoot"])/"System32/WindowsPowerShell/v1.0/Modules")+";"+str(
+            Path(os.environ.get("ProgramFiles","C:/Program Files"))/"WindowsPowerShell/Modules")
     with log.open("wb") as output:
         process = await asyncio.create_subprocess_exec(
             "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
             str(PROJECT_ROOT / "scripts" / script), *arguments,
             cwd=PROJECT_ROOT, stdin=asyncio.subprocess.DEVNULL,
             stdout=output, stderr=asyncio.subprocess.STDOUT, creationflags=0x08000000,
+            env=environment,
         )
         try:
             await asyncio.wait_for(process.wait(), timeout)

@@ -129,6 +129,10 @@ def voice_profiles(settings: Settings) -> dict[str, dict[str, object]]:
             "instructions": "",
             "languages": "中文",
         }
+    from app.services.qq_voice import pack_config
+    data=pack_config()
+    if data is not None:
+        profiles["dafeiyu"]=dict(data["profile"])
     return profiles
 
 
@@ -214,7 +218,7 @@ def profile_inference_overrides(profile: dict[str, object]) -> dict[str, int | f
 def character_languages(profile: dict[str, object]) -> str:
     """返回角色支持语言的简短显示名。"""
     if profile.get("tts_enabled") is False:
-        return "文字聊天 / 翻唱" if profile.get("singing_provider") == "rvc" else "文字聊天"
+        return "仅翻唱" if profile.get("singing_enabled") is not False else "语音暂不可用"
     try:
         supported_languages = profile_supported_languages(profile)
     except RuntimeError:
@@ -254,7 +258,7 @@ def voice_profile_authorized(settings: Settings, profile_id: str, bot_self_id: s
 
 
 def voice_profile_menu(settings: Settings, bot_self_id: str | None = None) -> str:
-    lines = ["可用角色"]
+    lines = ["可用音色"]
     cantonese_available = False
     for profile_id, profile in voice_profiles(settings).items():
         if not voice_profile_authorized(settings, profile_id, bot_self_id):
@@ -267,7 +271,7 @@ def voice_profile_menu(settings: Settings, bot_self_id: str | None = None) -> st
         except RuntimeError:
             # character_languages 已将该角色的语言配置标为不可用，这里也不要展示。
             continue
-    lines.append("发送“选择角色 角色名”切换")
+    lines.append("发送“选择音色 名字”切换，仅影响语音和唱歌")
     if cantonese_available:
         lines.append("明确说“用粤语回答”可切换本轮语音，默认中文")
     return "\n".join(lines)
@@ -608,6 +612,12 @@ async def synthesize_voice(
 ) -> str:
     if not settings.voice_enabled:
         raise RuntimeError("语音服务暂不可用，请稍后再试。")
+    if profile_name == "dafeiyu":
+        from app.services.qq_voice import ensure_qq_voice_service, pack_config, qq_voice_settings
+        if pack_config() is None:
+            raise RuntimeError("大肥鱼声线资源暂不可用，已回退文字回复")
+        settings=qq_voice_settings(settings)
+        await ensure_qq_voice_service(settings)
     provider = str(settings.voice_provider or "openai_compatible").strip().casefold()
     if provider not in {
         "openai_compatible",
@@ -641,7 +651,7 @@ async def synthesize_voice(
         raise RuntimeError("该角色音色仅获准在指定机器人账号使用，已回退文字回复")
     profile = profiles[selected_profile_id]
     if profile.get("tts_enabled") is False:
-        raise RuntimeError("这个角色目前支持文字聊天和翻唱，尚未配置文字朗读音色。")
+        raise RuntimeError("这个音色尚未配置文字朗读，请改用文字回复或选择其他音色。")
     if profile.get("voice_provider") == "rvc":
         model = configured_rvc_profile(settings, profile)
         base_profile_id = str(profile.get("tts_base_profile") or settings.voice_rvc_base_profile)

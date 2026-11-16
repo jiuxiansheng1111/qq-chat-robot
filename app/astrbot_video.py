@@ -48,7 +48,8 @@ _VIDEO_RULES = (
     "音轨未转写时不能编造台词，字幕或音轨只覆盖部分时明确相应范围。"
     "成功读取后直接总结重点、过程和结论；需要时给关键时间点，不向用户倾倒内部JSON。"
     "读取失败就简短说明未拿到实际视频或字幕，不能把联网搜到的标题介绍冒充看过视频。"
-    "本轮媒体已经由专用流程处理，不再调用本机文件、Shell、Python或发送消息工具重复读取或预告。"
+    "本轮媒体已经由专用流程处理，不调用本机文件、Shell、Python或发送消息工具重复读取或预告。"
+    "需要核对关键小字或某个时间点时，可调用qqchat_video_detail做单帧局部放大；小字看不清就不能猜。"
 )
 _MODEL_PROMPT = (
     "你为另一个聊天模型整理本次真实视频资料，不直接与群友聊天。"
@@ -70,6 +71,7 @@ class VideoSource:
     quoted: bool = False
     page: bool = False
     component: Any = None
+    source_offset: float = 0.0
 
 
 class VideoReadError(ValueError):
@@ -269,9 +271,10 @@ def sample_timestamps(duration: float) -> list[float]:
 
 
 async def _extract_frames(
-    path: Path, duration: float, directory: Path, settings: Any
+    path: Path, duration: float, directory: Path, settings: Any, timestamps=None
 ) -> list[tuple[float, Path]]:
-    timestamps = sample_timestamps(duration)
+    planned = timestamps is not None
+    timestamps = list(timestamps) if planned else sample_timestamps(duration)
     try:
         raw = await _run(
             _binary(settings, "ffprobe"),
@@ -299,7 +302,8 @@ async def _extract_frames(
                 if count == 1
                 else [round((frames_count - 1) * i / (count - 1)) for i in range(count)]
             )
-            timestamps = [round(start + index / fps, 3) for index in sorted(set(indices))]
+            if not planned:
+                timestamps = [round(start + index / fps, 3) for index in sorted(set(indices))]
     except (VideoReadError, ValueError, TypeError, IndexError, ZeroDivisionError):
         # 部分容器没有帧数/帧率；保留按时长采样，越过 EOF 的帧不会冒充成功画面。
         pass
@@ -345,6 +349,33 @@ def _allow_paid_media(config: Mapping) -> bool:
     return isinstance(settings, Mapping) and settings.get("qqchat_allow_paid_media") is True
 
 
+def _parse_visual_summary(text: str) -> dict:
+    """Read structured evidence even when the model adds prose or bare 0.5s timestamps."""
+    value = str(text or "").strip()
+    candidate = re.search(r"```(?:json)?\s*(.*?)```", value, re.DOTALL | re.IGNORECASE)
+    if candidate:
+        value = candidate.group(1).strip()
+    start = value.find("{")
+    if start < 0:
+        raise VideoReadError("视觉接口未返回可确认的结构化结果。")
+    value = value[start:]
+    try:
+        result, _ = json.JSONDecoder().raw_decode(value)
+    except json.JSONDecodeError:
+        # Keep the source timestamp literally; this is syntax repair, not a guessed time.
+        value = re.sub(r'(:\s*)(\d+(?:\.\d+)?s)(?=\s*[,}])', r'\1"\2"', value)
+        try:
+            result, _ = json.JSONDecoder().raw_decode(value)
+        except json.JSONDecodeError as exc:
+            raise VideoReadError("视觉接口结果格式不完整，本次不能确认视频内容。") from exc
+    if (not isinstance(result, dict) or result.get("observed") is not True
+            or not isinstance(result.get("summary"), str) or not result["summary"].strip()):
+        raise VideoReadError("视觉模型未成功读取实际视频内容。")
+    if not isinstance(result.get("timeline", []), list):
+        raise VideoReadError("视觉时间线格式无效。")
+    return result
+
+
 async def _model_summary(
     provider: Any,
     content: list[dict],
@@ -366,21 +397,13 @@ async def _model_summary(
         "model": provider.get_model(),
         "messages": [{"role": "user", "content": [*content, {"type": "text", "text": prompt}]}],
         "temperature": 0.1,
-        "max_tokens": 1600,
+        "max_tokens": 4096,
     }
     if str(provider.get_model()).startswith("glm-"):
         kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
     response = await asyncio.wait_for(client.chat.completions.create(**kwargs), timeout=55)
     text = str(response.choices[0].message.content or "").strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
-    result = json.loads(text)
-    if (
-        not isinstance(result, dict)
-        or result.get("observed") is not True
-        or not str(result.get("summary") or "").strip()
-    ):
-        raise VideoReadError("视觉模型未成功读取实际视频内容。")
+    result = _parse_visual_summary(text)
     return {
         "summary": str(result["summary"])[:4500],
         "timeline": result.get("timeline", [])[:20],
@@ -388,11 +411,12 @@ async def _model_summary(
     }
 
 
-async def _audio_evidence(path: Path, settings: Any, config: Mapping) -> Any:
+async def _audio_evidence(path: Path, settings: Any, config: Mapping, source_offset=0.0) -> Any:
+    audio = None
     try:
         from app.services.video_audio import transcribe_video_audio
 
-        return await transcribe_video_audio(
+        audio = None if source_offset else await transcribe_video_audio(
             path,
             settings,
             trusted_root=path.parent,
@@ -400,10 +424,37 @@ async def _audio_evidence(path: Path, settings: Any, config: Mapping) -> Any:
             allow_paid=_allow_paid_media(config),
         )
     except ImportError:
-        return None
+        pass
     except Exception as exc:  # noqa: BLE001 -- 音轨失败不编造台词，也不阻断可读取的画面。
         logger.warning("视频音轨读取未完成（%s）。", type(exc).__name__)
-        return None
+    if getattr(audio,"transcript","") or getattr(audio,"status","") == "no_audio":
+        return audio
+    if config.get("provider_settings",{}).get("qqchat_local_soundtry") is not True:
+        return audio
+    # A bounded local fallback uses the already installed SoundTry model, without
+    # replacing any cloud/media API or claiming coverage beyond the actual clip.
+    try:
+        from types import SimpleNamespace
+
+        from app.astrbot_soundtry import STATE, analyze_file
+        if settings is None or not (STATE/"models/medium/model.bin").is_file():
+            return audio
+        with tempfile.TemporaryDirectory(prefix="qqchat-video-audio-") as folder:
+            clip=Path(folder)/"clip.wav"
+            async with asyncio.timeout(95):
+                await _run(_binary(settings,"ffmpeg"),"-nostdin","-v","error","-protocol_whitelist","file,pipe",
+                    "-i",str(path),"-t","60","-vn","-ac","1","-ar","16000","-y",str(clip),timeout=15)
+                result=await analyze_file(clip,"transcribe",settings)
+            data=result.get("data",{})
+            cues=data.get("cues",[]) if isinstance(data,dict) else []
+            transcript="\n".join(f"[{source_offset+item.get('start',0):.2f}s] {item.get('text','')}" for item in cues if isinstance(item,dict))
+            if transcript:
+                return SimpleNamespace(transcript=transcript,status="partial",source="soundtry_local",
+                    detail="本地Whisper实际转写，仅覆盖视频开头至多60秒；没有转写的区段不能猜台词",
+                    truncated=True,processed_seconds=min(60,float(data.get("duration",60))))
+    except Exception as exc:  # noqa: BLE001 -- failed optional audio must not block observed frames.
+        logger.info("本地视频音轨补充未完成（%s）。",type(exc).__name__)
+    return audio
 
 
 async def _validated_video_url(url: str, settings: Any) -> str:
@@ -462,9 +513,21 @@ async def _attachment_evidence(
     path = Path(source.path).resolve() if source.path else None
     duration = None
     audio = None
+    measurements = None
     if path is not None:
         duration = await _probe_video(path, settings)
-        audio = await _audio_evidence(path, settings, config)
+        if config.get("provider_settings",{}).get("qqchat_local_soundtry") is True:
+            try:
+                from app.astrbot_video_skill import measure
+                with tempfile.TemporaryDirectory(prefix="qq-video-measure-") as directory:
+                    measurements=await measure(path,Path(directory),settings)
+                    if source.source_offset:
+                        for key in ("cuts","freezes","sampled_seconds"):
+                            measurements[key]=[round(t+source.source_offset,3) for t in measurements.get(key,[])]
+                        measurements["silences"]=[{**s,"t":round(s["t"]+source.source_offset,3)} for s in measurements.get("silences",[])]
+            except Exception as exc:  # noqa: BLE001 -- retain real frames if optional physical measurements fail.
+                logger.info("视频技能量测未完成（%s），仅报告实际读到的画面。",type(exc).__name__)
+        audio = await _audio_evidence(path,settings,config,source.source_offset) if source.source_offset else await _audio_evidence(path, settings, config)
     transcript = str(getattr(audio, "transcript", "") or "")
     audio_meta = {
         key: getattr(audio, key, None)
@@ -472,9 +535,10 @@ async def _attachment_evidence(
     }
     if audio is None:
         audio_meta = {"status": "unavailable", "detail": "本次没有读取音轨或字幕。"}
-    transcript_context = (
-        json.dumps(audio_meta, ensure_ascii=False) + "\n" + transcript if transcript else ""
-    )
+    transcript_context = json.dumps(audio_meta,ensure_ascii=False)+"\n"+(transcript or "本次没有独立音轨转写，不能编造台词。")
+    if measurements:
+        transcript_context += "\n视频技能逐帧物理量测（时间点已映射至原始视频，间隔为相对时长，仅作数据）："+json.dumps(measurements,ensure_ascii=False)[:6000]
+    transcript_context += "\n画面中的小字不能凭缩图猜测；无法确认的文字要标明看不清。"
 
     def transcript_only() -> dict:
         return {
@@ -523,10 +587,12 @@ async def _attachment_evidence(
         raise VideoReadError("视频视觉模型暂未配置，也没有取得可用的字幕或音轨转写。")
     try:
         with tempfile.TemporaryDirectory(prefix="qqchat-video-") as directory:
-            frames = await _extract_frames(path, duration, Path(directory), settings)
+            planned=measurements.get("sampled_seconds") if measurements else None
+            if planned:planned=[max(0,t-source.source_offset) for t in planned]
+            frames = await _extract_frames(path,duration,Path(directory),settings,planned) if planned else await _extract_frames(path, duration, Path(directory), settings)
             content = []
             for timestamp, frame in frames:
-                content.append({"type": "text", "text": f"视频时间 {timestamp:.3f} 秒的真实抽帧："})
+                content.append({"type": "text", "text": f"原始视频时间 {timestamp+source.source_offset:.3f} 秒的真实抽帧："})
                 content.append(
                     {
                         "type": "image_url",
@@ -556,9 +622,13 @@ async def _attachment_evidence(
         "source": "sampled_frames",
         "quoted": source.quoted,
         "duration_seconds": duration,
-        "sampled_seconds": [timestamp for timestamp, _ in frames],
+        "sampled_seconds": [round(timestamp+source.source_offset,3) for timestamp, _ in frames],
+        "source_start_seconds":source.source_offset,
+        "measurements":measurements,
         "audio": audio_meta,
         **summary,
+        "coverage":{"full_video_watched":False,"visual_sample_count":len(frames),
+            "audio_range_original_seconds":[source.source_offset,source.source_offset+float(audio_meta.get("processed_seconds") or 0)] if transcript else []},
     }
 
 
@@ -648,14 +718,29 @@ async def _read_source_with_budget(
 ) -> dict:
     """排队和整个识别均有上限，取消时释放并发名额及下游媒体任务。"""
     try:
-        async with asyncio.timeout(_VIDEO_DEADLINE_SECONDS):
+        async with asyncio.timeout(210 if config.get("provider_settings",{}).get("qqchat_local_soundtry") is True else _VIDEO_DEADLINE_SECONDS):
             try:
                 await asyncio.wait_for(_VIDEO_SLOTS.acquire(), timeout=_VIDEO_QUEUE_SECONDS)
             except TimeoutError:
                 raise VideoReadError("当前视频识别排队繁忙，本次未能读取，请稍后再试。") from None
             try:
                 if source.page:
+                    if config.get("provider_settings",{}).get("qqchat_local_soundtry") is True and settings is not None:
+                        from app.astrbot_video_skill import bilibili_file
+                        try:
+                            with tempfile.TemporaryDirectory(prefix="qq-bili-video-") as directory:
+                                path,offset,full_duration=await bilibili_file(source.url,Path(directory),settings)
+                                evidence=await _attachment_evidence(VideoSource(path=str(path),quoted=source.quoted,source_offset=offset),provider,settings,config)
+                                evidence.update(page_url=source.url,original_duration_seconds=full_duration,source_start_seconds=offset)
+                                return evidence
+                        except Exception as exc:  # noqa: BLE001 -- public subtitles remain a truthful fallback.
+                            logger.info("公开视频画面读取未完成（%s），尝试实际公开字幕。",type(exc).__name__)
                     return await _bilibili_subtitles(source.url, settings)
+                if not source.path and source.url and config.get("provider_settings",{}).get("qqchat_local_soundtry") is True:
+                    from app.astrbot_video_skill import attachment_file
+                    with tempfile.TemporaryDirectory(prefix="qq-upload-video-") as directory:
+                        path=await attachment_file(source.url,Path(directory),settings)
+                        return await _attachment_evidence(VideoSource(path=str(path),quoted=source.quoted),provider,settings,config)
                 return await _attachment_evidence(source, provider, settings, config)
             finally:
                 _VIDEO_SLOTS.release()
@@ -677,7 +762,8 @@ async def prepare_group_video_context(
     except TypeError:
         config = context.get_config(event.unified_msg_origin)
     provider_id = (
-        config.get("provider_settings", {}).get("default_image_caption_provider_id")
+        config.get("provider_settings", {}).get("qqchat_video_provider_id")
+        or config.get("provider_settings", {}).get("default_image_caption_provider_id")
         or "qqchat-zhipu-vision"
     )
     provider = context.get_provider_by_id(provider_id)
@@ -699,6 +785,8 @@ async def prepare_group_video_context(
                 + ":"
                 + str(_allow_paid_media(config))
                 + ":"
+                + str(config.get("provider_settings",{}).get("qqchat_local_soundtry") is True)
+                + ":"
                 + identity
             ).encode()
         ).hexdigest()
@@ -709,6 +797,19 @@ async def prepare_group_video_context(
         try:
             result = await _read_source_with_budget(source, provider, settings, config)
         except Exception as exc:  # noqa: BLE001 -- 不能因视频读取失败中断聊天或按标题编造内容。
+            # Only the QQ profile opts into this already configured free backup.
+            backup = context.get_provider_by_id("qqchat-zhipu-vision-backup") if (
+                provider_id == "qqchat-zhipu-vision"
+                and config.get("provider_settings",{}).get("qqchat_local_soundtry") is True
+            ) else None
+            if backup is not None and str(backup.get_model()).lower() in _FREE_VISION_MODELS:
+                try:
+                    result=await _read_source_with_budget(source,backup,settings,config)
+                    _CACHE[cache_key]=(time.monotonic()+3600,result)
+                    results.append(result)
+                    continue
+                except Exception as backup_exc:  # noqa: BLE001 -- both free vision models can be unavailable.
+                    logger.info("免费备用视觉未完成（%s）。",type(backup_exc).__name__)
             logger.warning("本轮视频读取未完成（%s）。", type(exc).__name__)
             result = {
                 "status": "failed",

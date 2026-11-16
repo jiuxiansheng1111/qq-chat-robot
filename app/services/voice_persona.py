@@ -1,28 +1,13 @@
-"""把角色对话人格与已配置的音色配对。"""
+"""音色别名与旧选择命令解析，不加载音色对应的人格提示词。"""
 
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
 
-from app.config import Settings
 from app.services.band_characters import BAND_CHARACTERS
 
-_PROMPT_ROOT = Path(__file__).resolve().parents[2] / "prompts" / "voice_personas"
-
-# 为音色配置补充对话人格。Senren*Banka 的角色也先放在这里，
-# 在对应音色完成核实和配置前，
-# 不会出现在可选音色菜单中。
-_PERSONA_FILES = {
-    "yoshino": "yoshino.txt",
-    "mako": "mako.txt",
-    "aimisi": "aimisi.txt",
-    "lena": "lena.txt",
-    "koharu": "koharu.txt",
-    "roka": "roka.txt",
-}
-
 _ROLE_ALIASES = {
+    "dafeiyu": ("大肥鱼", "肥鱼", "鲸鱼娘", "小鲸鱼", "鲸娘", "本鱼"),
     "murasame": ("小丛雨", "丛雨", "穗织幼刀姬"),
     "yoshino": ("朝武芳乃", "芳乃", "巫女姬"),
     "mako": ("常陆茉子", "茉子"),
@@ -32,7 +17,6 @@ _ROLE_ALIASES = {
     "koharu": ("鞍马小春", "小春"),
 }
 
-_PERSONA_FILES.update({profile_id: profile_id + ".txt" for profile_id, *_ in BAND_CHARACTERS})
 _ROLE_ALIASES.update({profile_id: (label, *aliases) for profile_id, label, aliases, *_ in BAND_CHARACTERS})
 
 
@@ -84,8 +68,6 @@ def _persona_aliases(
     aliases: dict[str, set[str]] = {}
     for profile_id, profile in profiles.items():
         canonical = _canonical_profile_id(profile_id)
-        if not has_voice_persona(canonical):
-            continue
         names = (
             *_ROLE_ALIASES.get(canonical, ()),
             profile_id,
@@ -109,9 +91,7 @@ def resolve_voice_persona_alias(
     # 如果旧别名同时被两个角色使用（例如 lena 和 rena），
     # 优先精确匹配已配置的 profile ID。
     for profile_id in profiles:
-        if _normalized_alias(profile_id) == requested and has_voice_persona(
-            _canonical_profile_id(profile_id)
-        ):
+        if _normalized_alias(profile_id) == requested:
             return profile_id
     matches = aliases.get(requested, set())
     return next(iter(matches)) if len(matches) == 1 else None
@@ -165,39 +145,6 @@ def character_invocation(
         if separator or _DIRECT_ADDRESS_START.match(prompt):
             return Invocation(profile_id, prompt)
     return None
-
-
-def has_voice_persona(profile_id: str) -> bool:
-    profile_id = "lena" if profile_id == "rena" else profile_id
-    if profile_id == "murasame":
-        return True
-    filename = _PERSONA_FILES.get(profile_id)
-    return bool(
-        filename
-        and (_PROMPT_ROOT / "common.txt").is_file()
-        and (_PROMPT_ROOT / filename).is_file()
-    )
-
-
-def voice_persona_prompt(settings: Settings, profile_id: str) -> str | None:
-    """返回完整的人格设定；未配置的角色返回 None。"""
-    profile_id = "lena" if profile_id == "rena" else profile_id
-    if profile_id == "murasame":
-        return settings.persona_prompt()
-    filename = _PERSONA_FILES.get(profile_id)
-    if filename is None:
-        return None
-
-    common_path = _PROMPT_ROOT / "common.txt"
-    role_path = _PROMPT_ROOT / filename
-    try:
-        common = common_path.read_text(encoding="utf-8").strip()
-        role = role_path.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    if not common or not role:
-        return None
-    return f"{common}\n\n{role}"
 
 
 def voice_persona_romance_prompt(profile_label: str, conversation_turn_count: int = 0) -> str:

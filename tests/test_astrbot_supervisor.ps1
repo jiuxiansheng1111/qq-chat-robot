@@ -59,14 +59,31 @@ try {
     }
     function Get-AstrbotProcessInfo { param([int]$ProcessId); return $script:processes[$ProcessId] }
     $script:dashboardOwner = 10003; $script:wsOwner = 10003; $script:responsive = $true
+    $script:qqConnected = $true
     function Get-AstrbotListeners { param([int]$Port)
         $owner = if ($Port -eq 6185) { $script:dashboardOwner } else { $script:wsOwner }
         if ($owner) { return [pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = $owner } }
         return @()
     }
     function Test-AstrbotDashboardResponse { return $script:responsive }
+    function Test-AstrbotQQConnection { param([int]$ProcessId)
+        Assert-Equal $ProcessId 10003 'QQ connection checked on the wrong process'
+        return $script:qqConnected
+    }
     Set-TestPlatform $true
     Assert-Equal (Get-AstrbotHealth -Layout $layout).Status 'healthy' 'Healthy instance rejected'
+    $script:qqConnected = $false
+    $disconnected = Get-AstrbotHealth -Layout $layout
+    Assert-Equal $disconnected.Status 'disconnected' 'Listening WS port was mistaken for a connected QQ client'
+    Assert-Equal $disconnected.Restart $false 'Disconnected NapCat requested an AstrBot restart'
+    $connectionNow = [datetime]::UtcNow
+    Assert-Equal (Get-AstrbotRecoveryDecision -Health $disconnected -Now $connectionNow `
+        -UnhealthySince $connectionNow.AddMinutes(-5) -NextAttempt ([datetime]::MinValue)) 'wait' `
+        'Disconnected NapCat restarted other platform services'
+    Set-TestPlatform $false
+    Assert-Equal (Get-AstrbotHealth -Layout $layout).Status 'healthy' 'Disabled QQ adapter requires a connection'
+    Set-TestPlatform $true
+    $script:qqConnected = $true
     $script:watchProcess = [pscustomobject]@{
         Handle = [IntPtr]123; Path = $script:nativePath
         StartTime = $script:processes[10003].CreationDate; Disposed = $false

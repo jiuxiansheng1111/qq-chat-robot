@@ -43,6 +43,13 @@ class Settings(AppSettings):
     model_config: ClassVar[dict] = {**AppSettings.model_config, "env_file": None}
 
 
+@pytest.fixture(autouse=True)
+def isolate_mock_pipeline_from_desktop_ram(monkeypatch):
+    # These tests replace every inference stage; actual RAM admission has its
+    # own tests in test_singing_resources.py.
+    monkeypatch.setattr("app.services.singing.singing_resource_problem",lambda *args,**kwargs:None)
+
+
 def test_singing_requires_explicit_request_and_preserves_song_title():
     assert parse_singing_command("唱歌 晴天", PROFILES, addressed=False) is None
     assert parse_singing_command("/singular", PROFILES, addressed=False) is None
@@ -451,10 +458,10 @@ async def test_generation_retries_with_same_shift_and_mixes_equivalent_accompani
         "app.services.singing.runtime_paths",
         lambda _: (Path("python"), seed_root, Path("ffmpeg"), Path("ffprobe")),
     )
-    song = SimpleNamespace(
-        track=SimpleNamespace(song_id="song-id", title="song", duration_seconds=1),
-        lyrics_text="[00:00.00]lyric",
-        lyric_lines=(),
+    from app.services.singing_sources import SingingSong
+    song = SingingSong(
+        track=SimpleNamespace(song_id="song-id", title="song", duration_seconds=1, artists=()),
+        lyrics_text="[00:00.00]lyric", lyric_lines=(), source_path=None, source_url=None,
     )
     async def download(_, job_dir, __):
         source = job_dir / "song.mp3"
@@ -481,7 +488,7 @@ async def test_generation_retries_with_same_shift_and_mixes_equivalent_accompani
 
     model_shifts = []
 
-    async def convert(source, ref, output_dir, profile_id, settings, *, steps=None, semitone_shift=0):
+    async def convert(source, ref, output_dir, profile_id, settings, *, steps=None, semitone_shift=0, **kwargs):
         model_shifts.append((steps, semitone_shift))
         output_dir.mkdir(parents=True, exist_ok=True)
         converted = output_dir / "vocals.wav"
@@ -490,7 +497,7 @@ async def test_generation_retries_with_same_shift_and_mixes_equivalent_accompani
 
     quality_shifts = []
 
-    async def check(source, converted, ref, output, settings, *, expected_semitone_shift=0):
+    async def check(source, converted, ref, output, settings, *, expected_semitone_shift=0, **kwargs):
         quality_shifts.append((output.name, expected_semitone_shift))
         if len(quality_shifts) == 1:
             raise SingingPipelineError("first quality attempt requests retry")
@@ -562,8 +569,8 @@ async def test_generation_retries_with_same_shift_and_mixes_equivalent_accompani
         assert mix_accompaniments == [
             data_root / "jobs" / ("a" * 32) / "parts" / "001" / "accompaniment_shifted.wav"
         ]
-    assert "[0:a]aformat=channel_layouts=stereo,highpass=f=60" in mix_filters[0]
-    assert "volume=4.0000000000,acompressor=threshold=0.32" in mix_filters[0]
+    assert "[0:a]pan=stereo|c0=c0|c1=c0" in mix_filters[0]
+    assert "[vocal]" in mix_filters[0]
     assert "[1:a]aformat=channel_layouts=stereo,volume=0.8500000000[background]" in mix_filters[0]
     assert "amix=inputs=2:duration=longest:normalize=0" in mix_filters[0]
     assert "volume=0.9300000000,alimiter=limit=0.95" in mix_filters[0]

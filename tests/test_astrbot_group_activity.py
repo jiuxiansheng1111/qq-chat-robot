@@ -11,6 +11,9 @@ def active_config():
     return {
         "group_chat_enabled": True, "group_chat_groups": ["1000000001", "1000000002"],
         "group_chat_bot_names": ["小丛雨", "丛雨"],
+        "group_chat_addressed_only": False, "group_chat_require_engagement": True,
+        "group_chat_interject_every": 12, "group_chat_active_speakers": 3,
+        "group_chat_active_window_seconds": 300, "group_chat_min_interval_seconds": 600,
     }
 
 
@@ -45,7 +48,7 @@ def test_twelve_messages_three_speakers_interject_once_then_wait_for_engagement(
         now[0] += 5
         assert router.observe_event(Event(user=str(100 + index % 3), message_id=str(index))) is None
     direct = Event("你是豆包扮演的吗", message_id="direct", segments=[
-        {"type": "at", "data": {"qq": "3503565007"}},
+        {"type": "at", "data": {"qq": "999990001"}},
         {"type": "text", "data": {"text": "你是豆包扮演的吗"}},
     ])
     assert router.observe_event(direct) == "direct"
@@ -56,7 +59,7 @@ def idle_event(group="1000000001"):
     event.message_obj.raw_message = None
     event.message_obj.message_id = "proactive:test"
     event.get_group_id = lambda: group
-    event.get_self_id = lambda: "3503565007"
+    event.get_self_id = lambda: "999990001"
     return event
 
 
@@ -85,5 +88,5 @@ def test_hot_chat_prompt_does_not_order_the_bot_to_answer_another_persons_questi
     request = SimpleNamespace(system_prompt="", extra_user_content_parts=[])
     router.prepare_request(event, request)
     text = request.system_prompt + "".join(getattr(part, "text", "") for part in request.extra_user_content_parts)
-    assert "不是向你提问" in text and "[QQCHAT_NO_REPLY]" in text
+    assert "分清群友在对谁说话" in text and "[QQCHAT_NO_REPLY]" in text
     assert "【现在回答】" not in text

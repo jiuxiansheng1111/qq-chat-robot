@@ -45,9 +45,9 @@ def test_voice_profile_is_one_multilingual_murasame_character():
 def test_character_menu_hides_internal_profile_ids_and_supports_character_name():
     settings = Settings(_env_file=None)
     menu = voice_profile_menu(settings)
-    assert menu == "可用角色\n- 小丛雨（中 / 日 / 英）\n发送“选择角色 角色名”切换"
+    assert menu == "可用音色\n- 小丛雨（中 / 日 / 英）\n发送“选择音色 名字”切换，仅影响语音和唱歌"
     assert "murasame" not in menu
-    assert "音色" not in menu
+    assert "仅影响语音和唱歌" in menu
     assert resolve_character_profile(settings, "小丛雨") == "murasame"
     assert resolve_character_profile(settings, "murasame") == "murasame"
 
@@ -366,7 +366,7 @@ async def test_supported_languages_controls_menu_and_blocks_unaccepted_tts(monke
     )
 
     assert voice_profile_menu(settings) == (
-        "可用角色\n- 芳乃（中文 / 英语 / 粤语）\n发送“选择角色 角色名”切换\n"
+        "可用音色\n- 芳乃（中文 / 英语 / 粤语）\n发送“选择音色 名字”切换，仅影响语音和唱歌\n"
         "明确说“用粤语回答”可切换本轮语音，默认中文"
     )
     await synthesize_voice("Hello there", settings, target_language="en")
@@ -540,7 +540,7 @@ async def test_invalid_supported_languages_remains_visible_but_fails_closed(monk
         ),
     )
 
-    assert voice_profile_menu(settings) == "可用角色\n- 芳乃（语音暂不可用）\n发送“选择角色 角色名”切换"
+    assert voice_profile_menu(settings) == "可用音色\n- 芳乃（语音暂不可用）\n发送“选择音色 名字”切换，仅影响语音和唱歌"
     with pytest.raises(RuntimeError, match="仅可包含不重复的 zh、ja、en、yue"):
         await synthesize_voice("你好", settings, profile_name="yoshino", target_language="zh")
 

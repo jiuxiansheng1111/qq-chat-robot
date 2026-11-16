@@ -104,3 +104,43 @@ async def test_native_astrbot_context_and_tool_round_trip(monkeypatch, tmp_path,
                    item.get("output") == "已通过原 API 生成猫咪" for item in sent[-1]["input"])
     finally:
         await provider.terminate()
+
+
+@pytest.mark.parametrize("rejected", [False, True])
+async def test_native_search_preflight_uses_oauth_once_and_preserves_rejections(monkeypatch, tmp_path, rejected):
+    import json
+    from types import SimpleNamespace as NS
+    from unittest.mock import AsyncMock
+
+    from test_astrbot_native_onebot import _find_project_root, _load_astrbot_types
+    root = _find_project_root()
+    monkeypatch.setenv("ASTRBOT_ROOT", str(tmp_path / "native-search"))
+    monkeypatch.chdir(tmp_path)
+    _load_astrbot_types(root, monkeypatch)
+    from test_astrbot_search import GroupEvent
+
+    from app.astrbot_chatgpt_provider import register_chatgpt_provider
+    from app.astrbot_search import _plan_group_search
+    from app.chatgpt_subscription import SubscriptionError
+    provider = register_chatgpt_provider()({
+        "id": "isolated-luna", "model": "gpt-6-luna", "type": "qqchat_chatgpt_subscription",
+        "key": ["not-a-real-key"], "api_base": "https://example.invalid", "chatgpt_credentials_dir": str(tmp_path / "credentials"),
+    }, {})
+    respond = AsyncMock(return_value={"id": "synthetic", "status": "completed", "output": [
+        {"type": "message", "content": [{"type": "output_text", "text": json.dumps({
+            "search": True, "query": "NiKo donk 比较", "recency": "oneMonth", "purpose": "game_opinion"})}]}]})
+    if rejected:
+        respond.side_effect = SubscriptionError("HTTP 403 synthetic-rejection")
+    monkeypatch.setattr(provider.subscription, "respond", respond)
+    ctx = NS(get_current_chat_provider_id=AsyncMock(return_value="isolated-luna"), get_provider_by_id=lambda _: provider)
+    try:
+        if rejected:
+            with pytest.raises(SubscriptionError):
+                await _plan_group_search(ctx, GroupEvent(), NS(contexts=[]))
+        else:
+            assert (await _plan_group_search(ctx, GroupEvent(), NS(contexts=[])))["purpose"] == "game_opinion"
+        respond.assert_awaited_once()
+        body = respond.await_args.args[0]
+        assert body["store"] is False and body["stream"] is True and body["model"] == "gpt-6-luna"
+    finally:
+        await provider.terminate()

@@ -11,6 +11,8 @@ def quiet_config():
         "group_chat_bot_names": ["小丛雨", "丛雨"],
         "group_chat_unaddressed_questions": True, "group_chat_active_window_seconds": 0,
         "group_chat_min_interval_seconds": 300,
+        "group_chat_addressed_only": False, "group_chat_require_engagement": True,
+        "group_chat_interject_every": 12,
     }
 
 
@@ -44,7 +46,7 @@ def test_passive_questions_and_interjections_share_cooldown_but_at_is_timely():
         assert router.observe_event(Event(message_id=str(index))) is None
     assert router.observe_event(Event("怎么了？", message_id="question")) is None
     direct2 = Event("这个怎么算？", message_id="direct2", segments=[
-        {"type": "at", "data": {"qq": "3503565007"}},
+        {"type": "at", "data": {"qq": "999990001"}},
         {"type": "text", "data": {"text": "这个怎么算？"}},
     ])
     assert router.observe_event(direct2) == "direct"
@@ -80,7 +82,7 @@ def test_silence_request_cancels_pending_chat_without_an_apology_message():
     assert router.observe_event(pending) == "question"
     for index, phrase in enumerate(("憋发癫了", "别复读了", "闭嘴", "不要刷屏了")):
         event = Event(phrase, message_id=f"quiet-{index}", segments=[
-            {"type": "at", "data": {"qq": "3503565007"}},
+            {"type": "at", "data": {"qq": "999990001"}},
             {"type": "text", "data": {"text": phrase}},
         ])
         assert router.observe_event(event) is None

@@ -2,19 +2,22 @@ from __future__ import annotations
 
 import json
 import sys
-from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 from PIL import Image
 
-from app.astrbot_plugin_images import AnimeImageRequest, forward_anime_image, parse_anime_image_request
+from app.astrbot_plugin_images import (
+    AnimeImageRequest,
+    forward_anime_image,
+    parse_anime_image_request,
+)
 from app.services import anime_image_policy as policy
 
 
 @pytest.mark.parametrize("text,themes", [
-    ("来份色图", ()), ("/来一份涩图吧", ()), ("给我整张福利图", ()),
+    ("来份色图", ()), ("来分色图", ()), ("/来一份涩图吧", ()), ("给我整张福利图", ()),
     ("来张稍微性感一点的女仆图", ("女仆",)), ("我想看黑丝女仆图", ("丝袜", "女仆")),
     ("来份泳装图，不要R18", ("泳装",)), ("来张短裙插画", ("短裙",)),
 ])
@@ -52,9 +55,9 @@ GOOD = {"anime": True, "clearly_adult": True, "matches_requested_themes": True, 
 
 def test_visual_check_requires_complete_explicit_boolean_decision():
     assert policy.parse_visual_check(json.dumps(GOOD))
-    for key in GOOD:
-        assert not policy.parse_visual_check(json.dumps({**GOOD, key: not GOOD[key]}))
-        assert not policy.parse_visual_check(json.dumps({**GOOD, key: str(GOOD[key])}))
+    for key, value in GOOD.items():
+        assert not policy.parse_visual_check(json.dumps({**GOOD, key: not value}))
+        assert not policy.parse_visual_check(json.dumps({**GOOD, key: str(value)}))
     assert not policy.parse_visual_check("yes")
     assert not policy.parse_visual_check(json.dumps({k: v for k, v in GOOD.items() if k != "age_uncertain"}))
 
@@ -100,7 +103,7 @@ async def test_verified_image_sent_once_and_temp_removed(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_youthful_or_uncertain_image_is_not_sent(tmp_path, monkeypatch):
-    event, plugin, checker, image = setup_flow(tmp_path, monkeypatch, allowed=False)
+    event, plugin, _checker, image = setup_flow(tmp_path, monkeypatch, allowed=False)
     output = [item async for item in policy.send_styled_anime_image(event, object(), plugin, AnimeImageRequest(True))]
     assert len(output) == 1 and "没找到" in output[0]
     event.send.assert_not_awaited()
@@ -130,7 +133,7 @@ async def test_busy_check_reports_busy_and_never_claims_sent(tmp_path, monkeypat
 
 @pytest.mark.asyncio
 async def test_send_timeout_does_not_duplicate_image_and_releases_pending(tmp_path, monkeypatch):
-    event, plugin, checker, image = setup_flow(tmp_path, monkeypatch)
+    event, plugin, _checker, image = setup_flow(tmp_path, monkeypatch)
     event.send.side_effect = TimeoutError()
     output = [item async for item in policy.send_styled_anime_image(event, object(), plugin, AnimeImageRequest(True))]
     assert len(output) == 1
@@ -142,7 +145,7 @@ async def test_send_timeout_does_not_duplicate_image_and_releases_pending(tmp_pa
 
 @pytest.mark.asyncio
 async def test_group_inflight_is_not_reentered(tmp_path, monkeypatch):
-    event, plugin, checker, image = setup_flow(tmp_path, monkeypatch)
+    event, plugin, _checker, _image = setup_flow(tmp_path, monkeypatch)
     policy._INFLIGHT.add("group:123")
     try:
         output = [item async for item in policy.send_styled_anime_image(event, object(), plugin, AnimeImageRequest(True))]
@@ -238,9 +241,9 @@ async def test_combined_theme_search_uses_preference_or_and_keeps_r18_zero(monke
             captured.update(url=url,**kwargs)
             return Response()
     monkeypatch.setattr('app.services.http_routing.outbound_http_client',lambda **kwargs: Client())
-    source = SimpleNamespace(available=True, api_url="https://api.example/v2", _ensure_session=lambda: SimpleNamespace(get=get), _normalize=lambda row: {"id": str(row["pid"])})
+    source = SimpleNamespace(available=True, api_url="https://api.example/v2", _normalize=lambda row: {"id": str(row["pid"])})
     plugin = SimpleNamespace(lolicon_client=source, _fetch_source_candidates=AsyncMock())
-    rows, count, source_key = await policy.fetch_theme_candidates(plugin, object(), ("丝袜", "女仆"))
+    rows, count, _source_key = await policy.fetch_theme_candidates(plugin, object(), ("丝袜", "女仆"))
     assert count == 1 and rows == [{"id": "123"}]
     assert ("r18", "0") in captured["params"]
     tags = [value for key, value in captured["params"] if key == "tag"]
@@ -302,8 +305,29 @@ async def test_busy_models_are_not_repeatedly_requested(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_gallery_get_retries_one_transient_connection_failure_before_pixiv_login(monkeypatch):
+    import httpx
+
+    from app.services import http_routing
+    response=SimpleNamespace(raise_for_status=lambda:None,json=lambda:{'data':[{'id':'fixture'}]})
+    get=AsyncMock(side_effect=[httpx.ConnectError('temporary connection'),response])
+    class Client:
+        async def __aenter__(self):return SimpleNamespace(get=get)
+        async def __aexit__(self,*args):pass
+    monkeypatch.setattr(http_routing,'outbound_http_client',lambda **kwargs:Client())
+    monkeypatch.setattr(policy.asyncio,'sleep',AsyncMock())
+    monkeypatch.setattr(policy,'_SOURCE_COOLDOWN',{})
+    pixiv=SimpleNamespace(search=AsyncMock())
+    plugin=SimpleNamespace(lolicon_client=SimpleNamespace(api_url='https://gallery.invalid',available=True,_normalize=lambda x:x),client=pixiv)
+    rows,_,_=await policy.fetch_theme_candidates(plugin,object(),())
+    assert rows==[{'id':'fixture'}] and get.await_count==2
+    pixiv.search.assert_not_awaited()
+    assert ('r18','0') in get.await_args.kwargs['params']
+
+
+@pytest.mark.asyncio
 async def test_generic_request_does_not_impose_random_outfit(tmp_path, monkeypatch):
-    event, plugin, checker, image = setup_flow(tmp_path, monkeypatch)
+    event, plugin, checker, _image = setup_flow(tmp_path, monkeypatch)
     plugin._fetch_source_candidates.return_value=([{'id':'1234:0','x_restrict':0,'tags':[]}],1,'pixiv:general')
     output=[x async for x in policy.send_styled_anime_image(event, object(), plugin, AnimeImageRequest(True))]
     assert output == []
@@ -314,7 +338,7 @@ async def test_generic_request_does_not_impose_random_outfit(tmp_path, monkeypat
 
 @pytest.mark.asyncio
 async def test_record_failure_after_delivery_does_not_claim_image_failed(tmp_path, monkeypatch):
-    event, plugin, checker, image = setup_flow(tmp_path, monkeypatch)
+    event, plugin, _checker, _image = setup_flow(tmp_path, monkeypatch)
     plugin._record_image_usage.side_effect=RuntimeError('database busy')
     output=[x async for x in policy.send_styled_anime_image(event, object(), plugin, AnimeImageRequest(True))]
     assert output == []
@@ -323,7 +347,7 @@ async def test_record_failure_after_delivery_does_not_claim_image_failed(tmp_pat
 
 @pytest.mark.asyncio
 async def test_preference_mismatch_does_not_reject_a_safe_picture(tmp_path, monkeypatch):
-    event, plugin, checker, image = setup_flow(tmp_path, monkeypatch)
+    event, plugin, _checker, _image = setup_flow(tmp_path, monkeypatch)
     plugin._fetch_source_candidates.return_value=([{'id':'1234:0','x_restrict':0,'tags':[]}],1,'pixiv:general')
     output=[x async for x in policy.send_styled_anime_image(event, object(), plugin, AnimeImageRequest(True, ('泳装',)))]
     assert output == []

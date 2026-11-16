@@ -3,7 +3,6 @@ import pytest
 from app.services.voice_persona import (
     Invocation,
     character_invocation,
-    has_voice_persona,
     is_self_introduction_request,
     resolve_voice_persona_alias,
 )
@@ -65,10 +64,9 @@ def test_role_selection_uses_the_same_full_and_short_aliases_as_invocation():
     assert resolve_voice_persona_alias("rena", PROFILES) == "lena"
 
 
-def test_legacy_rena_profile_id_uses_lena_persona_and_aliases():
+def test_legacy_rena_profile_id_keeps_lena_aliases_without_persona_files():
     profiles = {"rena": {"label": "蕾娜"}}
 
-    assert has_voice_persona("rena")
     assert character_invocation("蕾娜", profiles) == Invocation("rena", "")
     assert resolve_voice_persona_alias("lena", profiles) == "rena"
 

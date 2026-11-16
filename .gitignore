@@ -13,6 +13,10 @@ logs/
 *.egg-info/
 *.pyc
 
+# Local operator notes and account-specific deployment history.
+/AGENTS.md
+/DEVELOPMENT_GOALS.md
+
 # Local run artifacts can contain private conversations and dependencies.
 /artifacts/*
 !/artifacts/dragon-maid-live2d/

@@ -4,22 +4,32 @@ from __future__ import annotations
 
 import asyncio
 import secrets
-import socket
 import webbrowser
-from contextlib import contextmanager, suppress
+from contextlib import asynccontextmanager
 from pathlib import Path
 
-import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from app.services.account_hub import AccountHub, account_routes
+from app.services.local_listener import LocalListener
 from app.services.mahjong.majsoul_client import OFFICIAL_PAGE, PANEL_URL, MajsoulError, service_for
 
 
-def account_app(root: Path, service=None) -> FastAPI:
+def account_app(root: Path, service=None, *, player=None, hub=None) -> FastAPI:
     service = service or service_for(root)
     csrf = secrets.token_urlsafe(32)
-    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    hub = hub or AccountHub(root, service, player)
+
+    @asynccontextmanager
+    async def lifespan(app):
+        try:
+            yield
+        finally:
+            await hub.close()
+
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    app.include_router(account_routes(root, hub, csrf))
 
     @app.middleware("http")
     async def local_only(request: Request, call_next):
@@ -83,42 +93,11 @@ def account_app(root: Path, service=None) -> FastAPI:
     return app
 
 
-class _EmbeddedServer(uvicorn.Server):
-    @contextmanager
-    def capture_signals(self):
-        # AstrBot owns process signals; this is a second listener in its event loop.
-        yield
-
-
-class AccountPanel:
-    def __init__(self, root: Path):
+class AccountPanel(LocalListener):
+    def __init__(self, root: Path, player=None):
+        super().__init__(6190)
         self.root = root
-        self.server = None
-        self.task = None
-        self.socket = None
+        self.player = player
 
     async def start(self):
-        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            listener.bind(("127.0.0.1", 6190))
-            listener.listen(16)
-            listener.setblocking(False)
-        except BaseException:
-            listener.close()
-            raise
-        self.socket = listener
-        self.server = _EmbeddedServer(uvicorn.Config(account_app(self.root), log_level="warning", access_log=False))
-        self.task = asyncio.create_task(self.server.serve(sockets=[listener]), name="majsoul-account-panel")
-
-    async def close(self):
-        if self.server:
-            self.server.should_exit = True
-        if self.task:
-            try:
-                await asyncio.wait_for(self.task, 5)
-            except TimeoutError:
-                self.task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await self.task
-        if self.socket:
-            self.socket.close()
+        await super().start(account_app(self.root, player=self.player))

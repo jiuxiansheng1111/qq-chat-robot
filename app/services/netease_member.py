@@ -13,8 +13,36 @@ from app.services.bounded_http import ResponseTooLarge, request_bytes
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+async def listen_together(settings: Settings, action="status", **parameters) -> dict:
+    """Small authenticated local bridge; credentials never enter chat/tool output."""
+    if action not in {"status", "accept", "heartbeat"}:
+        raise NeteaseMemberError("无效的一起听操作")
+    url, token = _bridge_connection(settings)
+    async with httpx.AsyncClient(trust_env=False) as client:
+        try:
+            response = await request_bytes(client,"POST",url+"/api/listen",
+                headers={"Authorization":"Bearer "+token},json={"action":action,**parameters},
+                max_bytes=64*1024,timeout_seconds=40)
+            data = json.loads(response)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 401:
+                raise NeteaseMemberError("网易云账号未登录或已过期，请在本机网易云连接页登录") from exc
+            raise NeteaseMemberError("一起听接口暂时不可用，尚不能确认已加入") from exc
+        except (httpx.HTTPError,TimeoutError,ValueError) as exc:
+            raise NeteaseMemberError("网易云本机连接暂时不可用，尚不能确认已加入") from exc
+    if not isinstance(data,dict) or data.get("provider") != "netease_listen" or data.get("code") != 200:
+        raise NeteaseMemberError("网易云未接受一起听操作，房间可能已过期或没有权限")
+    if data.get("self_invite"):
+        raise NeteaseSelfInviteError("机器人和邀请者使用同一个网易云账号，不能作为第二位成员加入。当前账号仍可用于听歌分析；双人一起听需要为机器人登录另一个账号")
+    return data
+
+
 class NeteaseMemberError(RuntimeError):
     """本地账号连接不可用，或需要重新登录。"""
+
+
+class NeteaseSelfInviteError(NeteaseMemberError):
+    """The existing account can fetch audio but cannot join its own invitation."""
 
 
 def _bridge_connection(settings: Settings) -> tuple[str, str]:

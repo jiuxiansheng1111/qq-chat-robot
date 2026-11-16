@@ -2,8 +2,65 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from app.astrbot_menu import build_unified_menu_groups
 from app.astrbot_menu_files import _MenuAudience
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("网易云帮助", ("网易云音乐",)), ("请给我视频说明", ("视频与看图",)),
+    ("/唱歌用法", ("语音与唱歌",)), ("恶魔模式帮助", ()),
+    ("听听菜单这首歌", ()), ("不要给我视频帮助", ()), ("他说‘视频帮助’是什么意思", ()),
+])
+def test_help_routes_to_actual_topic_without_intercepting_chitchat(text, expected):
+    from app.astrbot_menu import menu_request_kind
+    from app.services.qq_feature_menu import requested_topic, select_text_groups
+
+    assert requested_topic(text) == expected
+    if expected:
+        assert menu_request_kind(text) == "text"
+        groups = ((expected[0], ("实际说明",)), ("其他功能", ("另一项",)))
+        assert select_text_groups(groups, text) == groups[:1]
+
+
+def test_disabled_join_does_not_advertise_a_room_connection():
+    from app.services.qq_feature_menu import core_groups
+
+    _, groups = core_groups(settings=SimpleNamespace(netease_member_enabled=False))
+    music = dict(groups)["网易云音乐"]
+    assert any("真实音轨" in line for line in music)
+    assert not any("邀请" in line or "房间留言" in line for line in music)
+
+
+@pytest.mark.parametrize("sharing_conflict", [True, False])
+async def test_menu_preparation_recovers_only_transient_windows_file_locks(monkeypatch, tmp_path, sharing_conflict):
+    from app import astrbot_menu_files as files
+    source = tmp_path / "cache.jpg"
+    source.write_bytes(b"isolated fixture")
+    monkeypatch.setattr("app.astrbot_menu.build_unified_menu_groups", lambda *args: ((), ()))
+    async def prepare(*args, **kwargs):
+        return source
+    monkeypatch.setattr("app.services.help_menu.prepare_help_menu_file", prepare)
+    publications = []
+    failed = False
+    def publish(path, name):
+        nonlocal failed
+        if not failed:
+            failed = True
+            error = PermissionError("synthetic file conflict")
+            error.winerror = 32 if sharing_conflict else 5
+            raise error
+        publications.append(name)
+    monkeypatch.setattr(files, "_publish_menu_file", publish)
+    context = SimpleNamespace(get_config=dict)
+    if sharing_conflict:
+        assert await files.prepare_default_menu_files(context, object()) == 8
+        assert len(publications) == 8 and "menu-qq-private.jpg" in publications
+    else:
+        with pytest.raises(PermissionError):
+            await files.prepare_default_menu_files(context, object())
+        assert not publications
 
 
 def command(plugin, name, *, original="", description="", display_name=""):
@@ -40,7 +97,7 @@ def test_plugin_menu_keeps_common_actions_and_settings_with_short_labels(monkeyp
     combined = "\n".join(line for _, lines in texts for line in lines)
     assert "/人生开启" in combined
     assert "/人生加点" in combined
-    assert "日常陪伴：/陪伴群" in combined
+    assert "/陪伴群：群聊状态与开关" in combined
     assert "/陪伴：" not in combined
     assert "/start_learning" in combined
     assert "clean_rag_cache" not in combined
@@ -54,7 +111,7 @@ def test_renamed_commands_keep_current_names_and_empty_plugin_groups_disappear(m
     monkeypatch.setattr("app.astrbot_menu._active_commands", lambda *_: items)
     audience = _MenuAudience("aiocqhttp", admin=False, group=True, plugins=["*"])
     _, texts = build_unified_menu_groups(object(), audience)
-    assert any("模拟人生：/开始我的人生" in line for _, lines in texts for line in lines)
+    assert any(title == "模拟人生" and any("/开始我的人生" in line for line in lines) for title, lines in texts)
     monkeypatch.setattr("app.astrbot_menu._active_commands", lambda *_: [])
     images, texts = build_unified_menu_groups(object(), audience)
     assert "模拟人生" not in {title for title, *_ in images}
@@ -68,10 +125,11 @@ def test_compact_menu_keeps_core_features_and_short_text(monkeypatch):
     audience = _MenuAudience("aiocqhttp", admin=False, group=True, plugins=["*"])
     images, texts = build_unified_menu_groups(object(), audience)
     text = concise_text_menu(texts, title=COMPACT_MENU_TITLE, subtitle=COMPACT_MENU_SUBTITLE)
-    assert len(images) == 7
+    assert len(images) == 8
     assert all(len(lines) <= 3 for _, lines, _ in images)
-    assert len(text) < 400
-    assert len(text.splitlines()) <= 15
+    assert len(text) < 4200
+    assert "发一起听邀请" in "\n".join(line for _, lines, _ in images for line in lines)
+    assert "双方需不同网易云账号" in text and "具体时间和区域追问" in text
     assert "MyGO" not in text and "Ave Mujica" not in text
 
 
@@ -126,10 +184,10 @@ def test_image_menu_includes_all_enabled_plugin_functions_and_settings(monkeypat
     assert "生图：/陪伴 生图 画面描述" in image_text and "自拍：/陪伴 自拍" in image_text
     assert "画图工作流" not in image_text and "画图工作流" not in text
     assert "/start_learning" in text and "/stop_learning" in text
-    assert len(images) == 10
+    assert len(images) == 11
     assert all(len(lines) <= 3 for _, lines, _ in images)
     image = _draw_menu(tmp_path / "missing.png", images, COMPACT_MENU_TITLE, COMPACT_MENU_SUBTITLE)
-    assert image.height <= 1720
+    assert image.height <= 1900
 
 
 def test_members_see_plugin_features_without_admin_commands_and_disabled_plugins_disappear(monkeypatch):
@@ -143,7 +201,7 @@ def test_members_see_plugin_features_without_admin_commands_and_disabled_plugins
     assert "/群分析" not in combined and "/start_learning" not in combined
 
     images, texts = build_unified_menu_groups(plugin_context(active=False), audience)
-    assert len(images) == 7
+    assert len(images) == 8
     assert not any(title.startswith("插件") for title, *_ in images)
     assert not any("主动消息" in line or "学习设置" in line for _, lines in texts for line in lines)
 
@@ -172,8 +230,8 @@ def test_proactive_status_command_merges_into_existing_plugin_card(monkeypatch):
     audience = _MenuAudience("aiocqhttp", admin=True, group=True, plugins=["*"])
     images, texts = build_unified_menu_groups(plugin_context(), audience)
     text = "\n".join(line for _, lines in texts for line in lines)
-    assert text.count("主动消息：") == 1
-    assert "主动消息：/主动消息" in text
+    assert text.count("/主动消息：") == 1
+    assert "/主动消息：查看本群主动消息设置" in text
     assert len([title for title, *_ in images if title == "插件 · 陪伴互动"]) == 1
 
 

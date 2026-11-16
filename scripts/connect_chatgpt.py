@@ -45,14 +45,15 @@ small{{color:#58645d}}a{{color:#176546}}</style>
 <h1>{html.escape(title)}</h1><p>{html.escape(message)}</p>{link}
 <p><small>模型：GPT-6 Luna。使用已有的 ChatGPT Codex / Work 用量，受账号额度限制。
 图片生成、语音、翻唱和其他服务沿用原配置。</small></p>
-<p><a href="https://chatgpt.com/#settings/Usage">管理 ChatGPT 用量</a></p></html>'''
+<p><a href="https://chatgpt.com/#settings/Usage">管理 ChatGPT 用量</a></p>
+<p><a href="http://127.0.0.1:6190/accounts">返回大肥鱼账号管理</a></p></html>'''
 
 
-def login_app(subscription: ChatGPTSubscription, args) -> FastAPI:
+def login_app(subscription: ChatGPTSubscription, args, *, fresh=False) -> FastAPI:
     state = {"status": "waiting", "model": args.model, "activated": False}
     try:
         previous = json.loads((args.store / "last-login.json").read_text(encoding="utf-8"))
-        if previous.get("status") == "ready" and previous.get("model") == args.model:
+        if not fresh and previous.get("status") == "ready" and previous.get("model") == args.model:
             state.update(previous)
     except (OSError, ValueError, AttributeError):
         pass
@@ -82,6 +83,7 @@ def login_app(subscription: ChatGPTSubscription, args) -> FastAPI:
         await subscription.aclose()
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    app.state.login_progress = state
 
     @app.middleware("http")
     async def local_only(request: Request, call_next):
@@ -105,7 +107,8 @@ def login_app(subscription: ChatGPTSubscription, args) -> FastAPI:
         return _page(
             "连接 QQ 机器人的 ChatGPT 订阅",
             account + "点击下方按钮，在 OpenAI 官方页面登录并允许使用订阅用量。"
-            "授权后先检查 Luna 并测试一次回复，成功后才切换聊天模型。",
+            + ("授权后会用现有订阅测试一次 Luna 回复，成功后切换聊天模型。"
+             if args.activate else "授权后会用现有订阅测试一次 Luna 回复，并保存连接。"),
             sign_in=True,
         )
 

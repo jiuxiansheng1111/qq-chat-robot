@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import re
 import logging
+import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
@@ -66,7 +66,7 @@ _STYLE_THEMES = {
     "女仆": ("女仆", "メイド"),
 }
 _STYLE_LEAD = re.compile(
-    r"^(?:(?:请|麻烦)?(?:帮我|给我)?(?:来|发|整|弄|找|求)(?:一张|一份|一幅|张|份|幅|点|个|一)?"
+    r"^(?:(?:请|麻烦)?(?:帮我|给我)?(?:来|发|整|弄|找|求)(?:一张|一份|一幅|张|份|分|幅|点|个|一)?"
     r"|(?:我想看|我想要|想看|求)(?:一张|一份|张|份)?)"
 )
 _STYLE_WORDS = ("色图", "涩图", "瑟图", "福利图", "擦边", "性感")
@@ -110,7 +110,16 @@ def is_anime_image_request(text: str) -> bool:
 async def forward_anime_image(event: Any, context: Any) -> AsyncIterator[Any] | None:
     """返回图片插件的随机发图迭代器；未命中或插件不可用时返回 None。"""
     get_message_str = getattr(event, "get_message_str", None)
-    if not callable(get_message_str) or (request := parse_anime_image_request(get_message_str())) is None:
+    if not callable(get_message_str):
+        return None
+    text=get_message_str()
+    from app.astrbot_qq_persona import is_qq
+    if is_qq(event):
+        from app.astrbot_group_chat import _strip_name
+        from app.astrbot_identity import CHARACTER_NAME
+        from app.astrbot_listening import ALIASES
+        text,_=_strip_name(text,(CHARACTER_NAME,*ALIASES))
+    if (request := parse_anime_image_request(text)) is None:
         return None
 
     get_registered_star = getattr(context, "get_registered_star", None)
@@ -138,10 +147,9 @@ async def forward_anime_image(event: Any, context: Any) -> AsyncIterator[Any] | 
         return None
 
     if request.styled:
-        # Only the existing QQ group route gets the new colloquial aliases.
-        if not callable(getattr(event, "get_group_id", None)) or not event.get_group_id():
-            return None
-        if not callable(getattr(event, "get_platform_name", None)) or event.get_platform_name() != "aiocqhttp":
+        # The same QQ route serves a directly addressed group request or private
+        # chat. Do not hand a private gallery request to a different generator.
+        if not is_qq(event):
             return None
         from app.services.anime_image_policy import send_styled_anime_image
         _LOGGER.info("QQ题材插画路由命中：%s", "/".join(request.themes) or "随机题材")

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.astrbot_group_chat import (
+    GROUP_PARTICIPATION_DEFAULTS,
     GroupChatRouter,
     normalize_natural_command,
     normalized_runtime_event,
@@ -16,7 +17,7 @@ from app.astrbot_group_chat import (
 
 class Event:
     def __init__(
-        self, text="今天吃了拉面", *, group="1000000001", user="100", self_id="3503565007",
+        self, text="今天吃了拉面", *, group="1000000001", user="100", self_id="999990001",
         message_id="1", platform_id="qq-local", platform="aiocqhttp", segments=None,
         components=None, role="member", bot=False,
     ):
@@ -54,6 +55,9 @@ class Event:
     def get_platform_id(self):
         return self.platform_id
 
+    def get_group_id(self):
+        return str(self.message_obj.raw_message.get("group_id", ""))
+
     def should_call_llm(self, value):
         self.llm_calls.append(value)
 
@@ -73,6 +77,8 @@ def config():
         "group_chat_min_interval_seconds": 0, "group_chat_require_engagement": False,
         "group_chat_followup_seconds": 180,
         "group_chat_unaddressed_questions": True, "group_chat_active_window_seconds": 0,
+        "group_chat_help_requests": False,
+        "group_chat_addressed_only": False,
     }
 
 
@@ -141,7 +147,10 @@ def test_read_only_menu_labels_map_only_to_registered_commands(text, target):
 def test_calendar_reports_have_a_separate_member_command(text):
     assert normalize_natural_command(text, commands=["群报"]) == "群报"
     assert normalize_natural_command("不要" + text, commands=["群报"]) is None
-    assert normalize_natural_command(text + "怎么用", commands=["群报"]) is None
+    from app.services.qq_feature_menu import requested_topic
+    help_request = text + "怎么用"
+    expected = help_request if requested_topic(help_request) else None
+    assert normalize_natural_command(help_request, commands=["群报"]) == expected
     assert normalize_natural_command("“" + text + "”", commands=["群报"]) is None
     assert normalize_natural_command(text, commands=[]) is None
 
@@ -203,7 +212,7 @@ def test_regular_interjections_count_only_new_human_text_and_never_tick(config):
     now[0] += 86400
     assert router.observe_event(third) is None
     assert len(router._state(third).seen) == 3
-    own = Event("我再补充一句", user="3503565007", message_id="4")
+    own = Event("我再补充一句", user="999990001", message_id="4")
     assert router.prepare_event(own)
     assert router.observe_event(own) is None
     assert not own.is_at_or_wake_command
@@ -227,16 +236,68 @@ def test_pending_interjection_does_not_queue_passive_replies_but_direct_address_
     assert router._state(question).human_messages == 0
 
 
+@pytest.mark.parametrize("previous_outcome", ["sent", "declined"])
+def test_new_topic_can_wake_after_an_unanswered_or_declined_interjection(config, previous_outcome):
+    config.update(GROUP_PARTICIPATION_DEFAULTS, group_chat_addressed_only=False)
+    now = [1000.0]
+    router = GroupChatRouter(config, clock=lambda: now[0])
+    for index in range(6):
+        event = Event("今天的面汤很香", user=str(100 + index % 2), message_id=f"first-{index}")
+        assert router.observe_event(event) == ("interject" if index == 5 else None)
+    if previous_outcome == "sent":
+        router.finish_event(event, sent=True)
+    else:
+        router.suppress_reply(event)
+    assert router._state(event).passive_unanswered is True
+    now[0] += 91
+    for index in range(6):
+        event = Event("晚上改吃火锅了", user=str(200 + index % 2), message_id=f"later-{index}")
+        assert router.observe_event(event) == ("interject" if index == 5 else None)
+
+
+def test_followup_does_not_wait_for_unsolicited_interjection_cooldown(config):
+    config.update(GROUP_PARTICIPATION_DEFAULTS, group_chat_addressed_only=False, group_chat_followup_seconds=120)
+    now = [1000.0]
+    router = GroupChatRouter(config, clock=lambda: now[0])
+    direct = Event("小丛雨，今天吃什么", message_id="direct")
+    assert router.observe_event(direct) == "name"
+    router.finish_event(direct, sent=True)
+    now[0] += 3
+    continued = Event("对，已经买好食材了", message_id="continued")
+    assert router.observe_event(continued) == "followup"
+    assert router.observe_event(Event("另一个人的话题", user="200", message_id="other")) is None
+    assert router.observe_event(Event("本鱼再补一句", user="999990001", message_id="echo")) is None
+
+
+def test_group_participation_still_respects_cooldown_and_quiet_request(config):
+    config.update(GROUP_PARTICIPATION_DEFAULTS, group_chat_addressed_only=False)
+    now = [1000.0]
+    router = GroupChatRouter(config, clock=lambda: now[0])
+    for index in range(6):
+        first = Event("今天的面汤很香", user=str(100 + index % 2), message_id=f"first-{index}")
+        router.observe_event(first)
+    router.finish_event(first, sent=True)
+    now[0] += 10
+    for index in range(8):
+        assert router.observe_event(Event("新买的蘑菇很好吃", user=str(200 + index % 2), message_id=f"cooldown-{index}")) is None
+    quiet = Event("小丛雨，闭嘴", message_id="quiet")
+    assert router.observe_event(quiet) is None
+    assert quiet.stopped
+    now[0] += 100
+    for index in range(8):
+        assert router.observe_event(Event("新话题已经开始了", user=str(200 + index % 2), message_id=f"quiet-{index}")) is None
+
+
 @pytest.mark.parametrize("kind", ["at", "reply", "name", "question", "native_wake"])
 def test_direct_address_and_questions_reply_without_count_cooldown(config, kind):
     event = Event("今天玩什么", message_id="1")
     if kind == "at":
         event.message_str = "你好"
-        event.message_obj.raw_message["message"] = [{"type": "at", "data": {"qq": "3503565007"}}]
+        event.message_obj.raw_message["message"] = [{"type": "at", "data": {"qq": "999990001"}}]
     elif kind == "reply":
         Reply = type("Reply", (), {})
         reply = Reply()
-        reply.sender_id = "3503565007"
+        reply.sender_id = "999990001"
         event.message_obj.message = [reply]
         event.message_str = "继续说说"
     elif kind == "name":
@@ -282,7 +343,7 @@ def test_counters_context_and_message_ids_are_isolated(config, field, value):
     router.prepare_request(original, request)
     assert "A群刚聊的事情" in request.system_prompt
     assert "B群另一个话题" not in request.system_prompt
-    assert "只针对最新这条人类消息发一条" in request.system_prompt
+    assert '"latest_group_message": "A群第三句"' in _all_request_text(request)
     before = request.system_prompt
     router.prepare_request(original, request)
     assert request.system_prompt == before
@@ -354,12 +415,13 @@ def test_current_human_message_is_anchored_after_old_examples_without_losing_med
     router.prepare_request(event, request)
     text = _all_request_text(request)
     assert '"current_human_message": "主动消息"' in text
-    assert "旧问题或旧Bot答案代替" in text and "先处理本次纠正与追问" in text
+    assert "旧Bot答复不是事实或示范答案" in text and "对方纠正或换题时重新理解当前意思" in text
     assert "上一轮错误示例" not in text
     assert "群友习惯资料" in text and "保留其他表达学习" in text
     assert "本轮实际视频证据" in text
     assert request.contexts == actual_history
-    assert request.prompt == "当前请求正文原样保留"
+    assert request.prompt.endswith("当前请求正文原样保留")
+    assert "【本条群消息来源" in request.prompt
     assert request.extra_user_content_parts[0] is not injected
     assert "上一轮错误示例" in injected.text  # 原插件缓存不被本轮视图修改。
     assert request.extra_user_content_parts[1] is media
@@ -380,7 +442,8 @@ def test_exact_diversity_example_in_legacy_system_is_removed_but_actual_history_
     assert "上一轮错误示例" not in request.system_prompt
     assert "角色前缀" in request.system_prompt and "角色后缀" in request.system_prompt
     assert "[HIDDEN_INSTRUCTION_START]" in request.system_prompt
-    assert request.contexts[0]["content"] == diversity_history
+    assert request.contexts[0]["content"].endswith(diversity_history)
+    assert "发言者未标注" in request.contexts[0]["content"]
     assert "寒冰屏障不是狂野的吗" in _all_request_text(request)
 
 
@@ -423,8 +486,9 @@ def test_explicit_evaluation_focus_is_generic_and_latest_question_is_last(config
     router.prepare_request(event, request)
     prompt = _all_request_text(request)
     assert "【本轮评价重点】" in prompt
-    assert "首句先明确给出自己的立场和一个具体依据" in prompt
-    assert "开头不要介绍这个对象的定义" in prompt
+    assert "对方想听你的看法" in prompt
+    assert "首句先" not in prompt and "开头不要" not in prompt
+    assert "普通闲聊顺着当前话题接一句" not in prompt
     assert "不能编资料、数字或近况" in prompt
     assert prompt.rstrip().endswith("【现在回答】" + text)
     assert request.contexts[0]["content"] == "此前关于完全不同对象的旧观点"
@@ -451,7 +515,7 @@ def test_only_same_human_can_continue_and_bot_echo_cannot_continue_itself(config
     router.finish_event(question, sent=True)
     assert router.observe_event(Event("对，我试过了", message_id="2")) == "followup"
     assert router.observe_event(Event("对，我也试过了", user="200", message_id="3")) is None
-    assert router.observe_event(Event("我再讲讲", user="3503565007", message_id="4")) is None
+    assert router.observe_event(Event("我再讲讲", user="999990001", message_id="4")) is None
     assert router.observe_event(Event("好的", message_id="5")) is None
     now[0] += 181
     assert router.observe_event(Event("另一个话题", message_id="6")) is None

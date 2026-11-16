@@ -1,0 +1,99 @@
+{
+    "version":  "1.0.2",
+    "defaultModel":  "medium",
+    "models":  {
+                   "medium":  {
+                                  "baseUrl":  "https://www.modelscope.cn/models/pengzhendong/faster-whisper-medium/resolve/master",
+                                  "files":  [
+                                                "model.bin",
+                                                "config.json",
+                                                "tokenizer.json",
+                                                "vocabulary.txt"
+                                            ],
+                                  "expectBytes":  1527945276,
+                                  "note":  "1.46 GB。large-v3 是 2.95 GB 且转写质量只高一点，1.0 默认换 medium。"
+                              },
+                   "large-v3":  {
+                                    "baseUrl":  "https://www.modelscope.cn/models/pengzhendong/faster-whisper-large-v3/resolve/master",
+                                    "files":  [
+                                                  "model.bin",
+                                                  "config.json",
+                                                  "tokenizer.json",
+                                                  "vocabulary.txt",
+                                                  "preprocessor_config.json"
+                                              ],
+                                    "expectBytes":  3091971687,
+                                    "optional":  true,
+                                    "note":  "想回退：SOUNDTRY_MODEL=large-v3，或 node src/deps.js 指定模型。"
+                                }
+               },
+    "modes":  {
+                  "borrow":  {
+                                 "desc":  "借用机器上已有的 Python（有 torch 即可，例如 ComfyUI 自带的那个）。torch / torchaudio / numpy / librosa 全部沿用那边的，插件 venv 只装自己需要的三个包。磁盘增量约 110 MB。",
+                                 "requires":  "一个装了 torch 的 Python 3.10–3.12",
+                                 "pip":  [
+                                             "faster-whisper\u003e=1.0",
+                                             "demucs\u003e=4.0",
+                                             "torchcrepe\u003e=0.0.23"
+                                         ],
+                                 "mirror":  "https://pypi.tuna.tsinghua.edu.cn/simple",
+                                 "forceInstall":  [
+                                                      "onnxruntime\u003e=1.16"
+                                                  ]
+                             },
+                  "standalone":  {
+                                     "desc":  "整套装进插件 venv，不依赖机器上任何现成环境（ComfyUI 删了也不影响）。磁盘增量约 7 GB，torch 轮子下载约 2.5 GB。",
+                                     "requires":  "任意 Python 3.10–3.12",
+                                     "torchIndex":  "https://download.pytorch.org/whl/cu129",
+                                     "torchPackages":  [
+                                                           "torch",
+                                                           "torchaudio"
+                                                       ],
+                                     "pip":  [
+                                                 "faster-whisper\u003e=1.0",
+                                                 "demucs\u003e=4.0",
+                                                 "torchcrepe\u003e=0.0.23",
+                                                 "numpy\u003e=1.24",
+                                                 "scipy\u003e=1.10",
+                                                 "librosa\u003e=0.10",
+                                                 "soundfile\u003e=0.12"
+                                             ],
+                                     "mirror":  "https://pypi.tuna.tsinghua.edu.cn/simple",
+                                     "note":  "torch 走 PyTorch 官方 cu129 索引，其余走清华镜像。",
+                                     "forceInstall":  [
+                                                          "onnxruntime\u003e=1.16"
+                                                      ]
+                                 }
+              },
+    "borrowedFromBase":  {
+                             "desc":  "borrow 模式下这些由基础解释器提供，插件不装（这就是省下 7 GB 的部分）",
+                             "packages":  [
+                                              "torch",
+                                              "torchaudio",
+                                              "numpy",
+                                              "scipy",
+                                              "librosa",
+                                              "soundfile",
+                                              "onnxruntime",
+                                              "ctranslate2",
+                                              "av"
+                                          ],
+                             "note":  "ctranslate2 / av 常常也已经在 ComfyUI 里，pip 会自动跳过；没有的话 borrow 模式的 pip 会补装。"
+                         },
+    "notes":  [
+                  "首次运行（或改了模型/依赖清单）会触发安装，进度打到 stderr。",
+                  "安装结果记在 runtime/ready.json：模式、依赖源、模型、清单摘要。任一变化即重装。",
+                  "想强制重装：删掉 runtime/ready.json。"
+              ],
+    "assets":  [
+                   {
+                       "name":  "mdx-vocal",
+                       "desc":  "UVR MDX-Net 人声分离权重（Kim_Vocal_2）。onnxruntime 推理，不需要 torch。",
+                       "file":  "models/uvr/Kim_Vocal_2.onnx",
+                       "url":  "https://hf-mirror.com/lainlives/audio-separator-models/resolve/main/Kim_Vocal_2.onnx",
+                       "expectBytes":  66759214,
+                       "md5":  "fa29b9d118ba4ad14a000254a60114b8",
+                       "required":  false
+                   }
+               ]
+}

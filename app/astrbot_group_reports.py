@@ -26,6 +26,7 @@ from PIL import Image
 from app.astrbot_plugin_status import _loaded_plugin
 from app.services.local_report_render import report_renderer
 
+
 def _load_report_groups(path: Path | None = None) -> frozenset[str]:
     """Read local group permissions, failing closed when unavailable."""
     path = path or Path(__file__).resolve().parents[1] / "data/calendar_report_groups.json"

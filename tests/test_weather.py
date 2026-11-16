@@ -93,3 +93,49 @@ async def test_fetch_weather_raises_for_unknown_place(monkeypatch):
 
     with pytest.raises(weather_module.WeatherServiceError, match="没有找到地点"):
         await weather_module.fetch_weather("不存在的地方", Settings(_env_file=None))
+
+
+@pytest.mark.asyncio
+async def test_public_weather_tries_direct_before_existing_route(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    routed = AsyncMock(return_value={"trust_env": False})
+    monkeypatch.setattr(weather_module, "outbound_httpx_kwargs", routed)
+    original = httpx.AsyncClient
+    requests = []
+
+    def factory(**kwargs):
+        assert kwargs["trust_env"] is False
+
+        async def handler(request):
+            requests.append(request)
+            if len(requests) == 1:
+                raise httpx.ConnectTimeout("synthetic direct outage")
+            return httpx.Response(200, json={"results": []})
+
+        return original(**kwargs, transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(weather_module.httpx, "AsyncClient", factory)
+    with pytest.raises(weather_module.WeatherServiceError, match="没有找到地点"):
+        await weather_module.fetch_weather("深圳", Settings(_env_file=None))
+    assert len(requests) == 2 and str(requests[0].url) == str(requests[1].url)
+    routed.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_weather_does_not_retry_http_rejection(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    routed = AsyncMock()
+    monkeypatch.setattr(weather_module, "outbound_httpx_kwargs", routed)
+    original = httpx.AsyncClient
+    monkeypatch.setattr(
+        weather_module.httpx,
+        "AsyncClient",
+        lambda **kwargs: original(
+            **kwargs, transport=httpx.MockTransport(lambda request: httpx.Response(429))
+        ),
+    )
+    with pytest.raises(weather_module.WeatherServiceError, match="地点解析失败"):
+        await weather_module.fetch_weather("深圳", Settings(_env_file=None))
+    routed.assert_not_awaited()

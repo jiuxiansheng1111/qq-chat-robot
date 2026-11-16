@@ -27,7 +27,7 @@ async def test_cover_releases_voice_once_and_restores_after_gpu_unlock_even_on_f
             events.append("stop")
             return '{"stopped":true,"private_bytes_before":6442450944}'
         assert not singing_gpu.gpu_is_busy()
-        assert arguments == ["-VoiceOnly"]
+        assert script == "start_voice.ps1" and arguments == []
         events.append("restore")
         return "ready"
 
@@ -63,17 +63,16 @@ async def test_cancellation_after_stop_still_restores_voice(local_voice, monkeyp
     monkeypatch.setattr(voice_memory, "_powershell", command)
 
     async def work():
-        async with voice_memory.release_voice_memory_for_singing(local_voice) as session:
-            async with singing_gpu.async_gpu_lock():
-                await session.pause()
-                await asyncio.Event().wait()
+        async with voice_memory.release_voice_memory_for_singing(local_voice) as session, singing_gpu.async_gpu_lock():
+            await session.pause()
+            await asyncio.Event().wait()
 
     task = asyncio.create_task(work())
     await stopped.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert calls == ["stop_gpt_sovits_for_singing.ps1", "start_all.ps1"]
+    assert calls == ["stop_gpt_sovits_for_singing.ps1", "start_voice.ps1"]
     assert not singing_gpu.gpu_is_busy()
 
 

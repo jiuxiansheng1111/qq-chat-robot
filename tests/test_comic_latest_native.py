@@ -23,8 +23,11 @@ def service(monkeypatch):
     import astrbot.api  # noqa: F401 -- 原生注册表需先于ProviderManager初始化。
 
     root = Path(__file__).resolve().parents[1]
+    source = root / "data/astrbot/instance/data/plugins/astrbot_plugin_qq_group_daily_analysis/src"
+    if not source.is_dir():
+        pytest.skip("需要已安装的群分析插件以读取其实际分析服务")
     package = types.ModuleType("_native_latest_comic")
-    package.__path__ = [str(root / "data/astrbot/instance/data/plugins/astrbot_plugin_qq_group_daily_analysis/src")]
+    package.__path__ = [str(source)]
     monkeypatch.setitem(sys.modules, package.__name__, package)
     module = importlib.import_module(package.__name__ + ".application.services.analysis_application_service")
     values = importlib.import_module(package.__name__ + ".domain.value_objects.unified_message")

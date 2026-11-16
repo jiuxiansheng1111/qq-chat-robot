@@ -1,0 +1,7 @@
+{
+  "name": "qq-chatrobot-netease-room-chat",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": { "node-nim": "10.10.13" }
+}

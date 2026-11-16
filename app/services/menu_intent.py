@@ -20,6 +20,19 @@ _REQUEST_WORDS = (
 _TEXT_MENU_WORDS = ("文字版菜单", "文字菜单", "文字版帮助", "菜单文字版")
 _HELP_WORDS = ("帮助", "帮忙", "菜单", "功能菜单", "功能", "你会什么", "你能干嘛", "能干嘛", "指令")
 _VOICE_ON = ("启动语音", "开启语音", "打开语音", "语音开启", "语音开一下", "开语音")
+_VOICE_EXIT = re.compile(
+    r"/?(?:(?:请|麻烦)(?:你)?[，,\s]*)?(?:(?:帮我|给我|替我|我想|我要)\s*)?"
+    r"(?:退出语音(?:模式|回复)?|关闭语音(?:模式|回复)?|语音关闭|停止语音回复|"
+    r"恢复文字(?:模式|回复)?|切回文字(?:模式|回复)?|改回文字(?:模式|回复)?|用文字回复)"
+    r"(?:吧|呀|啦|了|好吗|可以吗)?[。！？!?，,\s]*"
+)
+
+
+def is_voice_exit_request(text: str) -> bool:
+    """Only a complete instruction changes preferences, never quotes/discussion."""
+    return bool(_VOICE_EXIT.fullmatch(str(text or "").strip()))
+
+
 _VOICE_OFF = (
     "关闭语音", "语音关闭", "关闭语音模式", "语音关一下", "语音关掉", "语音关了",
     "关一下语音", "关一下", "关掉语音", "关语音", "停止语音", "停用语音",
@@ -116,6 +129,8 @@ def normalize_menu_intent(text: str) -> str:
     raw = text.strip()
     if not raw:
         return raw
+    if is_voice_exit_request(raw):
+        return _command_for_input(raw, "关闭语音")
     if raw in _HELP_COMMANDS | _TEXT_MENU_COMMANDS | _VOICE_LIST_COMMANDS | _VOICE_TOGGLE_COMMANDS | _IMAGE_COMMANDS:
         return raw
     if _parameter_command(raw):
@@ -134,7 +149,7 @@ def normalize_menu_intent(text: str) -> str:
         return _command_for_input(raw, "帮助", "帮助")
     if any(word in compact for word in _HELP_WORDS) and _has_request(compact):
         return _command_for_input(raw, "帮助", "帮助")
-    if "语音" in compact:
+    if "语音" in compact and not re.search(r"[\"“”‘’`]|怎么|如何|是什么|什么意思|他说|她说|别人说|有人说|指令|命令", raw):
         if any(word in compact for word in _VOICE_CLOSE_ACTIONS):
             return _command_for_input(raw, "关闭语音")
         if any(word in compact for word in _VOICE_STATUS):

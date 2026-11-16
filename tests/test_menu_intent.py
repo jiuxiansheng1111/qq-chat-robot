@@ -177,3 +177,20 @@ def test_help_image_request_detection(phrase, expected):
 )
 def test_text_menu_detection_accepts_natural_requests(phrase, expected):
     assert is_text_menu_request(phrase) is expected
+
+
+@pytest.mark.parametrize("text", [
+    "退出语音模式", "退出语音", "关闭语音回复", "恢复文字回复", "切回文字", "用文字回复",
+    "请帮我退出语音模式吧", "麻烦你，恢复文字回复", "/退出语音模式",
+])
+def test_voice_exit_aliases(text):
+    assert normalize_menu_intent(text) == ("/关闭语音" if text.startswith("/") else "关闭语音")
+
+@pytest.mark.parametrize("text", [
+    "不要退出语音模式", "别关闭语音", "别人说关闭语音", "怎么关闭语音", "如何退出语音模式",
+    "“关闭语音”", "我想了解恢复文字回复这个功能", "退出", "关闭语音是什么意思",
+])
+def test_voice_exit_discussion_never_changes_setting(text):
+    from app.services.menu_intent import is_voice_exit_request
+    assert not is_voice_exit_request(text)
+    assert normalize_menu_intent(text) == text

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
+import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +13,7 @@ from app.chatgpt_subscription import API_BASE, DEFAULT_STORE, ChatGPTSubscriptio
 
 PROVIDER_TYPE = "qqchat_chatgpt_subscription"
 TOOL_NAMESPACE = "qqchat"
+_LOGGER = logging.getLogger(__name__)
 
 
 def subscription_payload(payload: dict, extra: dict, tool_schema: list[dict]) -> dict:
@@ -64,6 +68,8 @@ def register_chatgpt_provider() -> type:
         def __init__(self, provider_config: dict, provider_settings: dict):
             config = {**provider_config, "api_base": API_BASE, "key": ["oauth-managed-locally"]}
             super().__init__(config, provider_settings)
+            from app.services.qq_context_policy import ScopedProviderConfig
+            self.provider_config = ScopedProviderConfig(self.provider_config)
             directory = Path(config.get("chatgpt_credentials_dir") or DEFAULT_STORE)
             self.subscription = ChatGPTSubscription(directory, timeout=float(self.timeout))
 
@@ -72,7 +78,22 @@ def register_chatgpt_provider() -> type:
         ) -> Any:
             extra = self.provider_config.get("custom_extra_body") or {}
             body = subscription_payload(payloads, extra, tools.openai_schema() if tools else [])
-            response = await self.subscription.respond(body)
+            from app.services.usage_ledger import ledger
+
+            started = time.monotonic()
+            async def record_usage(response=None, error_type=""):
+                try:
+                    await asyncio.to_thread(ledger().record, response,
+                        provider=self.provider_config.get("id", PROVIDER_TYPE), model=body.get("model", ""),
+                        elapsed_ms=int((time.monotonic()-started)*1000), error_type=error_type)
+                except Exception as exc:  # noqa: BLE001 -- Optional metering must not abort a model response.
+                    _LOGGER.warning("Token用量本次未记账（%s）", type(exc).__name__)
+            try:
+                response = await self.subscription.respond(body)
+            except Exception as exc:
+                await record_usage(error_type=type(exc).__name__)
+                raise
+            await record_usage(response)
             # AstrBot retains local function names. The namespace is restored
             # on the next request's function_call items by subscription_payload.
             for item in response.get("output", []):

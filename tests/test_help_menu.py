@@ -51,7 +51,7 @@ def test_image_menu_covers_chart_and_cover_modes():
     assert all(len(lines) <= 3 for lines in groups.values())
     assert any("图鉴" in line and "角色图鉴" in line for line in groups["互动小游戏"])
     assert len(groups["语音翻唱"]) == 3
-    assert "选择角色" in groups["语音翻唱"][0]
+    assert "选择音色" in groups["语音翻唱"][0]
     assert "翻唱片段 芳乃 歌名" in groups["语音翻唱"][1]
     assert "约20秒" in groups["语音翻唱"][1]
     assert "翻唱完整 芳乃 歌名" in groups["语音翻唱"][2]

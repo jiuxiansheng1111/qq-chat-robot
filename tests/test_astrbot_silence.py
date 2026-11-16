@@ -73,7 +73,10 @@ async def test_real_proactive_sender_stops_without_sending_or_recording_a_silenc
     monkeypatch.setenv("ASTRBOT_ROOT", str(tmp_path / "astrbot"))
     root = Path(__file__).resolve().parents[1]
     package = types.ModuleType("_silence_proactive")
-    package.__path__ = [str(root / "data/astrbot/instance/data/plugins/astrbot_plugin_proactive_chat")]
+    source = root / "data/astrbot/instance/data/plugins/astrbot_plugin_proactive_chat"
+    if not source.is_dir():
+        pytest.skip("需要已安装的主动聊天插件以验证实际发送器")
+    package.__path__ = [str(source)]
     monkeypatch.setitem(sys.modules, package.__name__, package)
     events = importlib.import_module(package.__name__ + ".core.proactive_event")
     sender_module = importlib.import_module(package.__name__ + ".core.message_sender")
@@ -91,7 +94,7 @@ async def test_real_proactive_sender_stops_without_sending_or_recording_a_silenc
         event = events.ProactiveMessageEvent(
             plugin=SimpleNamespace(), platform_meta=SimpleNamespace(name="aiocqhttp", id="qq-local"),
             session_id="qq-local:GroupMessage:1000000001", target_id="1000000001",
-            message_type=MessageType.GROUP_MESSAGE, self_id="3503565007", is_group=True,
+            message_type=MessageType.GROUP_MESSAGE, self_id="999990001", is_group=True,
         )
         sender = sender_module.SenderMixin()
         chain, should_send = await sender._run_decorating_hooks(event, [Plain(text)])

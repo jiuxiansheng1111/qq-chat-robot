@@ -33,8 +33,8 @@ async def test_daily_news_digest_contains_ten_unique_items(monkeypatch):
     monkeypatch.setattr(main, "search_news_feed", fake_search)
     digest = await main.build_daily_news_digest()
 
-    assert "小丛雨 · 今日热点" in digest
-    assert "10 条最新热点" in digest
+    assert "大肥鱼 · 今日热点" in digest
+    assert "10 条消息" in digest
     for index in range(1, 11):
         assert f"{index}." in digest
     assert digest.count("https://news.example/") == 10
@@ -108,8 +108,8 @@ def test_daily_news_canonical_url_drops_tracking_parameters():
     assert left == right == "news.example/story/1?id=7"
 
 
-def test_daily_news_defaults_to_noon_shanghai():
-    assert main.settings.daily_news_enabled is True
+def test_daily_news_auto_push_defaults_off_manual_lookup_stays_available():
+    assert main.settings.daily_news_enabled is False
     assert main.settings.daily_news_hour == 12
     assert main.settings.daily_news_minute == 0
     assert main.settings.daily_news_timezone == "Asia/Shanghai"
@@ -136,7 +136,7 @@ async def test_broadcast_checks_membership_and_never_sends_to_invalid_or_unjoine
     monkeypatch, available,
 ):
     settings = Settings(_env_file=None, onebot_self_id='news-test-bot',
-                        onebot_api_base='http://onebot.test')
+                        onebot_api_base='http://onebot.test',daily_news_enabled=True)
     monkeypatch.setattr(main, 'settings', settings)
     monkeypatch.setattr(main, 'build_daily_news_digest', AsyncMock(return_value='news'))
     db = SimpleNamespace(active_group_ids=AsyncMock(return_value=[
@@ -164,3 +164,21 @@ async def test_broadcast_checks_membership_and_never_sends_to_invalid_or_unjoine
     assert [call.args[0] for call in send.await_args_list] == (
         ['111111', '222222'] if available else []
     )
+
+
+@pytest.mark.asyncio
+async def test_disabled_daily_news_has_no_fetch_or_broadcast_and_loop_does_not_sleep(monkeypatch):
+    monkeypatch.setattr(main,'settings',Settings(_env_file=None,daily_news_enabled=False))
+    build=AsyncMock()
+    send=AsyncMock()
+    monkeypatch.setattr(main,'build_daily_news_digest',build)
+    monkeypatch.setattr(main,'send_group_long_message',send)
+    await main.broadcast_daily_news(SimpleNamespace())
+    await main.daily_news_loop(SimpleNamespace())
+    build.assert_not_awaited()
+    send.assert_not_awaited()
+
+
+def test_news_heading_is_a_platform_argument_not_a_persisted_old_persona():
+    assert '大肥鱼 · 今日热点' in main._format_daily_news_digest('2026-11-03',[])
+    assert '微信原称呼 · 今日热点' in main._format_daily_news_digest('2026-11-03',[],brand_name='微信原称呼')

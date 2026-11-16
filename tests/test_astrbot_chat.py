@@ -53,6 +53,9 @@ class Event:
         })
         self.result = SimpleNamespace(chain=[Plain("可以吃碗面。")], is_llm_result=lambda: True)
 
+    def get_platform_name(self):
+        return "aiocqhttp"
+
     def get_message_str(self):
         return self.prompt
 
@@ -85,39 +88,50 @@ def runtime(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_native_chat_preserves_plugin_context_and_only_introductions_get_role_tone(runtime):
+async def test_native_chat_preserves_plugin_context_without_old_role_tone(runtime):
     event = Event()
     request = SimpleNamespace(system_prompt="陪伴和表情插件的已有上下文", func_tool=object())
     tools = request.func_tool
     await prepare_native_chat(runtime, event, request)
     assert request.system_prompt.startswith("陪伴和表情插件的已有上下文")
-    assert "当前不是自我介绍" in request.system_prompt
-    assert "喜欢清淡的食物" in request.system_prompt
+    assert "吾辈" not in request.system_prompt
+    assert "喜欢清淡的食物" not in request.system_prompt  # QQ只由已验证主人档案注入，避免别人的旧记忆串入。
     assert request.func_tool is tools
 
     event.prompt = "介绍一下你自己"
     request.system_prompt = "角色背景"
     await prepare_native_chat(runtime, event, request)
-    assert "可以用一句简短角色口吻" in request.system_prompt
+    assert "自称吾辈" not in request.system_prompt
 
 
 @pytest.mark.asyncio
-async def test_other_selected_roles_keep_their_own_persona(runtime):
+async def test_other_selected_voices_do_not_replace_qq_persona(runtime):
     runtime._core.app.state.db.selected = "mako"
     request = SimpleNamespace(system_prompt="默认人格")
     await prepare_native_chat(runtime, Event(), request)
-    assert "常陆茉子" in request.system_prompt
+    assert "常陆茉子" not in request.system_prompt
     assert "当前不是自我介绍" not in request.system_prompt
 
 
 @pytest.mark.asyncio
-async def test_possession_identity_takes_precedence_over_default_murasame(runtime):
+async def test_stored_old_possession_does_not_replace_qq_persona(runtime):
     runtime._core.app.state.db.possession = ("member", "测试群友", "targeted")
     request = SimpleNamespace(system_prompt="默认人格")
     await prepare_native_chat(runtime, Event(), request)
-    assert "当前身份：测试群友" in request.system_prompt
-    assert "说话简短直接" in request.system_prompt
+    assert "当前身份：测试群友" not in request.system_prompt
+    assert "说话简短直接" not in request.system_prompt
     assert "当前不是自我介绍" not in request.system_prompt
+
+
+@pytest.mark.asyncio
+async def test_non_qq_voice_selection_preserves_existing_persona(runtime):
+    runtime._core.app.state.db.selected = "mako"
+    event = Event()
+    event.get_platform_name = lambda: "weixin_oc"
+    request = SimpleNamespace(system_prompt="原人格")
+    await prepare_native_chat(runtime, event, request)
+    assert "常陆茉子" not in request.system_prompt
+    assert request.system_prompt.startswith("原人格")
 
 
 @pytest.mark.asyncio
@@ -157,6 +171,20 @@ async def test_voice_memory_guard_failure_keeps_complete_original_result(runtime
 
 
 @pytest.mark.asyncio
+async def test_listening_control_receipt_stays_text_while_normal_chat_voice_remains_enabled(runtime,monkeypatch):
+    event=Event()
+    await prepare_native_chat(runtime,event,SimpleNamespace(system_prompt=""))
+    event.set_extra("qqchat_music_control_reply",True)
+    original=event.result.chain
+    async def forbidden(*args,**kwargs):
+        pytest.fail("room state and missing-parameter notices must stay visible as text")
+    monkeypatch.setattr("app.astrbot_chat.synthesize_voice",forbidden)
+    await decorate_native_voice(runtime,event)
+    assert event.result.chain is original
+    assert runtime._core.app.state.db.voice_enabled is True
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["text", "command", "already_voice"])
 async def test_text_mode_commands_and_existing_audio_do_not_generate_another_voice(runtime, monkeypatch, mode):
     event = Event()
@@ -173,3 +201,16 @@ async def test_text_mode_commands_and_existing_audio_do_not_generate_another_voi
 
     monkeypatch.setattr("app.astrbot_chat.synthesize_voice", forbidden)
     await decorate_native_voice(runtime, event)
+
+
+async def test_exit_during_synthesis_keeps_text(runtime, monkeypatch):
+    event = Event()
+    await prepare_native_chat(runtime, event, SimpleNamespace(system_prompt=""))
+    original = event.result.chain
+    async def slow_synthesis(*args, **kwargs):
+        runtime._core.app.state.db.voice_enabled = False
+        return "base64://old-audio"
+    monkeypatch.setattr("app.astrbot_chat.synthesize_voice", slow_synthesis)
+    await decorate_native_voice(runtime, event)
+    assert event.result.chain is original
+    assert not any(isinstance(part, Record) for part in original)

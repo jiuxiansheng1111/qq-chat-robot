@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 import ast
 from pathlib import Path
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -164,7 +164,26 @@ async def test_upstream_stop_does_not_discard_qq_image(monkeypatch):
     plugin = SimpleNamespace(runtime=object(), context=object(), _legacy_event_allowed=AsyncMock(return_value=True))
     namespace = {"AstrMessageEvent": object, "_is_stopped": lambda e: e.stopped,
                  "_get_result_or_none": lambda _e: None, "_result_has_reply": lambda _r: False}
-    exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), "exec"), namespace)
+    exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), "exec"), namespace)  # noqa: S102 -- Execute only the test-selected handler from the local source AST.
     await namespace["on_anime_image"](plugin, event)
     event.send.assert_awaited_once_with("image")
     assert event.stopped
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('text,group',[('肥鱼，来份色图','123'),('来分色图，小鲸鱼','123'),('来份色图','')])
+async def test_qq_nickname_or_private_gallery_request_never_falls_into_image_generation(monkeypatch,text,group):
+    from app import astrbot_menu
+    from app.services import anime_image_policy
+    e=SimpleNamespace(get_message_str=lambda:text,get_platform_name=lambda:'aiocqhttp',get_group_id=lambda:group)
+    ctx=SimpleNamespace(get_registered_star=lambda _:SimpleNamespace(activated=True,star_cls=FakeImagePlugin()))
+    monkeypatch.setattr(astrbot_menu,'_active_commands',lambda *_:[{'plugin_name':IMAGE_PLUGIN_NAME,'handler_name':'cmd_p'}])
+    captured=[]
+    async def styled(event,context,plugin,request):
+        captured.append(request)
+        yield 'gallery-image'
+    monkeypatch.setattr(anime_image_policy,'send_styled_anime_image',styled)
+    result=await forward_anime_image(e,ctx)
+    assert result is not None
+    assert [x async for x in result]==['gallery-image']
+    assert len(captured)==1 and captured[0].styled

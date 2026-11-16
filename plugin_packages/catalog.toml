@@ -1,0 +1,230 @@
+version = "0.3.0"
+
+# Each row produces one AstrBot ZIP. Native methods are copied from the same source
+# as the bundled edition, including their signatures, decorators and tool descriptions.
+[core]
+title = "共享运行时"
+description = "为已安装的功能提供连接、数据库、会话隔离和消息分发。"
+batch = 1
+
+[persona]
+title = "大肥鱼聊天与群聊接话"
+description = "统一 QQ 人格、群聊接话、去重和回复修复。"
+batch = 1
+methods = ["prepare_native_chat", "proactive_group_settings", "repair_direct_group_reply", "suppress_repeated_group_reply", "filter_qq_source_links", "simplify_setting_confirmation"]
+
+[menu]
+title = "功能菜单"
+description = "列出当前会话已启用的分件及使用方式。"
+batch = 1
+
+[group_reports]
+title = "群报与日历查询"
+description = "按日期调取当前群的群报，支持既有群分析插件。"
+batch = 1
+methods = ["calendar_group_reports"]
+
+[memory]
+title = "记忆与主人档案"
+description = "管理手动记忆和经过本人配置的、按会话隔离的主人档案。"
+batch = 1
+legacy = ["memory"]
+methods = ["qqchat_recall", "qqchat_remember_owner", "qqchat_forget_owner", "on_native_context_reset"]
+
+[usage]
+title = "模型用量"
+description = "按使用记录查询模型用量。"
+batch = 1
+methods = ["qqchat_token_usage"]
+
+[group_admin]
+title = "群管理"
+description = "由群管理员控制群开关和成员黑名单。"
+batch = 1
+legacy = ["group_admin"]
+
+[accounts]
+title = "本机账号管理"
+description = "集中管理 Minecraft、Steam、雀魂、网易云、ChatGPT 和 B 站的本机账号。"
+batch = 1
+
+[weather]
+title = "实时天气"
+description = "识别自然语言城市名，查询实时天气和预报。"
+batch = 2
+legacy = ["weather"]
+methods = ["qqchat_weather"]
+
+[search]
+title = "联网检索与攻略"
+description = "按问题查询公开资料，整理来源和攻略。"
+batch = 2
+legacy = ["web_search"]
+methods = ["qqchat_web_search"]
+
+[news]
+title = "热点查询"
+description = "在被问到今日热点时查询新闻。"
+batch = 2
+legacy = ["daily_news"]
+
+[translation]
+title = "翻译"
+description = "翻译指定文本并提供转写或检索别名。"
+batch = 2
+legacy = ["translation"]
+
+[stories]
+title = "故事创作"
+description = "按主题、情节、角色和风格生成故事。"
+batch = 2
+legacy = ["story"]
+
+[catalog]
+title = "日漫与特摄图鉴"
+description = "查询角色资料、别名和图片，管理抽取与收藏。"
+batch = 2
+legacy = ["character_catalog", "ultraman", "anime_character"]
+
+[images]
+title = "随机图片"
+description = "发送动物和角色图片，已装画境拾珍时可转交二次元插图请求。"
+batch = 2
+legacy = ["cat", "pig", "nailong", "character_images"]
+methods = ["anime_image_command", "on_anime_image"]
+
+[image_generation]
+title = "图片生成"
+description = "使用部署者已配置的生图服务生成指定画面。"
+batch = 2
+legacy = ["image_generation"]
+
+[vision]
+title = "图片理解与对比"
+description = "读取群图、截图，在对话中比对两张图片和局部差异。"
+batch = 2
+turns = ["compare"]
+
+[drafts]
+title = "回复草稿"
+description = "结合当前会话的引用或图片拟回复，支持改写语气。"
+batch = 2
+turns = ["draft"]
+
+[reminders]
+title = "提醒与待办"
+description = "从聊天提取待办，经本人确认后保存，并可完成或取消。"
+batch = 2
+turns = ["remind"]
+
+[practice]
+title = "对话陪练"
+description = "进行面试或生活对话练习，可暂停和继续。"
+batch = 2
+turns = ["practice"]
+
+[catchup]
+title = "群聊补课"
+description = "在群里询问刚才的重点、安排和待确认事项。"
+batch = 2
+turns = ["recap"]
+
+[relationship]
+title = "互动与好感"
+description = "管理恋爱模式、好感状态以及互动历史。"
+batch = 2
+legacy = ["romance_mode"]
+
+[possession]
+title = "群聊角色扮演"
+description = "随机或指定群成员进行角色扮演，查看与退出当前身份。"
+batch = 2
+legacy = ["possession"]
+
+[rps]
+title = "猜拳"
+description = "判断群聊中的石头剪刀布对局。"
+batch = 2
+legacy = ["rps"]
+
+[music]
+title = "点歌与歌词"
+description = "搜歌、选择候选、查询歌词并发送音乐卡片。"
+batch = 3
+legacy = ["music"]
+
+[listening]
+title = "网易云一起听"
+description = "接受一起听邀请，处理房间消息和经授权保存的听歌记录。"
+batch = 3
+methods = ["qqchat_listen_music", "qqchat_music_room_message", "qqchat_music_artist", "qqchat_music_portrait"]
+
+[sound]
+title = "音频分析"
+description = "通过 SoundTry 分析当前或引用的真实音频附件。"
+batch = 3
+methods = ["qqchat_sound_analyze", "defer_background_analysis_receipt", "suppress_background_analysis_receipt"]
+
+[voice]
+title = "语音与音色"
+description = "朗读消息、选择音色以及进入或退出语音模式。"
+batch = 3
+legacy = ["voice"]
+methods = ["qqchat_send_voice"]
+
+[singing]
+title = "点唱与翻唱"
+description = "使用已配置的角色音色演唱，支持片段、状态和取消。"
+batch = 3
+legacy = ["singing"]
+methods = ["qqchat_sing"]
+
+[video]
+title = "视频搜索与观看"
+description = "搜索 B 站视频，读取视频内容并按时间点放大细节。"
+batch = 3
+legacy = ["bilibili_video"]
+methods = ["qqchat_video_detail"]
+
+[memes]
+title = "大肥鱼表情"
+description = "根据语境选择本机已配置的大肥鱼表情。"
+batch = 3
+methods = ["select_whale_meme", "attach_whale_meme"]
+
+[hearthstone]
+title = "炉石卡组与约战"
+description = "按标准或狂野推荐与评估卡组，分析费用、符文和替换卡。"
+batch = 4
+turns = ["hs"]
+methods = ["qqchat_hearthstone"]
+
+[cards]
+title = "炉石查卡"
+description = "支持卡名、简称和相似名，确认候选后发送卡面、卡包和模式。"
+batch = 4
+
+[arena]
+title = "炉石竞技场"
+description = "比较选牌候选，添加或撤销已选卡并分析本轮牌组。"
+batch = 4
+methods = ["arena_command", "qqchat_arena"]
+
+[mahjong]
+title = "雀魂复盘与何切"
+description = "按牌谱链接复盘，组织友人场或练习何切。"
+batch = 4
+legacy = ["mahjong_review"]
+turns = ["mj"]
+
+[minecraft]
+title = "Minecraft 独立玩家"
+description = "进入 Java 服务器，采集材料、自主休息、查看背包或退服。含 Minecraft 文本、语音与音乐桥。"
+batch = 4
+turns = ["mc"]
+
+[steam]
+title = "Steam 大厅"
+description = "绑定专用 SteamID，核对本机账号并接收大厅邀请。"
+batch = 4
+turns = ["steam"]

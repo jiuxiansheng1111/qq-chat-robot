@@ -521,19 +521,20 @@ class Database:
         )
 
     async def add_long_term_memory(
-        self, group_id: str, user_id: str, content: str, max_items: int = 20
+        self, group_id: str, user_id: str, content: str, max_items: int | None = 20
     ) -> None:
         async with aiosqlite.connect(self.path) as db:
             await db.execute(
                 "INSERT INTO long_term_memories(group_id, user_id, content) VALUES (?, ?, ?)",
                 (group_id, user_id, content),
             )
-            await db.execute(
-                "DELETE FROM long_term_memories WHERE group_id = ? AND user_id = ? AND id NOT IN "
-                "(SELECT id FROM long_term_memories WHERE group_id = ? AND user_id = ? "
-                "ORDER BY id DESC LIMIT ?)",
-                (group_id, user_id, group_id, user_id, max_items),
-            )
+            if max_items is not None:
+                await db.execute(
+                    "DELETE FROM long_term_memories WHERE group_id = ? AND user_id = ? AND id NOT IN "
+                    "(SELECT id FROM long_term_memories WHERE group_id = ? AND user_id = ? "
+                    "ORDER BY id DESC LIMIT ?)",
+                    (group_id, user_id, group_id, user_id, max_items),
+                )
             await db.commit()
 
     async def voice_mode(self, group_id: str, user_id: str) -> bool:
@@ -567,12 +568,12 @@ class Database:
         )
 
     async def long_term_memories(
-        self, group_id: str, user_id: str, limit: int = 20
+        self, group_id: str, user_id: str, limit: int | None = 20
     ) -> list[str]:
         rows = await self.fetchall(
             "SELECT content FROM (SELECT id, content FROM long_term_memories "
             "WHERE group_id = ? AND user_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id",
-            (group_id, user_id, limit),
+            (group_id, user_id, -1 if limit is None else limit),
         )
         return [row[0] for row in rows]
 
@@ -583,7 +584,8 @@ class Database:
         )
 
     async def record_group_activity(
-        self, group_id: str, user_id: str, display_name: str, text: str, activity_date: str
+        self, group_id: str, user_id: str, display_name: str, text: str, activity_date: str,
+        *, learn_style: bool = True
     ) -> None:
         safe_terms = ("哈哈", "笑死", "确实", "绷不住", "好家伙", "逆天", "草", "乐", "行", "懂了")
         kaomoji_markers = ("(´", "(｀", "(^", "(￣", "(・", "(づ", "www")
@@ -599,6 +601,9 @@ class Database:
                 "WHERE group_id = ? AND user_id = ?",
                 (display_name, group_id, user_id),
             )
+            if not learn_style:
+                await db.commit()
+                return
             await db.execute(
                 "INSERT INTO group_style_stats(group_id, sample_count, total_chars, question_count, "
                 "exclamation_count, kaomoji_count) VALUES (?, 1, ?, ?, ?, ?) "
@@ -1285,25 +1290,26 @@ class Database:
         return str(row[0]) if row and row[0] else ""
 
     async def add_group_memory(
-        self, group_id: str, content: str, max_items: int = 50
+        self, group_id: str, content: str, max_items: int | None = 50
     ) -> None:
         async with aiosqlite.connect(self.path) as db:
             await db.execute(
                 "INSERT INTO group_memories(group_id, content) VALUES (?, ?)",
                 (group_id, content),
             )
-            await db.execute(
-                "DELETE FROM group_memories WHERE group_id = ? AND id NOT IN "
-                "(SELECT id FROM group_memories WHERE group_id = ? ORDER BY id DESC LIMIT ?)",
-                (group_id, group_id, max_items),
-            )
+            if max_items is not None:
+                await db.execute(
+                    "DELETE FROM group_memories WHERE group_id = ? AND id NOT IN "
+                    "(SELECT id FROM group_memories WHERE group_id = ? ORDER BY id DESC LIMIT ?)",
+                    (group_id, group_id, max_items),
+                )
             await db.commit()
 
-    async def group_memories(self, group_id: str, limit: int = 20) -> list[str]:
+    async def group_memories(self, group_id: str, limit: int | None = 20) -> list[str]:
         rows = await self.fetchall(
             "SELECT content FROM (SELECT id, content FROM group_memories WHERE group_id = ? "
             "ORDER BY id DESC LIMIT ?) ORDER BY id",
-            (group_id, limit),
+            (group_id, -1 if limit is None else limit),
         )
         return [str(row[0]) for row in rows]
 

@@ -236,6 +236,8 @@ def test_verified_source_can_explain_intent_when_vision_is_unavailable(tmp_path,
 
 
 def _load_vendor(monkeypatch):
+    if not (VENDOR / "application/services/comic_application_service.py").is_file():
+        pytest.skip("需要已安装的群分析插件以验证其漫画服务")
     prefix = "_test_comic_bridge"
     renderer = types.ModuleType("app.services.readable_group_comic")
     renderer.render_readable_comic = AsyncMock(

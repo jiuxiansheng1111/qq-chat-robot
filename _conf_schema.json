@@ -7,7 +7,13 @@
   },
   "group_chat_enabled": {
     "description": "启用人类消息驱动的群聊接话",
-    "hint": "只作用于下方名单中的 OneBot QQ 群。被 @、叫名字或引用回复时接话；普通问句不单独唤醒，只有多人热聊时少量参与。需要关闭旧聊天模式。",
+    "hint": "作用于下方QQ群。默认只回应@、昵称或回复本鱼的消息；冷场主动开口由主动聊天插件单独管理。",
+    "type": "bool",
+    "default": true
+  },
+  "group_chat_addressed_only": {
+    "description": "群里只回应点名或引用本鱼",
+    "hint": "默认开启。群友彼此提问、关键词、同一人连续发言和热聊均不自动唤醒；明确命令、@、昵称、回复机器人仍正常处理，冷场开口单独调度。",
     "type": "bool",
     "default": true
   },
@@ -17,23 +23,35 @@
     "type": "list",
     "default": []
   },
+  "group_chat_help_requests": {
+    "description": "无需@，明确求助时接话",
+    "hint": "例如帮我看看、解释一下、推荐一下；仍沿用群开关和用户权限。",
+    "type": "bool",
+    "default": false
+  },
+  "group_chat_trigger_keywords": {
+    "description": "无需@的触发关键词",
+    "hint": "命中后交给聊天模型理解本轮意图；不会凭关键词直接执行管理操作。",
+    "type": "list",
+    "default": ["大肥鱼", "雀魂分析", "音频分析", "听听这段"]
+  },
   "group_chat_bot_names": {
     "description": "群聊中的机器人称呼",
     "hint": "消息以这些称呼开头时直接接话，也可在自然命令前叫名字。",
     "type": "list",
-    "default": ["小丛雨", "丛雨"]
+    "default": ["大肥鱼", "鲸鱼娘", "小鲸鱼", "肥鱼", "蠢鱼"]
   },
   "group_chat_interject_every": {
-    "description": "普通群聊隔几条人类文字插话",
-    "hint": "默认 12，还须满足下方最小间隔及有人接话的条件。纯图片不随机唤醒，@、叫名字、引用机器人不受影响。",
+    "description": "普通群聊隔几条人类文字考虑接话",
+    "hint": "默认 6，由聊天模型结合语境决定是否说话，不是每隔固定条数必发。纯图片不随机唤醒，@、叫名字、引用机器人不受影响。",
     "type": "int",
-    "default": 12
+    "default": 6
   },
   "group_chat_min_interval_seconds": {
     "description": "未经点名的群接话最小间隔（秒）",
-    "hint": "默认 600。仅约束未经点名的参与；明确 @、叫名字或引用机器人仍可回复。",
+    "hint": "默认 90。约束主动插话；明确 @、叫名字、引用机器人以及窗口内的自然跟聊不受此间隔限制。",
     "type": "int",
-    "default": 600
+    "default": 90
   },
   "group_chat_unaddressed_questions": {
     "description": "普通问句可单独唤醒机器人",
@@ -43,25 +61,25 @@
   },
   "group_chat_active_speakers": {
     "description": "热聊插话所需的不同发言人数",
-    "hint": "默认 3 人；同一人连续发很多条不算多人热聊。",
+    "hint": "默认 2 人；同一人连续发很多条不算多人热聊。",
     "type": "int",
-    "default": 3
+    "default": 2
   },
   "group_chat_active_window_seconds": {
     "description": "判断多人热聊的时间范围（秒）",
-    "hint": "默认 300，即最近 5 分钟内满足人数和文字条数才参与；长时间零散消息不累计成热聊。",
+    "hint": "默认 180，即最近 3 分钟内满足人数和文字条数时考虑参与；长时间零散消息不累计成热聊。",
     "type": "int",
-    "default": 300
+    "default": 180
   },
   "group_chat_require_engagement": {
     "description": "主动插话无人回应后保持安静",
-    "hint": "开启后，一次未经点名的接话发出后，不因其他群友继续聊天而再次插话。有人明确 @、叫名字或引用它后恢复。",
+    "hint": "默认关闭，群友继续聊天或换话题后仍可自然参与。开启则需要有人明确 @、叫名字或引用它才恢复主动插话。",
     "type": "bool",
-    "default": true
+    "default": false
   },
   "group_chat_followup_seconds": {
     "description": "同一用户回复后的接话窗口（秒）",
-    "hint": "只在该用户发来新消息时接话，不会安排定时追问。设为 0 关闭；无人时的定时闲聊由主动聊天插件单独管理。",
+    "hint": "默认 0，关闭仅凭同一人继续说话就跟聊。无人时的定时闲聊由主动聊天插件单独管理。",
     "type": "int",
     "default": 0
   },

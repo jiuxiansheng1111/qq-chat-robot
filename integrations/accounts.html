@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>大肥鱼账号管理</title>
+  <style>
+    :root{color-scheme:light;font-family:system-ui,"Microsoft YaHei",sans-serif;color:#223c35;background:#f3f6f2;font-size:16px}
+    *{box-sizing:border-box}body{margin:0}main{max-width:1110px;margin:auto;padding:48px 30px 64px}
+    header,.heading,.actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+    header{border-bottom:1px solid #cbd8ce;padding-bottom:22px}h1,h2,h3,p{margin:0}
+    h1{font-size:clamp(1.75rem,4vw,2.5rem);letter-spacing:-.04em}h2{font-size:1.12rem;margin:30px 0 12px}
+    h3{font-size:1.04rem}p{line-height:1.65;color:#4b5f56}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+    article{display:flex;flex-direction:column;gap:12px;align-self:start;background:#fff;border:1px solid #d4dfd6;border-radius:14px;padding:20px}
+    .heading{gap:6px}.state{font-size:.84rem;color:#425a4d}.state[data-tone="good"]{color:#176346}.state[data-tone="attention"]{color:#885321}
+    .actions{justify-content:flex-start;gap:8px}button,a.action{display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:8px 14px;border:1px solid #adc2b5;border-radius:8px;background:white;color:#214b3b;text-decoration:none;font:inherit;font-size:.91rem;cursor:pointer}
+    .primary{background:#235840!important;color:white!important;border-color:#235840!important}button:hover,a.action:hover{filter:brightness(.96)}
+    :focus-visible{outline:3px solid #307858;outline-offset:3px}button:disabled{opacity:.6;cursor:wait}
+    details{border-top:1px solid #e0e7e1;padding-top:12px}summary{cursor:pointer;color:#385849;font-size:.93rem;width:fit-content}
+    form,.device{display:grid;gap:8px;margin-top:12px}label{font-size:.91rem}input{width:100%;min-height:40px;padding:8px;border-radius:6px;border:1px solid #aebeb4;font:inherit}
+    small,.server{color:#596a61;font-size:.85rem;overflow-wrap:anywhere}output{font:600 1.4rem/1.6 ui-monospace,monospace;letter-spacing:.08em}
+    #notice{margin-top:8px;color:#28563e}#notice:empty{margin:0}#notice.error{color:#95351e}[hidden]{display:none!important}
+    @media(max-width:820px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    @media(max-width:550px){main{padding:24px 15px 40px}.grid{grid-template-columns:1fr}article{padding:16px}header{align-items:flex-start}}
+  </style>
+</head>
+<body><main>
+  <header><h1>大肥鱼账号管理</h1><button type="button" id="refresh">刷新状态</button></header>
+  <p id="notice" role="status" aria-live="polite"></p>
+  <section aria-labelledby="games"><h2 id="games">游戏</h2><div class="grid">
+    <article><div class="heading"><h3>Minecraft Java</h3><span class="state" id="minecraft-state">正在检查…</span></div>
+      <p>为大肥鱼登录微软账号，她可以用自己的角色进服采集材料。</p>
+      <div class="actions"><button class="primary" data-service="minecraft" data-action="login">登录或验证</button><button id="mc-cancel" data-service="minecraft" data-action="cancel" hidden>取消本次登录</button></div>
+      <div class="device" id="device" hidden><small>在微软页面输入一次性设备码</small><output id="code" aria-label="微软设备码"></output><div><a class="action" href="https://www.microsoft.com/link" target="_blank" rel="noopener noreferrer">打开微软登录页 ↗</a></div></div>
+      <p class="server" id="server-current"></p>
+      <details><summary>服务器和账号设置</summary><form id="server-form">
+        <label for="server">Java 服务器地址</label><input id="server" required maxlength="260" placeholder="play.example.org:25565" autocomplete="off" spellcheck="false">
+        <div class="actions"><button type="submit">保存服务器</button><button type="button" data-service="minecraft" data-action="forget" data-confirm="清除大肥鱼在本机保存的 Minecraft 微软授权？下次进服需要重新登录。">清除本机授权</button></div>
+      </form></details>
+    </article>
+    <article><div class="heading"><h3>Steam</h3><span class="state" id="steam-state">正在检查…</span></div>
+      <p>绑定大肥鱼的专用 SteamID，并用同一账号登录本机 Steam 客户端，即可接收大厅邀请。</p>
+      <div class="actions"><button data-service="steam" data-action="open">打开 Steam 客户端</button></div>
+      <details><summary>管理绑定</summary><form id="steam-form">
+        <label for="steam-id">17 位个人 SteamID</label><input id="steam-id" required inputmode="numeric" pattern="[0-9]{17}" minlength="17" maxlength="17" autocomplete="off">
+        <div class="actions"><button type="submit">保存绑定</button><button type="button" data-service="steam" data-action="unbind" data-confirm="解除大肥鱼的 SteamID 绑定？">解除绑定</button></div>
+      </form></details>
+    </article>
+    <article><div class="heading"><h3>雀魂国服</h3><span class="state" id="mahjong-state">正在检查…</span></div>
+      <p>在本机验证雀魂账号，供大肥鱼读取完整牌谱和复盘。</p>
+      <div class="actions"><a class="action" href="/">管理雀魂账号</a></div>
+    </article>
+  </div></section>
+  <section aria-labelledby="media"><h2 id="media">聊天与影音</h2><div class="grid">
+    <article><div class="heading"><h3>ChatGPT</h3><span class="state" id="chatgpt-state">正在检查…</span></div>
+      <p>管理 QQ 聊天使用的订阅授权。登录完成后会用现有订阅测试一次 Luna 回复。</p>
+      <div class="actions"><button class="primary" data-service="chatgpt" data-action="login">打开授权页</button><button id="chat-cancel" data-service="chatgpt" data-action="cancel" hidden>取消授权流程</button><button id="chat-logout" data-service="chatgpt" data-action="logout" data-confirm="退出当前 ChatGPT 授权？使用这个账号的 QQ 聊天将需要重新登录。" hidden>退出授权</button></div>
+    </article>
+    <article><div class="heading"><h3>网易云音乐</h3><span class="state" id="netease-state">正在检查…</span></div>
+      <p>在本机连接页用网易云音乐 App 扫码，管理一起听和会员音源使用的账号。</p>
+      <div class="actions"><a id="netease-link" class="action" hidden>扫码或退出 ↗</a></div>
+    </article>
+    <article><div class="heading"><h3>哔哩哔哩</h3><span class="state" id="bilibili-state">正在检查…</span></div>
+      <p>视频创作使用 Bilibot 已绑定的账号。打开面板的「账号连接」即可扫码或查看登录状态。</p>
+      <div class="actions"><a id="bili-link" class="action" href="http://127.0.0.1:6185/#/plugin-page/astrbot_plugin_bilibili_ai_bot/bilibot" target="_blank" rel="noopener noreferrer">打开 B 站账号连接 ↗</a></div>
+    </article>
+  </div></section>
+</main>
+<script nonce="__CSRF__">
+  const $ = id => document.getElementById(id);
+  const states = {pending:'授权进行中',saved:'本机已保存',online:'已登录',ready:'客户端已登录',
+    signed_out:'需要登录',no_account:'尚未绑定',wrong_account:'客户端账号不匹配',no_client:'未检测到已登录客户端',
+    offline_server:'服务器使用离线身份',needs_login:'需要重新验证',unavailable:'暂时无法核实',
+    not_installed:'尚未配置',verification_failed:'上次验证失败'};
+  let deviceTimer, refreshing;
+  function notice(message='', error=false) {
+    $('notice').classList.toggle('error', error);
+    $('notice').textContent = message;
+  }
+  async function request(service, action, data={}) {
+    const response = await fetch('/api/accounts/' + service + '/' + action, {
+      method:'POST', headers:{'Content-Type':'application/json','X-QQChat-CSRF':'__CSRF__'}, body:JSON.stringify(data)});
+    const result = await response.json();
+    if (!response.ok) throw Error(result.error || '操作未完成，请刷新后重试。');
+    return result;
+  }
+  function showDevice(info) {
+    clearTimeout(deviceTimer);
+    $('device').hidden = info.state !== 'device';
+    $('code').textContent = info.state === 'device' ? info.code : '';
+    const pending = ['device','starting'].includes(info.state);
+    $('mc-cancel').hidden = !pending;
+    if (pending) {
+      deviceTimer = setTimeout(checkDevice, 1800);
+    } else {
+      if (info.state === 'verified') notice('微软授权完成，已验证此账号的 Minecraft Java 角色。');
+      if (info.state === 'failed') notice('未能验证 Java 角色。请检查设备码、账号的 Java 版资格和网络，然后重试。', true);
+    }
+    return pending;
+  }
+  async function checkDevice() {
+    try {
+      const pending = showDevice(await request('minecraft','progress'));
+      if (!pending) await refresh();
+    } catch { $('device').hidden = true; $('code').textContent = ''; notice('无法读取设备登录进度，请刷新状态。', true); }
+  }
+  function paint(data) {
+    for (const [service, info] of Object.entries(data)) {
+      const field = $(service + '-state');
+      if (!field) continue;
+      const hint = info.hint ? ' · ' + (service === 'steam' ? '尾号 ' : '') + info.hint : '';
+      field.textContent = (states[info.state] || '暂时无法核实') + hint;
+      field.dataset.tone = ['saved','online','ready'].includes(info.state) ? 'good' : 'attention';
+    }
+    $('server-current').textContent = data.minecraft.server ? '当前服务器 '+data.minecraft.server : '尚未设置服务器';
+    $('server').placeholder = data.minecraft.server || 'play.example.org:25565';
+    $('chat-logout').hidden = !data.chatgpt.stored;
+    $('chat-cancel').hidden = data.chatgpt.state !== 'pending';
+    $('bili-link').hidden = data.bilibili.state === 'not_installed';
+    const link = $('netease-link');
+    if (data.netease.url) { link.href=data.netease.url; link.target='_blank'; link.rel='noopener noreferrer'; }
+    link.hidden = !data.netease.url;
+    if (data.minecraft.state === 'pending') {
+      clearTimeout(deviceTimer);
+      deviceTimer = setTimeout(checkDevice, 100);
+    }
+  }
+  async function refresh() {
+    if (refreshing) return refreshing;
+    $('refresh').disabled = true;
+    refreshing = (async () => {
+      try {
+        const response = await fetch('/api/accounts');
+        if (!response.ok) throw Error();
+        paint(await response.json());
+      } catch { notice('无法读取账号状态，请确认本机机器人正在运行。', true); }
+      finally { $('refresh').disabled = false; refreshing = null; }
+    })();
+    return refreshing;
+  }
+  async function act(button, service, action, data={}) {
+    if (button.dataset.confirm && !window.confirm(button.dataset.confirm)) return;
+    button.disabled = true;
+    try {
+      notice('正在处理…');
+      const result = await request(service, action, data);
+      if (action === 'login' && service === 'chatgpt') { location.assign(result.url); return; }
+      if (service === 'minecraft' && action === 'login') {
+        notice('正在验证微软账号，请留意本页的设备码。');
+        showDevice(result);
+      } else {
+        if (service === 'minecraft' && ['cancel','forget'].includes(action)) showDevice({state:'idle'});
+        if (service === 'steam') $('steam-id').value = '';
+        const messages = {open:'已请求打开 Steam，请在客户端完成登录。',bind:'SteamID 已绑定。',unbind:'SteamID 已解绑。',server:'服务器地址已保存。',
+          forget:'本机 Minecraft 授权已清除。',cancel:'本次登录流程已结束。',logout:'ChatGPT 授权已退出。'};
+        notice(messages[action]);
+      }
+      await refresh();
+    } catch (error) { notice(error.message || '操作未完成，请重试。', true); }
+    finally { button.disabled = false; }
+  }
+  for (const button of document.querySelectorAll('[data-service]')) {
+    button.addEventListener('click', () => act(button, button.dataset.service, button.dataset.action));
+  }
+  $('server-form').addEventListener('submit', event => {
+    event.preventDefault(); act(event.submitter, 'minecraft','server',{server:$('server').value});
+  });
+  $('steam-form').addEventListener('submit', event => {
+    event.preventDefault(); act(event.submitter, 'steam','bind',{account:$('steam-id').value});
+  });
+  $('refresh').addEventListener('click', refresh);
+  window.addEventListener('focus', refresh);
+  refresh();
+</script></body></html>

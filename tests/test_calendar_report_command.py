@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-import sys
-import types
 import ast
 import inspect
+import sys
+import types
 import typing
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from test_astrbot_plugin import _load_plugin
 
 
@@ -88,7 +87,7 @@ async def test_native_handler_stopping_pipeline_still_finishes_owned_delivery(mo
     namespace = {"inspect": inspect, "T": typing, "AstrMessageEvent": object,
                  "MessageEventResult": type("MessageEventResult", (), {}),
                  "CommandResult": type("CommandResult", (), {}), "logger": MagicMock()}
-    exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), "exec"), namespace)
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), "exec"), namespace)  # noqa: S102 -- Execute only the test-selected handler from the local source AST.
     plugin, event, calls = setup(monkeypatch)
     event.is_stopped = lambda: ("stop", True) in calls
     request = AsyncMock(return_value=SimpleNamespace(items=[

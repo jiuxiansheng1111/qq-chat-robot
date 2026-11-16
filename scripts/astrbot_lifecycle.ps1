@@ -265,6 +265,17 @@ function Test-AstrbotDashboardResponse {
     finally { if ($response) { $response.Dispose() } }
 }
 
+function Test-AstrbotQQConnection {
+    param([int]$ProcessId)
+    # A listening reverse-WS port does not mean NapCat is connected. In
+    # particular, AstrBot can remain up while the QQ client has been closed.
+    try {
+        $connections = @(Get-NetTCPConnection -State Established -LocalPort 6199 -ErrorAction Stop |
+            Where-Object { $_.OwningProcess -eq $ProcessId -and $_.RemoteAddress -in @('127.0.0.1', '::1') })
+        return $connections.Count -gt 0
+    } catch { return $false }
+}
+
 function Get-AstrbotHealth {
     param($Layout)
     if (Test-AstrbotManualStop -Layout $Layout) {
@@ -315,12 +326,17 @@ function Get-AstrbotHealth {
     if (-not (Test-AstrbotDashboardResponse)) {
         return [pscustomobject]@{ Status = 'unhealthy'; Reason = 'Dashboard HTTP did not respond'; Restart = $true }
     }
+    if ($qqEnabled -and -not (Test-AstrbotQQConnection -ProcessId $listener.ProcessId)) {
+        # Restarting AstrBot cannot log QQ back in. Keep other platform services
+        # alive and report the missing transport instead of a false healthy state.
+        return [pscustomobject]@{ Status = 'disconnected'; Reason = 'QQ/NapCat disconnected; open or log in NapCat'; Restart = $false }
+    }
     return [pscustomobject]@{ Status = 'healthy'; Reason = 'AstrBot ready'; Restart = $false }
 }
 
 function Get-AstrbotRecoveryDecision {
     param($Health, [datetime]$Now, [datetime]$UnhealthySince, [datetime]$NextAttempt)
-    if ($Health.Status -in @('healthy', 'paused')) { return 'wait' }
+    if ($Health.Status -in @('healthy', 'paused', 'disconnected')) { return 'wait' }
     if ($Now -lt $NextAttempt) { return 'wait' }
     if ($Health.Status -eq 'down') { return 'start' }
     if ($Health.Status -eq 'unhealthy' -and ($Now - $UnhealthySince).TotalSeconds -ge 60) {

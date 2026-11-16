@@ -72,20 +72,26 @@ async def prepare_default_menu_files(context: Any, settings: Any) -> int:
             for admin in (False, True):
                 audience = _MenuAudience(platform, admin=admin, group=group, plugins=plugins)
                 image_groups, text_groups = build_unified_menu_groups(context, audience, settings)
-                source = await prepare_help_menu_file(
-                    settings, image_groups=image_groups, text_groups=text_groups,
-                    title=COMPACT_MENU_TITLE, subtitle=COMPACT_MENU_SUBTITLE,
-                )
                 scope = "" if group else "-private"
                 permission = "-admin" if admin else ""
-                await asyncio.to_thread(
-                    _publish_menu_file, source, f"menu-{label}{scope}{permission}.jpg",
-                )
-                # 图片与文字共享筛选后的常用入口，不展开插件全部能力。
-                text_path = source.parent / f"menu-{label}{scope}{permission}.txt"
                 text = concise_text_menu(text_groups, title=COMPACT_MENU_TITLE, subtitle=COMPACT_MENU_SUBTITLE)
-                if not text_path.exists() or text_path.read_text(encoding="utf-8") != text:
-                    await asyncio.to_thread(text_path.write_text, text, encoding="utf-8")
+                for attempt in range(3):
+                    try:
+                        source = await prepare_help_menu_file(
+                            settings, image_groups=image_groups, text_groups=text_groups,
+                            title=COMPACT_MENU_TITLE, subtitle=COMPACT_MENU_SUBTITLE,
+                        )
+                        await asyncio.to_thread(_publish_menu_file, source, f"menu-{label}{scope}{permission}.jpg")
+                        text_path = source.parent / f"menu-{label}{scope}{permission}.txt"
+                        if not text_path.exists() or text_path.read_text(encoding="utf-8") != text:
+                            await asyncio.to_thread(text_path.write_text, text, encoding="utf-8")
+                        break
+                    except PermissionError as exc:
+                        # Windows scanners/viewers can briefly hold the cache.
+                        # Retry only sharing conflicts, never a lasting ACL denial.
+                        if attempt == 2 or getattr(exc, "winerror", None) != 32:
+                            raise
+                        await asyncio.sleep(0.15 * (attempt + 1))
                 count += 1
     return count
 

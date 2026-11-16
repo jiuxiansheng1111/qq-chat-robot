@@ -32,6 +32,7 @@ _NEGATION = re.compile(r"(?:不要|别|不想|不需要|不用|无需|先别|先
 _TEXT_MENU_NAMES = frozenset({
     "文字版菜单", "文字菜单", "文字版帮助", "菜单文字版", "插件菜单", "插件命令",
     "文字版功能", "纯文字菜单", "画境拾珍菜单", "画境拾珍帮助",
+    "功能说明", "详细菜单", "使用说明", "详细帮助",
 })
 _LOGGER = logging.getLogger(__name__)
 _PLUGIN_DISPLAY_NAMES = {
@@ -76,6 +77,10 @@ def menu_request_kind(text: str) -> str | None:
     # 歌名和故事素材也可能含菜单词，先留给各自入口。
     if parse_story_request(text) is not None or parse_music_action(text) is not None:
         return None
+    from app.services.qq_feature_menu import requested_topic
+
+    if requested_topic(text):
+        return "text"
     value = " ".join(text.strip().split())
     if value.startswith("/"):
         value = value[1:].strip()
@@ -715,8 +720,8 @@ def build_unified_menu_groups(context: Any, event: Any, settings: Any = None):
         setting_lines.append("会话：" + " / ".join(controls))
     setting_lines.append("/bot on|off" if is_admin else "开启恋爱模式 / 关闭恋爱模式")
     image_groups = (
-        ("聊天角色", ("@我聊天 / 随机故事", "可用角色 / 选择角色 名字"), (92, 117, 151)),
-        ("语音翻唱", ("启动语音 / 关闭语音", "翻唱片段 角色 歌名", "翻唱完整 角色 歌名"), (177, 108, 145)),
+        ("聊天", ("@我聊天 / 随机故事",), (92, 117, 151)),
+        ("语音翻唱", ("启动语音 / 关闭语音", "音色列表 / 选择音色 名字", "翻唱片段 音色 歌名", "翻唱完整 音色 歌名"), (177, 108, 145)),
         ("点歌视频", ("点歌 歌名 / 查歌词 歌名", "播放视频 关键词", "看视频：发视频＋总结一下"), (94, 147, 147)),
         ("实用工具", ("天气 上海 / 翻译 内容", "搜索 关键词 / 今日热点"), (129, 133, 188)),
         ("互动游戏", ("角色图鉴 名字 / 随机夺舍", "今日奥特曼 / 随机二次元角色"), (199, 151, 94)),
@@ -745,7 +750,7 @@ def build_unified_menu_groups(context: Any, event: Any, settings: Any = None):
         for offset in range(0, len(entries), 3):
             image_groups += ((title, tuple(entries[offset:offset + 3]), (145, 117, 171)),)
     lines = [
-        "聊天角色：@我；可用角色；选择角色 名字；随机故事",
+        "聊天：@我；随机故事",
         "语音翻唱：启动语音 / 关闭语音；翻唱片段 角色 歌名",
         "点歌视频：点歌 歌名；播放视频 关键词；发视频＋总结一下",
         "实用工具：天气 上海；翻译 内容；搜索 关键词；今日热点",
@@ -758,6 +763,65 @@ def build_unified_menu_groups(context: Any, event: Any, settings: Any = None):
         lines.append("会话设置：" + "；".join(controls))
     if is_admin:
         lines.append("群管理：/bot on|off")
+    from app.astrbot_qq_persona import is_qq
+
+    if is_qq(event):
+        from app.services.qq_feature_menu import core_groups
+
+        core_images, core_texts = core_groups(settings=settings, controls=controls, is_admin=is_admin)
+        additions = tuple(group for group in image_groups if group[0].startswith("插件 ·") or group[0] == "生图与群漫画")
+        image_groups = (*core_images, *extra_images, *additions)
+        detailed_groups = list(core_texts)
+        image_groups = tuple(
+            ("群报与设置" if title == "插件 · 学习群报" and "学习设置" not in plugin_lines else title, rows, color)
+            for title, rows, color in image_groups
+        )
+        for title, _, _ in extra_images:
+            if title == "雀魂牌谱分析":
+                detailed_groups.append((title, (
+                    "雀魂牌谱：雀魂分析 + 已结束的官方牌谱链接；连接雀魂账号后读取整场，提供本人固定座位和东风/半庄",
+                    "也支持mjai、天凤兼容JSON；逐局分析切牌、场况和攻守，缺资料会先提示补充",
+                    "/牌谱分析 帮助：看导入方法；/牌谱分析 详情 复盘ID 节点号 [页码]：追问；/牌谱分析 导出 复盘ID：保存报告",
+                    "雀魂账号只在本机设置页连接，不把账号密码发进群",
+                )))
+            else:
+                content = next((items for name, items in base if name == title), ())
+                if content:
+                    detailed_groups.append((title, tuple(content)))
+        plugin_descriptions = {
+            "日常陪伴": "查看本群或私聊的陪伴状态与可用开关，管理员设置按当前权限显示",
+            "主动消息": "查看主动接话设置；当前群里被点名才回应，冷场时按已有安排偶尔开口",
+            "群聊分析": "群报：昨天＋今天（截至上一分钟）；群分析：按已配置范围生成群聊图文总结",
+            "群报设置": "设置报告的输出格式和模板；改设置需有当前群的管理权限",
+            "群漫画": "根据本群近期实际话题生成漫画与文字说明，不把旧话题当最新内容",
+            "陪伴生图": "给出画面描述来创作新图；标注私聊的入口请在私聊使用",
+            "表情包": "查看图库、添加表情或看统计；日常表情由语境选择，不会每句都发",
+            "B站 AI Bot": "查询B站分区与B站助手用法；视频搜索、观看总结见“视频与看图”",
+        }
+        plugin_details = dict(plugins)
+        for title, summary in plugin_lines.items():
+            entries = tuple(plugin_details.get(title, ()))
+            # These entries were already filtered against live commands,
+            # per-session plugin switches and the current user's permission.
+            body = entries[:6] if entries and title not in {"群漫画", "陪伴生图", "群报设置"} else (summary,)
+            note = plugin_descriptions.get(title)
+            if note:
+                body = (*body, note)
+            if title == "群聊分析" and calendar_report_command:
+                body = tuple(line for line in body if not line.startswith("群报："))
+                if note in body:
+                    body = tuple(line for line in body if line != note)
+                body = ("群报：/" + calendar_report_command["primary"] + "（昨天＋今天，截至上一分钟）", *body)
+            detailed_groups.append((title, body))
+        session_lines = tuple(line for line in native if any(command in line for command in controls))
+        if is_admin:
+            session_lines += ("/bot on|off：开启或关闭本群机器人",)
+        if session_lines:
+            detailed_groups.append(("会话与管理", session_lines))
+        detailed_groups.append(("菜单用法", (
+            "菜单：简洁图片；文字版菜单 / 功能说明：分类用法；网易云帮助 / 视频帮助 / 唱歌帮助：只看这一项",
+        )))
+        return tuple(image_groups), tuple(detailed_groups)
     return image_groups, (("常用命令", tuple(lines)),)
 
 
