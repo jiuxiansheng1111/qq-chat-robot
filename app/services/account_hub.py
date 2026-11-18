@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from app.chatgpt_subscription import DEFAULT_MODEL, ChatGPTSubscription, SubscriptionError
 from app.config import Settings
-from app.services import game_clients
+from app.services import game_clients, mobile_qq_pair
 from app.services.chat_brain import WEB_SESSION, BrainError, ChatBrain
 from app.services.home_devices import DeviceError, HomeDevices
 from app.services.local_listener import LocalListener
@@ -207,6 +207,7 @@ class AccountHub:
         self.chat = ChatGPTSubscription(_subscription_directory(root))
         self.chat_login = ChatLogin(self.chat.store.directory)
         self.chat_action = asyncio.Lock()
+        self.phone_pairing = asyncio.Lock()
         self.brain = ChatBrain(context)
         self.home = HomeDevices(root)
         self.web = None
@@ -312,6 +313,12 @@ class AccountHub:
         return {"state":"online" if online else "disconnected"}
 
     async def update(self, service, action, data):
+        if service == "mobile-qq" and action in {"pair", "remove"}:
+            async with self.phone_pairing:
+                try:
+                    return await asyncio.to_thread(mobile_qq_pair.change, self.root, data.get("pairing"), remove=action == "remove")
+                except mobile_qq_pair.napcat.ConnectError as exc:
+                    raise AccountActionError(str(exc)) from None
         if service == "web" and action == "command":
             session = data.get("session")
             text = data.get("text")
@@ -422,6 +429,10 @@ def account_routes(root: Path, hub, csrf):
     @router.get("/api/qq-health")
     async def qq_health():
         return await hub.qq_health()
+
+    @router.get("/api/mobile-qq")
+    async def phone_qq():
+        return await asyncio.to_thread(mobile_qq_pair.status, hub.root)
 
     @router.post("/api/accounts/{service}/{action}")
     async def update(service: str, action: str, request: Request):

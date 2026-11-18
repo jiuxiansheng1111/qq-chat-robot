@@ -139,7 +139,7 @@ def deploy():
         # the global file; existing defaults/providers remain unchanged.
         fingerprints[str(DATA/"cmd_config.json")]=hashlib.sha256((DATA/"cmd_config.json").read_bytes()).hexdigest()
         result["group_participation"]=configure_participation(ROOT,apply=True)
-        if (ROOT/"data/dafeiyu/owner-memory-config.json").is_file() and (ROOT/"data/dafeiyu/luna-context-capability.json").is_file():
+        if (ROOT/"data/dafeiyu/owner-memory-config.json").is_file():
             result["owner_context"]=configure_owner_memory(ROOT,apply=True)
         profile=DATA/"config/abconf_qqchat_dafeiyu.json"
         value=read(profile)

@@ -5,10 +5,10 @@ import copy
 import json
 import shutil
 import sqlite3
-from datetime import UTC,datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
-from scripts.configure_astrbot import _assert_managed_path,_write_json_atomically
+from scripts.configure_astrbot import _assert_managed_path, _write_json_atomically
 from scripts.sync_astrbot_identity import _running
 
 SUMMARY_INSTRUCTION=(
@@ -59,23 +59,41 @@ def configure(root:Path,*,apply=False,is_running=_running):
     policy_path=root/"data/dafeiyu/qq-context-policy.json"
     for path in (target,capability,policy_path):
         _assert_managed_path(root,path)
-    metadata=json.loads(capability.read_text(encoding="utf-8-sig"))
-    window=metadata.get("limits",{}).get("context_window",0)
-    if metadata.get("model")!="gpt-6-luna" or not isinstance(window,int) or window<16000:
-        raise ValueError("缺少当前授权通道的Luna默认窗口确认，未改配置")
-    limit=min(300000,window)
-    policy={"enabled":True,"model":"gpt-6-luna","max_context_tokens":limit,
-            "verified_default_context_window":window,"source":"authenticated model metadata",
-            "native_compress_threshold":0.82,"experimental_context_enabled":False}
     before=json.loads(target.read_text(encoding="utf-8-sig"))
     after=copy.deepcopy(before)
     runner=after["agent_runner"]
-    if runner.get("runner_type")!="local" or runner["config"]["model"]["provider_id"]!="qqchat-chatgpt-luna":
-        raise ValueError("QQ现有原生Luna路由不符，未改配置")
+    if runner.get("runner_type")!="local":
+        raise ValueError("QQ现有原生模型路由不符，未改配置")
+    provider_id=runner["config"]["model"]["provider_id"]
+    luna=provider_id=="qqchat-chatgpt-luna"
+    if luna:
+        metadata=json.loads(capability.read_text(encoding="utf-8-sig"))
+        window=metadata.get("limits",{}).get("context_window",0)
+        if metadata.get("model")!="gpt-6-luna" or not isinstance(window,int) or window<16000:
+            raise ValueError("缺少当前授权通道的Luna默认窗口确认，未改配置")
+        model,limit="gpt-6-luna",min(300000,window)
+    else:
+        config=json.loads((target.parent.parent/"cmd_config.json").read_text(encoding="utf-8-sig"))
+        source={p["id"]:p for p in config.get("provider_sources",[]) if p.get("id")}
+        selected=next((p for p in config.get("provider",[]) if p.get("id")==provider_id and p.get("enable",True)),None)
+        if selected is None:
+            raise ValueError("未找到 QQ 正在使用的模型，未改配置")
+        selected={**source.get(selected.get("provider_source_id"),{}),**selected}
+        model=selected.get("model","")
+        window=selected.get("max_context_tokens",0)
+        limit=window if type(window) is int and window>0 else 0
+    policy={"enabled":luna,"model":model,"max_context_tokens":limit,
+            "verified_default_context_window":window if limit else 0,
+            "source":"authenticated model metadata" if luna else "selected provider configuration",
+            "native_compress_threshold":0.82,"experimental_context_enabled":False}
     runner["config"]["compression"].update({"max_turns":-1,"trim_turns":1,
         "overflow_strategy":"llm_compress","instruction":SUMMARY_INSTRUCTION,
-        "keep_recent_ratio":0.2,"provider_id":"qqchat-chatgpt-luna","fallback_max_tokens":limit})
-    result={"applied":False,"model":"gpt-6-luna","max_turns":-1,"qq_context_window":limit,
+        "keep_recent_ratio":0.2,"provider_id":provider_id})
+    if limit:
+        runner["config"]["compression"]["fallback_max_tokens"]=limit
+    else:
+        runner["config"]["compression"].pop("fallback_max_tokens",None)
+    result={"applied":False,"model":model,"max_turns":-1,"qq_context_window":limit,
             "native_compress_near":int(limit*.82),"public_or_experimental_limit_not_assumed":True}
     if not apply:
         return result

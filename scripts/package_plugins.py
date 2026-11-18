@@ -5,7 +5,6 @@ import argparse
 import ast
 import hashlib
 import json
-import re
 import subprocess
 import tempfile
 import tomllib
@@ -45,6 +44,7 @@ OWNED = {
     "meetups": ("app/astrbot_meetups.py",),
     "followups": ("app/astrbot_followups.py",),
     "accounts": ("app/services/account_hub.py", "app/services/local_listener.py", "app/services/mahjong/account_panel.py",
+                 "app/services/mobile_qq_pair.py", "scripts/connect_astrbot_qq.py",
                  "integrations/accounts.html", "integrations/majsoul/account.html", "scripts/connect_chatgpt.py"),
     "group_reports": ("app/astrbot_group_reports.py", "integrations/group-daily-analysis/*"),
     "memes": ("app/astrbot_memes.py", "scripts/setup_qq_memes.py"),
@@ -192,9 +192,9 @@ def build(output):
     digests = []
     for slug, entry in catalog.items():
         name = ID_PREFIX + slug
-        metadata = dict(name=name, display_name="大肥鱼 · " + entry["title"], desc=entry["description"],
-                        version="v" + version, author="jiuxiansheng1111", astrbot_version=">=4.28.2",
-                        support_platforms=["aiocqhttp", "weixin_oc", "wecom", "wecom_ai_bot"] if entry.get("legacy") or slug == "core" else ["aiocqhttp"])
+        metadata = {"name": name, "display_name": "大肥鱼 · " + entry["title"], "desc": entry["description"],
+                    "version": "v" + version, "author": "jiuxiansheng1111", "astrbot_version": ">=4.28.2",
+                    "support_platforms": ["aiocqhttp", "weixin_oc", "wecom", "wecom_ai_bot"] if entry.get("legacy") or slug == "core" else ["aiocqhttp"]}
         # JSON is valid YAML. File-installed features deliberately have no repo update
         # URL: updating any one feature to the monorepo root would install the bundle.
         data = files[slug]

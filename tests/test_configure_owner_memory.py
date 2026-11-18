@@ -59,3 +59,21 @@ def test_cleanup_only_obsolete_qq_learning_not_wechat_manual_notes_or_heard_song
         assert db.execute("SELECT group_id FROM possession_style_messages").fetchall()==[("wechat:room",)]
         assert db.execute("SELECT content FROM music_listens").fetchall()==[("original manual source",)]
         assert db.execute("SELECT content FROM long_term_memories").fetchall()==[("original manual source",)]
+
+
+@pytest.mark.parametrize("window",[0,8192])
+def test_selected_model_preserved_without_luna_metadata(workspace,window):
+    root,target=workspace
+    cfg=json.loads(target.read_text(encoding="utf-8"))
+    cfg["agent_runner"]["config"]["model"]["provider_id"]="qqchat-brain-zhipu"
+    cfg["agent_runner"]["config"]["compression"]["fallback_max_tokens"]=272000
+    target.write_text(json.dumps(cfg),encoding="utf-8")
+    (root/"data/dafeiyu/luna-context-capability.json").unlink()
+    source={"id":"selected-source","model":"glm-test","max_context_tokens":window}
+    provider={"id":"qqchat-brain-zhipu","provider_source_id":"selected-source","enable":True}
+    (target.parent.parent/"cmd_config.json").write_text(json.dumps({"provider":[provider],"provider_sources":[source]}),encoding="utf-8")
+    assert configure(root,apply=True,is_running=lambda:False)["model"]=="glm-test"
+    updated=json.loads(target.read_text(encoding="utf-8-sig"))["agent_runner"]["config"]
+    assert updated["model"]["provider_id"]==updated["compression"]["provider_id"]=="qqchat-brain-zhipu"
+    assert updated["compression"].get("fallback_max_tokens",0)==window
+    assert not json.loads((root/"data/dafeiyu/qq-context-policy.json").read_text(encoding="utf-8-sig"))["enabled"]

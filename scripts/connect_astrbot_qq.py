@@ -713,7 +713,7 @@ def _desktop_config_path(
 
 
 def _plan_desktop_config(
-    plan: ConnectPlan, requested_path: Path
+    plan: ConnectPlan, requested_path: Path, *, transform: Callable[[dict], dict] | None = None
 ) -> DesktopConfigPlan:
     path = _desktop_config_path(plan.napcat_config_dir, requested_path)
     source_bytes, original = _read_json_bytes(path, "NapCat Desktop bot.json")
@@ -746,9 +746,10 @@ def _plan_desktop_config(
     ):
         raise ConnectError("NapCat Desktop connect 网络配置结构无法识别。")
     network = copy.deepcopy(connect)
-    updated_config, _summary = build_napcat_config(
-        {"network": network}, _plan_astrbot_token(plan)
-    )
+    if transform is None:
+        updated_config, _summary = build_napcat_config({"network": network}, _plan_astrbot_token(plan))
+    else:
+        updated_config = transform({"network": network})
     updated = copy.deepcopy(original)
     updated_match = updated["bots"][matches[0]]
     updated_match["connect"] = updated_config["network"]

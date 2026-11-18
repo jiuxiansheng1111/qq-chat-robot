@@ -178,7 +178,10 @@ class ChatBrain:
     def saved(self):
         if not self.context:
             return []
-        return [p for p in self.context.get_config().get("provider", [])
+        config = self.context.get_config()
+        sources = {p["id"]: p for p in config.get("provider_sources", []) if p.get("id")}
+        providers = [{**sources.get(p.get("provider_source_id"), {}), **p} for p in config.get("provider", [])]
+        return [p for p in providers
                 if p.get("qqchat_preset") in PRESETS and str(p.get("id", "")).startswith("qqchat-brain-")]
 
     def status(self):

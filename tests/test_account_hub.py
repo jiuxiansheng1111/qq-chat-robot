@@ -55,6 +55,10 @@ def test_account_page_controls_share_robot_config_without_exposing_credentials(h
         assert action("steam/unbind").is_success
         assert game_clients.settings()["steam"]["web_api_key"] == "test-not-for-display"
         assert action("unknown/login").status_code == 404
+        assert 'id="phone-form"' in page.text
+        assert client.get("/api/mobile-qq").json() == {"state": "unavailable"}
+        assert client.post("/api/accounts/mobile-qq/pair", json={"pairing":"test"}).status_code == 403
+        assert action("mobile-qq/pair", {"pairing":"invalid-test-value"}).status_code == 400
         assert action("steam/bind", ["wrong shape"]).status_code == 400
 
 

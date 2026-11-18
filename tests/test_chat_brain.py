@@ -81,6 +81,24 @@ async def test_switch_probe_and_reopen(brain, preset, protocol):
 
 
 @pytest.mark.asyncio
+async def test_model_selection_survives_native_provider_source_split(brain):
+    await brain.change({"preset":"zhipu","model":"example","key":"test-private-secret"},apply=True)
+    provider = copy.deepcopy(brain.context.provider_manager.saved[0])
+    provider_id = provider["id"]
+    source = {k:v for k,v in provider.items() if k not in {"id","enable","model","modalities"}}
+    source["id"] = provider_id + "_source"
+    entry = {k:provider[k] for k in ("id","enable","model","modalities")}
+    entry["provider_source_id"] = source["id"]
+    brain.context.get_config = lambda: {"provider":[entry],"provider_sources":[source]}
+    reopened = ChatBrain(brain.context)
+    state = reopened.status()
+    assert state["profiles"][0]["preset"]=="zhipu" and state["profiles"][0]["id"]==provider_id
+    assert state["active"]==provider_id and "test-private-secret" not in json.dumps(state)
+    assert (await reopened.change({"preset":"zhipu","model":"example","saved":provider_id,"key":""},apply=True))["applied"]
+    assert len(brain.context.provider_manager.saved)==1
+
+
+@pytest.mark.asyncio
 async def test_failure_and_changed_host_preserve_current(brain):
     data = {"preset":"custom", "model":"good", "base":"https://first.example/v1", "key":"test-private-secret"}
     await brain.change(data, apply=True)

@@ -74,6 +74,13 @@
       </form>
     </article>
   </section>
+  <section aria-labelledby="mobile-qq"><h2 id="mobile-qq">手机同步收 QQ</h2><article>
+    <p>让手机和电脑连到同一 Wi-Fi。在大肥鱼手机版打开「QQ」，启用协议端并复制配对信息。</p>
+    <form id="phone-form" aria-labelledby="mobile-qq"><label for="phone-pairing">手机配对信息</label>
+      <input id="phone-pairing" type="password" required maxlength="1000" autocomplete="off" spellcheck="false">
+      <div class="actions"><button class="primary" type="submit">连接手机</button><button id="phone-remove" type="button" hidden>解除手机配对</button></div>
+    </form><p id="phone-status" role="status"></p>
+  </article></section>
   <section aria-labelledby="web-title"><h2 id="web-title">网页助手</h2><article>
     <form id="web-form"><label for="web-command">网址或网页操作</label>
       <input id="web-command" maxlength="1600" placeholder="输入网址，或说「点击详情」「在网页的搜索框里输入鲸鱼」" autocomplete="off">
@@ -223,6 +230,24 @@
     finally { button.disabled = false; }
   });
   const webSession = crypto.randomUUID();
+  function phoneStatus(data) {
+    $('phone-remove').hidden = data.state !== 'paired';
+    $('phone-status').textContent = {paired:'电脑已保存配对。手机 QQ 收件箱显示「QQ 已连接」时，两端可以同步收消息。',
+      unpaired:'电脑尚未配对手机。', unavailable:'暂时读不到本机 NapCat 的手机连接配置。'}[data.state];
+  }
+  fetch('/api/mobile-qq').then(r => r.ok ? r.json() : {state:'unavailable'}).then(phoneStatus)
+    .catch(() => phoneStatus({state:'unavailable'}));
+  async function pairPhone(action) {
+    const buttons = $('phone-form').querySelectorAll('button');
+    for (const b of buttons) b.disabled = true;
+    try {
+      phoneStatus(await request('mobile-qq',action,action === 'pair' ? {pairing:$('phone-pairing').value.trim()} : {}));
+      $('phone-pairing').value = '';
+    } catch (error) { $('phone-status').textContent = error.message; }
+    finally { for (const b of buttons) b.disabled = false; }
+  }
+  $('phone-form').addEventListener('submit', event => { event.preventDefault(); pairPhone('pair'); });
+  $('phone-remove').addEventListener('click', () => pairPhone('remove'));
   $('web-form').addEventListener('submit', async event => {
     event.preventDefault();
     const text = event.submitter?.value || $('web-command').value.trim();

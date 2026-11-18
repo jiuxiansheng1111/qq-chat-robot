@@ -4,7 +4,7 @@
 
 按需安装请打开[独立插件下载目录](plugin_packages/README.md)。先装共享运行时，再选天气、炉石查卡、Minecraft 等功能。每个功能都有单独的 ZIP，可以在 AstrBot 面板分别启停。
 
-安卓手机可以独立运行大肥鱼，支持文字对话、联网搜索和网页阅读。直接从手机安装并选择模型，电脑关机后也可以使用。[安卓 APK](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/mobile/android/downloads/Dafeiyu.apk) · [手机版说明](mobile/android/README.md)
+安卓手机可以独立运行大肥鱼，支持文字对话、联网搜索、网页阅读和 QQ 收件箱。电脑开着时可以同步收 QQ。电脑关机后，手机可通过已授权的 QQ 通知快捷回复，或通过另一台常开的 OneBot 协议端收发。[安卓 APK](https://github.com/jiuxiansheng1111/qq-chat-robot/raw/refs/heads/main/mobile/android/downloads/Dafeiyu.apk) · [手机版与 QQ 配对说明](mobile/android/README.md)
 
 整合版版本为 `0.3.0`，分件版为 `0.5.0`。账号、登录状态、密钥和本机模型由部署者在本地配置。
 

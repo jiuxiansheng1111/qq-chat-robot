@@ -49,12 +49,19 @@ def native_search():
     tap(actions[0])
     def shows_search_sources():
         return any(n.get("text","").startswith("1. ") and "http" in n.get("text","") for n in tree().iter("node"))
-    try:
-        wait_for(shows_search_sources,145)
-    except RuntimeError:
-        visible=[n.get("text","")[:220] for n in tree().iter("node") if n.get("package")==PACKAGE and n.get("text")]
-        print("Shipped search screen:", visible,flush=True)
-        raise
+    for attempt in range(3):
+        try:
+            wait_for(shows_search_sources,90)
+            break
+        except RuntimeError:
+            visible=[n.get("text","")[:220] for n in tree().iter("node") if n.get("package")==PACKAGE and n.get("text")]
+            print("Shipped search screen:", visible,flush=True)
+            print("Public search connection:",adb("logcat","-d","-s","DaFeiYuSearch:W","*:S")[-1600:],flush=True)
+            if attempt==2:
+                raise
+            retry=next((n for n in tree().iter("node") if n.get("package")==PACKAGE and n.get("text")=="重试"),None)
+            if retry is not None:
+                tap(retry)
     print("Shipped APK returned live web search sources directly on Android.",flush=True)
 
 

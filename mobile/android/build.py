@@ -81,7 +81,7 @@ def build(sdk, destination, key, env, test):
             run(tools / ("aapt2"+ext),"compile","--dir",source / "res","-o",temp / "resources.zip")
             resources=[temp / "resources.zip"]
         run(tools / ("aapt2"+ext),"link","-o",apk,"-I",platform,"--manifest",source / "AndroidManifest.xml",
-            "--min-sdk-version","26","--target-sdk-version","35","--version-code","4","--version-name","1.2","--java",gen,*resources)
+            "--min-sdk-version","26","--target-sdk-version","35","--version-code","5","--version-name","1.2.1","--java",gen,*resources)
         files = [*gen.rglob("*.java"), *(source / "src").rglob("*.java")]
         classpath = os.pathsep.join(os.path.relpath(p, ROOT) for p in (platform,*jars))
         if test:

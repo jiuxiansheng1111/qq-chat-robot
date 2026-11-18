@@ -87,7 +87,8 @@ final class Agent {
         String encoded=URLEncoder.encode(clip(query,160),"UTF-8");
         LinkedHashMap<String,String> hits=new LinkedHashMap<>(); Map<String,String> empty=java.util.Collections.emptyMap();
         for(String host:new String[]{"www.bing.com","cn.bing.com"}) {
-            try { hits=rss(http("https://"+host+"/search?format=rss&q="+encoded,null,empty,true)); } catch(Exception ignored) {}
+            try { hits=rss(http("https://"+host+"/search?format=rss&q="+encoded,null,empty,true)); }
+            catch(Exception error) { searchProblem(host,error); }
             if(!hits.isEmpty()) break;
         }
         String wiki=clip(query,160).matches(".*[㐀-鿿].*")?"zh":"en";
@@ -98,7 +99,7 @@ final class Agent {
                 for(int i=0;i<rows.length();i++) { JSONObject page=rows.getJSONObject(i);
                     result(hits,page.getString("title"),"https://"+wiki+".wikipedia.org/?curid="+page.getLong("pageid"),plain(page.optString("snippet")));
                 }
-            } catch(Exception ignored) {}
+            } catch(Exception error) { searchProblem(wiki+".wikipedia.org",error); }
         }
         if(hits.isEmpty() && query.matches("(?is).*(android|windows|linux|python|azure|microsoft|[.]net|操作系统|微软|安卓).*")) {
             try {
@@ -108,7 +109,7 @@ final class Agent {
                     JSONObject page=rows.getJSONObject(i);
                     result(hits,page.optString("title"),page.optString("url"),plain(page.optString("description")));
                 }
-            } catch(Exception ignored) {}
+            } catch(Exception error) { searchProblem("learn.microsoft.com",error); }
         }
         if(hits.isEmpty()) throw new IOException("这次搜索源没有返回可用结果。可以重试，或在浏览器查看\nhttps://www.bing.com/search?q="+encoded);
         StringBuilder s=new StringBuilder(); int i=0;
@@ -117,6 +118,11 @@ final class Agent {
             s.append(++i).append(". ").append(hit.getValue()).append("\n").append(hit.getKey());
         }
         return s.toString();
+    }
+    static void searchProblem(String source,Exception error) {
+        String status=error instanceof IOException && error.getMessage()!=null
+                && error.getMessage().matches("服务返回 HTTP [0-9]{3}。")?error.getMessage():"";
+        android.util.Log.w("DaFeiYuSearch",source+" "+error.getClass().getSimpleName()+" "+status);
     }
     String answer(Turns.Turn turn) throws Exception {
         String question=turn.question;
